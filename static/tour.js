@@ -158,5 +158,5 @@
       showStep(activeIndex);
     }
   });
-  window.LocalAudioTranscriberTour = { maybePrompt, start, steps };
+  window.LocalMediaTranscriberTour = { maybePrompt, start, steps };
 })();

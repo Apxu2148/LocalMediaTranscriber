@@ -42,7 +42,7 @@ class NoCacheStaticFiles(StaticFiles):
         return response
 
 
-app = FastAPI(title="Local Audio Transcriber")
+app = FastAPI(title="Local Media Transcriber")
 app.mount("/static", NoCacheStaticFiles(directory=str(config.STATIC_DIR)), name="static")
 
 recorder = AudioRecorder()

@@ -1,36 +1,56 @@
-# Local Audio Transcriber
+# LocalMediaTranscriber
 
-Локальное Windows-приложение для записи микрофона, записи системного звука через WASAPI loopback и транскрибации аудио через `faster-whisper`.
+LocalMediaTranscriber is a local Windows web app for recording microphone audio, recording system audio through WASAPI loopback, and transcribing local media with `faster-whisper`.
 
-## Что делает программа
+This project is a separate fork of `LocalAudioTranscriber`. The current version still keeps the proven audio recording and transcription workflow, while the future direction is broader media capture: media sessions, screen recording, OCR, keyframes, VLM analysis, and optional local or server-side processing.
 
-- записывает микрофон в WAV;
-- записывает системный звук Windows в WAV;
-- в режиме “микрофон + системный звук” создает два отдельных WAV-файла;
-- показывает уровни микрофона и системного звука до записи, во время записи и после остановки;
-- добавляет последние записи, выбранные файлы и публичные URL в единую глобальную очередь транскрибации;
-- запускает последовательную обработку глобальной очереди отдельной кнопкой `Запустить транскрибацию`;
-- позволяет выбрать модель Whisper: `tiny`, `base`, `small`, `medium`, `large-v3`;
-- автоматически пробует CUDA, если доступна NVIDIA GPU и установлены GPU-зависимости;
-- если CUDA недоступна или падает, переключается на CPU;
-- сохраняет TXT-транскрипт и JSON с диагностикой транскрибации.
+## Current Features
 
-## Установка на CPU-компьютере
+- Record microphone audio to WAV.
+- Record Windows system audio to WAV through WASAPI loopback.
+- Record microphone and system audio as two separate WAV files.
+- Show microphone and system audio levels.
+- Add latest recordings, local files, or public URLs to a global transcription queue.
+- Transcribe `.wav`, `.mp3`, `.m4a`, `.mp4`, `.webm`, and `.mkv` sources.
+- Extract and transcribe the audio track from supported video files.
+- Choose Whisper models: `tiny`, `base`, `small`, `medium`, `large-v3`.
+- Use CPU by default, or CUDA/GPU when GPU dependencies are installed.
+- Save transcripts and JSON diagnostics in `data\transcripts`.
+- Switch the UI between RU and EN.
+- Run simple CPU/GPU transcription benchmarks.
+
+## Project Folder
+
+Use this folder for this fork:
 
 ```bat
-cd /d C:\Python\LocalAudioTranscriber
+cd /d C:\Python\LocalMediaTranscriber
+```
+
+Do not install dependencies globally. Keep the project environment in:
+
+```text
+C:\Python\LocalMediaTranscriber\.venv
+```
+
+## CPU Setup
+
+```bat
+cd /d C:\Python\LocalMediaTranscriber
 py -3.11 -m venv .venv
 .venv\Scripts\activate
 python -m pip install --upgrade pip
 pip install -r requirements-cpu.txt
 ```
 
-Файл `requirements-cpu.txt` не содержит `nvidia-*` пакетов.
+`requirements-cpu.txt` contains the base runtime dependencies for local CPU transcription.
 
-## Установка на компьютере с NVIDIA GPU
+## GPU Setup
+
+Install the CPU requirements first, then install the GPU add-ons:
 
 ```bat
-cd /d C:\Python\LocalAudioTranscriber
+cd /d C:\Python\LocalMediaTranscriber
 py -3.11 -m venv .venv
 .venv\Scripts\activate
 python -m pip install --upgrade pip
@@ -38,293 +58,51 @@ pip install -r requirements-cpu.txt
 pip install -r requirements-gpu.txt
 ```
 
-`requirements-gpu.txt` содержит только дополнительные CUDA/NVIDIA wheels для ускорения на GPU.
+`requirements-gpu.txt` should contain only the additional CUDA/NVIDIA packages needed for GPU acceleration. Keep both requirements files updated when dependencies change.
 
-## Запуск приложения
+## Run
 
 ```bat
-cd /d C:\Python\LocalAudioTranscriber
+cd /d C:\Python\LocalMediaTranscriber
 .\run.bat
 ```
 
-Интерфейс откроется по адресу:
+The app opens at:
 
 ```text
 http://127.0.0.1:8000
 ```
 
-`run.bat` открывает адрес с параметром времени вида `http://127.0.0.1:8000/?v=<timestamp>`, чтобы браузер не использовал старую вкладку или старый кэш интерфейса. Если порт `8000` занят, скрипт показывает PID и просит подтверждение перед остановкой только этого процесса.
+`run.bat` uses `.venv\Scripts\python.exe`, starts the FastAPI server, and opens the browser with a cache-busting query parameter. If port `8000` is already in use, the script asks before stopping that process.
 
-В PowerShell используйте именно `.\run.bat`: запись без `.\` может не запускаться из-за правил поиска исполняемых файлов PowerShell.
+## Stored Files
 
-## Как записывать микрофон
-
-1. В режиме записи выберите `Микрофон`.
-2. Выберите нужный микрофон.
-3. Посмотрите на индикатор уровня микрофона. Он должен двигаться, когда вы говорите.
-4. Нажмите `Начать запись`.
-5. Нажмите `Остановить запись`.
-
-## Как записывать системный звук
-
-1. В режиме записи выберите `Системный звук`.
-2. Выберите output-устройство, через которое реально идет звук: динамики, наушники, монитор или Bluetooth-устройство.
-3. Запустите звук в браузере, плеере или онлайн-встрече.
-4. Убедитесь, что индикатор системного звука двигается.
-5. Нажмите `Начать запись`, затем `Остановить запись`.
-
-## Как записывать микрофон + системный звук
-
-1. Выберите режим `Микрофон + системный звук`.
-2. Выберите микрофон и output-устройство.
-3. Нажмите `Начать запись`.
-4. После остановки приложение сохранит два файла:
+Recordings:
 
 ```text
-mic_YYYYMMDD_HHMMSS.wav
-system_YYYYMMDD_HHMMSS.wav
+C:\Python\LocalMediaTranscriber\data\recordings
 ```
 
-Файлы намеренно не смешиваются.
-
-## Как выбрать модель Whisper
-
-В интерфейсе выберите модель в поле `Модель Whisper` перед транскрибацией.
-
-- `tiny` — самая быстрая, качество ниже;
-- `base` — быстрая, качество среднее;
-- `small` — баланс скорости и качества, рекомендуется по умолчанию;
-- `medium` — выше качество, медленнее;
-- `large-v3` — максимальное качество, высокие требования к CPU/GPU и памяти.
-
-Значение по умолчанию хранится в `app\config.py`:
-
-```python
-WHISPER_MODEL = "small"
-```
-
-UI может переопределить модель для конкретной транскрибации.
-
-## Модели Whisper и первая загрузка
-
-По умолчанию используется `small`.
-
-Если выбранная модель уже есть локально, интернет не нужен. Если модель выбирается впервые, она автоматически скачивается с Hugging Face в папку проекта.
-
-Примерные размеры:
-
-- `tiny` — небольшая модель, быстрая, качество ниже;
-- `base` — небольшая модель, быстрая;
-- `small` — примерно несколько сотен МБ, баланс скорости и качества;
-- `medium` — около 1.5 GB;
-- `large-v3` — около 3.1 GB.
-
-Для первой загрузки нужен стабильный интернет. При ошибке подключения проверьте интернет, firewall, антивирус, VPN и корпоративные ограничения. Если модель не скачана, транскрибация на ней невозможна.
-
-Для слабых компьютеров лучше использовать `small`, `base` или `tiny`.
-
-## Где сохраняются аудиофайлы
+Transcripts:
 
 ```text
-C:\Python\LocalAudioTranscriber\data\recordings
+C:\Python\LocalMediaTranscriber\data\transcripts
 ```
 
-Рядом с каждым WAV сохраняется JSON с диагностикой записи: устройство, длительность, RMS, Peak, размер файла и предупреждения.
-
-## Где сохраняются транскрипты
+Downloads from public URLs:
 
 ```text
-C:\Python\LocalAudioTranscriber\data\transcripts
+C:\Python\LocalMediaTranscriber\data\downloads
 ```
 
-Рядом с каждым TXT сохраняется JSON с моделью, исходным аудиофайлом, устройством `cpu`/`cuda`, `compute_type`, длительностью аудио, временем обработки и скоростью.
-
-Имя модели добавляется в имя transcript-файла, чтобы можно было сравнивать разные модели на одной записи:
+Logs:
 
 ```text
-transcript_mic_small_YYYYMMDD_HHMMSS.txt
-transcript_system_small_YYYYMMDD_HHMMSS.txt
-transcript_mic_medium_YYYYMMDD_HHMMSS.txt
-transcript_system_medium_YYYYMMDD_HHMMSS.txt
+C:\Python\LocalMediaTranscriber\data\logs\app.log
 ```
 
-## Что делать, если микрофон не работает
+## Notes
 
-1. Откройте Параметры Windows → Конфиденциальность и безопасность → Микрофон.
-2. Включите доступ к микрофону.
-3. Включите доступ к микрофону для классических приложений.
-4. Разрешите доступ к микрофону для `python.exe`, `powershell.exe` или `cmd.exe` в антивирусе.
-5. Перезапустите приложение.
-6. Выберите правильный микрофон в интерфейсе.
-7. Проверьте индикатор уровня микрофона до начала записи.
+For `.mp3`, `.m4a`, `.mp4`, `.webm`, and `.mkv`, make sure `ffmpeg` is installed and available in `PATH`. Current video support extracts the audio track only; video frames are not analyzed yet.
 
-## Что делать, если системный звук не работает
-
-1. Убедитесь, что звук реально воспроизводится в Windows.
-2. Выберите output-устройство, через которое идет звук.
-3. Если индикатор не двигается, попробуйте другое output-устройство.
-4. Проверьте громкость Windows и громкость приложения-источника.
-5. На корпоративных ноутбуках WASAPI loopback может блокироваться политиками безопасности.
-
-## Что делать, если антивирус блокирует микрофон
-
-1. Разрешите приложению доступ к микрофону.
-2. Разрешите `python.exe`, `powershell.exe` или `cmd.exe`.
-3. Если доступ был заблокирован, перезапустите приложение.
-4. Иногда после блокировки требуется перезагрузка компьютера.
-
-## Что делать, если транскрибация долго не начинается
-
-1. При первом запуске модель Whisper может скачиваться несколько минут.
-2. Проверьте интернет.
-3. Проверьте доступ к Hugging Face, если модель скачивается впервые.
-4. На CPU транскрибация может быть заметно медленнее, чем на GPU.
-5. Если выбрана `medium` или `large-v3`, попробуйте `small`.
-6. Проверьте логи:
-
-```text
-C:\Python\LocalAudioTranscriber\data\logs\app.log
-```
-
-## Как понять, используется CPU или GPU
-
-После транскрибации интерфейс показывает:
-
-```text
-Модель
-Устройство
-Compute type
-Скорость
-```
-
-Если указано `cuda`, используется NVIDIA GPU. Если указано `cpu`, приложение работает на процессоре.
-
-Также эти данные сохраняются в JSON рядом с транскриптом.
-
-## Какие модели доступны
-
-```text
-tiny
-base
-small
-medium
-large-v3
-```
-
-По умолчанию используется `small`.
-
-## Какие форматы аудио поддерживаются
-
-Поддерживаемые форматы аудиофайлов:
-
-```text
-.wav
-.mp3
-.m4a
-.mp4
-.webm
-.mkv
-```
-
-Для `.mp3`, `.m4a`, `.mp4`, `.webm` и `.mkv` нужен `ffmpeg` в `PATH`. Для видеофайлов `.mp4`, `.webm` и `.mkv` программа извлекает и транскрибирует только аудиодорожку. Видеоряд не анализируется.
-
-## Таймер записи
-
-Во время записи интерфейс показывает таймер `Запись идет: HH:MM:SS`. После остановки сохраняется итоговая длительность последней записи: `Последняя запись: HH:MM:SS`.
-
-Таймер работает для микрофона, системного звука и режима двух отдельных файлов.
-
-## Глобальные настройки, RU/EN и единая очередь транскрибации
-
-В верхней части интерфейса находится общий блок `Настройки транскрибации`. Выбранные модель Whisper и устройство `Авто`, `CPU` или `GPU / CUDA` применяются ко всей глобальной очереди. При запуске настройки фиксируются в job JSON и не меняются до завершения обработки.
-
-`Авто` использует CUDA при доступности и переключается на CPU при проблеме загрузки. Явный выбор `GPU / CUDA` не переключается на CPU молча: если CUDA недоступна, интерфейс показывает понятную ошибку.
-
-Переключатель `RU / EN` меняет только язык интерфейса. Язык речи определяется faster-whisper автоматически, если переменная окружения `WHISPER_LANGUAGE` не задана явно.
-
-Раздел `Транскрибация` объединяет все источники в одну глобальную очередь:
-
-- последнюю запись микрофона;
-- последнюю запись системного звука;
-- обе последние записи;
-- один выбранный локальный файл;
-- несколько локальных `.wav`, `.mp3`, `.m4a`, `.mp4`, `.webm`, `.mkv`;
-- публичные HTTP(S)-ссылки.
-
-Кнопки источников только добавляют задачи. Обработка начинается после нажатия `Запустить транскрибацию` и выполняется последовательно одним worker-потоком. Во время выполнения добавление новых задач блокируется.
-
-Для ссылок используется `yt-dlp`: приложение скачивает или извлекает аудио и сохраняет его в:
-
-```text
-C:\Python\LocalAudioTranscriber\data\downloads
-```
-
-Основной приоритет проверки URL: YouTube, VK Video и RuTube. Ссылки работают best effort, только для публичных материалов без cookies и авторизации. Остальные публичные источники зависят от поддержки в установленной версии `yt-dlp`.
-
-Очередь обрабатывается последовательно. Это снижает риск нехватки памяти CUDA и упрощает отображение прогресса. Для каждой задачи показывается один из статусов:
-
-```text
-Ожидает
-Скачивается
-Скачано
-Анализируется
-Извлекается аудио
-Транскрибируется
-Готово
-Ошибка
-Отменено
-```
-
-Кнопка `Остановить после текущей задачи` завершает текущий файл и отменяет оставшиеся ожидающие задачи. Кнопка `Повторить ошибочные задачи` возвращает неудачные задачи в ожидание; после этого очередь запускается вручную.
-
-Если один файл завершился ошибкой, ошибка отображается в интерфейсе и сохраняется в JSON, а очередь переходит к следующему файлу.
-
-## Benchmark CPU и GPU
-
-Раздел benchmark сравнивает CPU и CUDA на одном локальном файле и выбранной модели. Результаты показаны в двух колонках.
-
-- `Benchmark Cold Run` выгружает текущую модель, затем измеряет загрузку модели и транскрибацию.
-- `Benchmark Warm Run` доступен после подходящего Cold Run и переиспользует уже загруженную модель. Если кэш был вытеснен другой операцией, нужно снова выполнить Cold Run.
-
-`total_wall_time_sec` считается от принятия команды запуска benchmark до готовности сохраненного TXT/JSON. Также сохраняются `model_load_time_sec`, `transcription_time_sec`, `save_time_sec`, длительность аудио и realtime factors.
-
-Пример имени:
-
-```text
-lesson__benchmark_cpu_cold__20260601_143000__small__transcript.json
-```
-
-## Имена transcript-файлов и job JSON
-
-Транскрипты сохраняются в `data\transcripts` с именами, связанными с исходниками. Последний завершенный результат автоматически показывается в интерфейсе; последние TXT-транскрипты можно открыть кликом в списке файлов:
-
-```text
-lesson_01__20260601_143000__small__transcript.txt
-lesson_01__20260601_143000__small__transcript.json
-```
-
-Для каждой очереди создается общий файл `data\jobs\job_YYYYMMDD_HHMMSS.json`. Он обновляется по мере обработки файлов, поэтому после сбоя сохраняется информация о достигнутом прогрессе.
-
-## Ограничения текущей версии
-
-- URL работают best effort через `yt-dlp`; при изменениях сайтов может потребоваться обновление `yt-dlp`;
-- Google Drive и Яндекс.Диск не являются целевыми источниками этого этапа;
-- закрытые видео, авторизация, cookies и обход ограничений доступа не поддерживаются;
-- очередь выполняется последовательно;
-- для `.mp4` анализируется только аудиодорожка.
-
-## Правовое и этичное использование
-
-Используйте приложение только для аудио, видео и файлов, к которым у вас есть законный доступ.
-
-Не используйте приложение для скрытой записи чужих разговоров, перехвата сообщений, обхода ограничений доступа или распространения чужих материалов без разрешения правообладателя.
-
-## Логи
-
-Основной лог:
-
-```text
-C:\Python\LocalAudioTranscriber\data\logs\app.log
-```
-
-Туда пишутся запуск приложения, выбранный режим записи, старт и остановка записи, выбранные устройства, старт и завершение транскрибации, модель, device, compute type, ошибки устройств, ошибки загрузки модели и fallback с CUDA на CPU.
+Use the app only with audio, video, and files you are allowed to record, download, process, and transcribe.

@@ -1,13 +1,16 @@
 :root {
   color-scheme: light;
-  --bg: #eef1f5;
+  --bg: #f8fafc;
   --surface: #ffffff;
-  --surface-soft: #f7f9fb;
-  --text: #18202a;
-  --muted: #5b6675;
-  --line: #d8dee7;
-  --accent: #146c6a;
-  --accent-strong: #0e5553;
+  --surface-soft: #f8fafc;
+  --text: #172033;
+  --muted: #5b667c;
+  --line: #dbeafe;
+  --accent: #2563eb;
+  --accent-strong: #1d4ed8;
+  --accent-alt: #7c3aed;
+  --accent-soft: #eff6ff;
+  --accent-alt-soft: #f5f3ff;
   --danger: #b42318;
   --warning: #946200;
   --success: #147843;
@@ -57,7 +60,7 @@ textarea {
   align-items: flex-start;
   justify-content: space-between;
   gap: 20px;
-  background: #fbfcfd;
+  background: var(--surface-soft);
 }
 
 .header-actions {
@@ -156,7 +159,7 @@ h4 {
 .state[data-type="active"] {
   border-color: var(--accent);
   color: var(--accent-strong);
-  background: #eef8f7;
+  background: var(--accent-soft);
 }
 
 .state[data-type="success"] {
@@ -362,7 +365,7 @@ summary:focus-visible {
 .level-meter > div {
   width: 0%;
   height: 100%;
-  background: var(--accent);
+  background: linear-gradient(90deg, var(--accent), var(--accent-alt));
   transition: width 120ms ease;
   min-width: 2px;
 }
@@ -791,7 +794,7 @@ textarea {
 
 .toast {
   border: 1px solid var(--line);
-  border-left: 5px solid var(--accent);
+  border-left: 5px solid var(--accent-alt);
   border-radius: 8px;
   padding: 12px 14px;
   background: #ffffff;
@@ -827,10 +830,10 @@ textarea {
   align-items: center;
   gap: 14px;
   margin-top: 14px;
-  border: 1px solid rgba(20, 108, 106, 0.45);
+  border: 1px solid rgba(124, 58, 237, 0.35);
   border-radius: 8px;
   padding: 14px 16px;
-  background: #eef8f7;
+  background: var(--accent-alt-soft);
 }
 
 .operation-banner p {
@@ -844,8 +847,8 @@ textarea {
   flex: 0 0 auto;
   width: 32px;
   height: 32px;
-  border: 4px solid #d8dee7;
-  border-top-color: var(--accent);
+  border: 4px solid var(--line);
+  border-top-color: var(--accent-alt);
   border-radius: 50%;
   animation: spin 0.9s linear infinite;
 }
@@ -915,7 +918,7 @@ textarea {
 
 .tour-actions button[data-secondary="true"]:hover:not(:disabled) {
   border-color: var(--accent);
-  background: var(--surface-soft);
+  background: var(--accent-soft);
 }
 
 @media (max-width: 820px) {

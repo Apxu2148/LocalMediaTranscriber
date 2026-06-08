@@ -1426,7 +1426,7 @@ async function boot() {
   await refreshBenchmarkStatus();
   await refreshMicLevel();
   await refreshSystemLevel();
-  window.LocalAudioTranscriberTour?.maybePrompt();
+  window.LocalMediaTranscriberTour?.maybePrompt();
 }
 
 boot();
