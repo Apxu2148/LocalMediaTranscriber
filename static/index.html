@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title data-i18n="appTitle"></title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="workspace-panel">
+        <header class="app-header">
+          <div>
+            <h1 data-i18n="appTitle"></h1>
+            <p id="systemStatus" data-i18n="environmentChecking"></p>
+            <p id="appVersion" class="app-version" data-i18n="versionLoading"></p>
+          </div>
+          <div class="header-actions">
+            <span id="modelBadge" class="badge" data-i18n="modelBadgeDefault" data-i18n-title="modelBadgeTitle"></span>
+            <button id="restartTourButton" type="button" data-i18n="tourButton"></button>
+            <label class="language-field" for="uiLanguageSelect">
+              <span data-i18n="interface"></span>
+              <select id="uiLanguageSelect">
+                <option value="ru">RU</option>
+                <option value="en">EN</option>
+              </select>
+            </label>
+          </div>
+        </header>
+
+        <section id="transcriptionSettings" class="workspace-section">
+          <div class="section-heading">
+            <div>
+              <h2 data-i18n="settingsTitle"></h2>
+              <p class="section-note" data-i18n="settingsNote"></p>
+            </div>
+          </div>
+          <div class="settings-grid">
+            <label class="field" for="whisperModelSelect">
+              <span data-i18n="model"></span>
+              <select id="whisperModelSelect" data-i18n-title="modelSelectTitle">
+                <option value="tiny">tiny</option>
+                <option value="base">base</option>
+                <option value="small" selected>small</option>
+                <option value="medium">medium</option>
+                <option value="large-v3">large-v3</option>
+              </select>
+              <span id="modelAvailabilityOutput" class="hint" data-i18n="modelChecking"></span>
+            </label>
+            <label class="field" for="whisperDeviceSelect">
+              <span data-i18n="device"></span>
+              <select id="whisperDeviceSelect">
+                <option value="auto" data-i18n="auto"></option>
+                <option value="cpu">CPU</option>
+                <option value="cuda">GPU / CUDA</option>
+              </select>
+              <span id="deviceAvailabilityOutput" class="hint" data-i18n="checkingGpu"></span>
+            </label>
+          </div>
+          <output id="modelDownloadWarning" class="model-warning"></output>
+        </section>
+
+        <section id="recordingSection" class="workspace-section">
+          <div class="section-heading">
+            <div><h2 data-i18n="recording"></h2></div>
+            <span id="recordingState" class="state" data-i18n="readyToRecord"></span>
+          </div>
+          <div class="form-grid recording-mode-grid">
+            <label class="field recording-mode-field" for="recordingModeSelect">
+              <span data-i18n="recordingMode"></span>
+              <select id="recordingModeSelect" data-i18n-title="recordingModeTitle">
+                <option value="mic" data-i18n="microphone"></option>
+                <option value="system" data-i18n="systemAudio"></option>
+                <option value="both" data-i18n="microphoneAndSystem"></option>
+              </select>
+            </label>
+          </div>
+          <div class="recording-device-grid">
+            <div class="recording-device-column">
+              <div id="micDeviceRow" class="field device-field">
+                <span data-i18n="microphone"></span>
+                <select id="micDeviceSelect" data-i18n-title="microphoneSelectTitle"></select>
+                <button id="refreshMicDevicesButton" type="button" data-i18n="refreshMicDevices" data-i18n-title="refreshMicDevicesTitle"></button>
+              </div>
+              <div id="micLevelBlock" class="level-block" data-i18n-title="micLevelTitle">
+                <div class="level-label"><span data-i18n="microphoneLevel"></span></div>
+                <div class="level-meter" aria-hidden="true"><div id="micLevelMeterFill"></div></div>
+                <div class="metrics">
+                  <span id="micRmsValue" data-i18n="rmsZero"></span>
+                  <span id="micPeakValue" data-i18n="peakZero"></span>
+                </div>
+                <output id="micLevelWarning" class="output compact"></output>
+              </div>
+            </div>
+            <div class="recording-device-column">
+              <div id="systemDeviceRow" class="field device-field">
+                <span data-i18n="outputDevice"></span>
+                <select id="outputDeviceSelect" data-i18n-title="outputDeviceSelectTitle"></select>
+                <button id="refreshOutputDevicesButton" type="button" data-i18n="refreshOutputDevices" data-i18n-title="refreshOutputDevicesTitle"></button>
+              </div>
+              <div id="systemLevelBlock" class="level-block" data-i18n-title="systemLevelTitle">
+                <div class="level-label"><span data-i18n="systemAudioLevel"></span></div>
+                <div class="level-meter" aria-hidden="true"><div id="systemLevelMeterFill"></div></div>
+                <div class="metrics">
+                  <span id="systemRmsValue" data-i18n="rmsZero"></span>
+                  <span id="systemPeakValue" data-i18n="peakZero"></span>
+                </div>
+                <output id="systemLevelWarning" class="output compact"></output>
+              </div>
+            </div>
+          </div>
+          <details id="helpSection" class="help-block recording-help">
+            <summary data-i18n="helpDeviceSummary"></summary>
+            <h3 data-i18n="helpMicTitle"></h3>
+            <p data-i18n="helpMicText"></p>
+            <h3 data-i18n="helpSystemTitle"></h3>
+            <p data-i18n="helpSystemText"></p>
+            <p data-i18n="helpSystemOutputText"></p>
+            <p data-i18n="helpDeviceNamesText"></p>
+            <p data-i18n="helpLoopbackLimitText"></p>
+            <h3 data-i18n="helpSilentSystemTitle"></h3>
+            <ul>
+              <li data-i18n="helpSilentSystemWindows"></li>
+              <li data-i18n="helpSilentSystemMeetingApp"></li>
+              <li data-i18n="helpSilentSystemSameDevice"></li>
+              <li data-i18n="helpSilentSystemRefresh"></li>
+              <li data-i18n="helpSilentSystemTryAnother"></li>
+              <li data-i18n="helpSilentSystemRuntime"></li>
+            </ul>
+            <p data-i18n="helpOwnVoiceText"></p>
+            <h3 data-i18n="helpModelTitle"></h3>
+            <p data-i18n="helpModelText"></p>
+            <h3 id="legalUsage" data-i18n="legalTitle"></h3>
+            <p data-i18n="legalText"></p>
+            <p data-i18n="tourRepeat"></p>
+          </details>
+          <div class="actions">
+            <button id="startRecordButton" type="button" data-i18n="startRecording" data-i18n-title="startRecordingTitle"></button>
+            <button id="stopRecordButton" type="button" disabled data-i18n="stopRecording" data-i18n-title="stopRecordingTitle"></button>
+          </div>
+          <output id="recordingOutput" class="output"></output>
+          <p id="recordingTimer" class="recording-timer" data-i18n="latestRecordingEmpty"></p>
+        </section>
+
+        <section id="queueSection" class="workspace-section">
+          <div class="section-heading">
+            <div>
+              <h2 data-i18n="transcriptionTitle"></h2>
+              <p class="section-note" data-i18n="transcriptionNote"></p>
+            </div>
+          </div>
+
+          <div class="unified-transcription-grid">
+            <section id="transcriptionSources" class="transcription-column">
+              <div class="subsection-heading">
+                <h3 data-i18n="sourcesTitle"></h3>
+                <p data-i18n="sourcesNote"></p>
+              </div>
+              <div id="recordingTranscribeActions" class="source-group">
+                <h4 data-i18n="latestRecordingsTitle"></h4>
+                <div class="source-actions">
+                  <button id="transcribeMicRecordingButton" type="button" disabled data-i18n="addLatestMic"></button>
+                  <button id="transcribeSystemRecordingButton" type="button" disabled data-i18n="addLatestSystem"></button>
+                  <button id="transcribeAllRecordingsButton" type="button" disabled data-i18n="addLatestBoth"></button>
+                </div>
+              </div>
+
+              <form id="transcribeForm" class="source-group">
+                <h4 data-i18n="selectedFileTitle"></h4>
+                <input id="audioFileInput" class="native-file-input" type="file" accept=".wav,.mp3,.m4a,.mp4,.webm,.mkv,audio/wav,audio/mpeg,audio/mp4,audio/x-m4a,video/mp4" />
+                <div class="file-picker-row">
+                  <button id="audioFilePickerButton" type="button" class="file-picker-button" data-i18n="chooseFile"></button>
+                  <span id="audioFilePickerText" class="file-picker-text" data-i18n="noFileSelected"></span>
+                </div>
+                <button id="transcribeButton" type="submit" data-i18n="addSelectedFile"></button>
+              </form>
+
+              <form id="queueAddForm" class="source-group">
+                <h4 data-i18n="multipleFilesTitle"></h4>
+                <input id="queueFileInput" class="native-file-input" type="file" multiple accept=".wav,.mp3,.m4a,.mp4,.webm,.mkv,audio/wav,audio/mpeg,audio/mp4,audio/x-m4a,video/mp4" />
+                <div class="file-picker-row">
+                  <button id="queueFilePickerButton" type="button" class="file-picker-button" data-i18n="chooseFiles"></button>
+                  <span id="queueFilePickerText" class="file-picker-text" data-i18n="noFilesSelected"></span>
+                </div>
+                <button id="queueAddButton" type="submit" data-i18n="addFiles"></button>
+              </form>
+
+              <form id="queueUrlForm" class="source-group queue-url-form">
+                <label class="field" for="queueUrlInput">
+                  <span data-i18n="queueUrls"></span>
+                  <textarea id="queueUrlInput" rows="4" data-i18n-placeholder="urlPlaceholder"></textarea>
+                </label>
+                <p id="urlLimitations" class="section-note" data-i18n="urlLimitations"></p>
+                <button id="queueUrlAddButton" type="submit" data-i18n="addUrls"></button>
+              </form>
+            </section>
+
+            <section id="globalQueuePanel" class="transcription-column queue-panel">
+              <div class="subsection-heading">
+                <h3 data-i18n="globalQueueTitle"></h3>
+                <p data-i18n="globalQueueNote"></p>
+              </div>
+              <p id="queueSettingsSummary" class="section-note"></p>
+              <p class="section-note" data-i18n="queueFrozen"></p>
+              <div class="actions queue-actions">
+                <button id="queueStartButton" type="button" data-i18n="startTranscription"></button>
+                <button id="queueClearButton" type="button" data-i18n="clearGlobalQueue"></button>
+                <button id="queueStopButton" type="button" disabled data-i18n="stopAfterCurrent"></button>
+                <button id="queueRetryButton" type="button" data-i18n="retryFailed"></button>
+              </div>
+              <output id="queueOutput" class="output"></output>
+              <ul id="queueList" class="queue-list"></ul>
+            </section>
+          </div>
+
+          <div id="runtimeDetails" class="runtime-grid">
+            <div><span data-i18n="modelShort"></span><strong id="runtimeModel">small</strong></div>
+            <div><span data-i18n="deviceShort"></span><strong id="runtimeDevice">auto</strong></div>
+            <div><span data-i18n="computeTypeShort"></span><strong id="runtimeCompute">auto</strong></div>
+            <div><span data-i18n="speed"></span><strong id="runtimeSpeed" data-i18n="notAvailable"></strong></div>
+          </div>
+          <div id="queueMetricsProgress">
+            <div id="queueMetrics" class="queue-progress-grid">
+              <div><span data-i18n="totalTasks"></span><strong id="queueTotal">0</strong></div>
+              <div><span data-i18n="completed"></span><strong id="queueCompleted">0</strong></div>
+              <div><span data-i18n="errors"></span><strong id="queueFailed">0</strong></div>
+              <div><span data-i18n="cancelled"></span><strong id="queueCancelled">0</strong></div>
+              <div><span data-i18n="pending"></span><strong id="queuePending">0</strong></div>
+              <div><span data-i18n="running"></span><strong id="queueCurrent" data-i18n="none"></strong></div>
+              <div><span data-i18n="elapsed"></span><strong id="queueElapsed">00:00:00</strong></div>
+              <div><span data-i18n="estimatedRemaining"></span><strong id="queueEta" data-i18n="queueEtaWaiting"></strong></div>
+            </div>
+            <label class="queue-progress-label" for="queueProgress">
+              <span id="queueProgressText"></span>
+              <progress id="queueProgress" max="100" value="0"></progress>
+            </label>
+          </div>
+          <div id="operationOverlay" class="operation-banner" hidden>
+            <div class="operation-spinner" aria-hidden="true"></div>
+            <div>
+              <h3 id="operationOverlayTitle" data-i18n="operation"></h3>
+              <p id="operationOverlayText" data-i18n="wait"></p>
+            </div>
+          </div>
+          <output id="transcribeOutput" class="output"></output>
+          <details id="transcribeTechnicalDetails" class="technical-details" hidden>
+            <summary data-i18n="technicalDetails"></summary>
+            <pre id="transcribeTechnicalText"></pre>
+          </details>
+          <output id="benchmarkOutput" class="output compact"></output>
+          <label class="result-label" for="transcriptText" data-i18n="latestResult"></label>
+          <textarea id="transcriptText" readonly spellcheck="false" data-i18n-aria-label="latestResult"></textarea>
+        </section>
+
+        <section id="filesSection" class="workspace-section">
+          <div class="section-heading">
+            <div>
+              <h2 data-i18n="files"></h2>
+              <p id="diskFree" class="section-note" data-i18n="diskChecking"></p>
+            </div>
+          </div>
+          <div class="storage-grid">
+            <div class="storage-block">
+              <h3>recordings</h3>
+              <p data-i18n="recordingsSavedIn"></p>
+              <code id="recordingsPath">C:\Python\LocalAudioTranscriber\data\recordings</code>
+              <button id="openRecordingsButton" type="button" data-i18n="openRecordings"></button>
+              <h4 data-i18n="latestFiles"></h4>
+              <ul id="recordingsFileList" class="file-list"></ul>
+            </div>
+            <div class="storage-block">
+              <h3>transcripts</h3>
+              <p data-i18n="transcriptsSavedIn"></p>
+              <code id="transcriptsPath">C:\Python\LocalAudioTranscriber\data\transcripts</code>
+              <button id="openTranscriptsButton" type="button" data-i18n="openTranscripts"></button>
+              <h4 data-i18n="latestFiles"></h4>
+              <ul id="transcriptsFileList" class="file-list"></ul>
+            </div>
+          </div>
+        </section>
+
+        <section id="benchmarkSection" class="workspace-section">
+          <div class="section-heading">
+            <div>
+              <h2 data-i18n="benchmarkTitle"></h2>
+              <p class="section-note" data-i18n="benchmarkNote"></p>
+            </div>
+          </div>
+          <form id="benchmarkUploadForm" class="source-group">
+            <h4 data-i18n="benchmarkFile"></h4>
+            <input id="benchmarkFileInput" class="native-file-input" type="file" accept=".wav,.mp3,.m4a,.mp4,.webm,.mkv,audio/wav,audio/mpeg,audio/mp4,audio/x-m4a,video/mp4" />
+            <div class="file-picker-row">
+              <button id="benchmarkFilePickerButton" type="button" class="file-picker-button" data-i18n="chooseFile"></button>
+              <span id="benchmarkFilePickerText" class="file-picker-text" data-i18n="noFileSelected"></span>
+            </div>
+            <button id="benchmarkUploadButton" type="submit" data-i18n="benchmarkPrepare"></button>
+          </form>
+          <output id="benchmarkStatusOutput" class="output"></output>
+          <div class="benchmark-grid">
+            <section class="benchmark-card">
+              <h3>CPU</h3>
+              <div class="actions">
+                <button type="button" data-benchmark-device="cpu" data-benchmark-mode="cold" data-i18n="benchmarkColdRun"></button>
+                <button type="button" data-benchmark-device="cpu" data-benchmark-mode="warm" data-i18n="benchmarkWarmRun"></button>
+              </div>
+              <pre id="benchmarkCpuResult" data-i18n="noResults"></pre>
+            </section>
+            <section class="benchmark-card">
+              <h3>GPU / CUDA</h3>
+              <div class="actions">
+                <button type="button" data-benchmark-device="cuda" data-benchmark-mode="cold" data-i18n="benchmarkColdRun"></button>
+                <button type="button" data-benchmark-device="cuda" data-benchmark-mode="warm" data-i18n="benchmarkWarmRun"></button>
+              </div>
+              <pre id="benchmarkCudaResult" data-i18n="noResults"></pre>
+            </section>
+          </div>
+        </section>
+
+      </section>
+    </main>
+
+    <div id="toastRegion" class="toast-region" aria-live="polite" aria-atomic="true"></div>
+    <script src="/static/i18n.js"></script>
+    <script src="/static/tour.js"></script>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
