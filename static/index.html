@@ -65,15 +65,30 @@
             <div><h2 data-i18n="recording"></h2></div>
             <span id="recordingState" class="state" data-i18n="readyToRecord"></span>
           </div>
-          <div class="form-grid recording-mode-grid">
-            <label class="field recording-mode-field" for="recordingModeSelect">
-              <span data-i18n="recordingMode"></span>
-              <select id="recordingModeSelect" data-i18n-title="recordingModeTitle">
-                <option value="mic" data-i18n="microphone"></option>
-                <option value="system" data-i18n="systemAudio"></option>
-                <option value="both" data-i18n="microphoneAndSystem"></option>
-              </select>
-            </label>
+          <div id="recordingSources" class="recording-sources" aria-labelledby="recordingSourcesTitle">
+            <div id="recordingSourcesTitle" class="recording-sources-title" data-i18n="recordingSourcesTitle"></div>
+            <div class="source-checkbox-grid">
+              <label class="source-checkbox" for="micSourceCheckbox">
+                <input id="micSourceCheckbox" type="checkbox" checked />
+                <span data-i18n="microphone"></span>
+              </label>
+              <label class="source-checkbox" for="systemSourceCheckbox">
+                <input id="systemSourceCheckbox" type="checkbox" checked />
+                <span data-i18n="systemAudio"></span>
+              </label>
+              <label class="source-checkbox source-checkbox-placeholder" for="screenSourceCheckbox">
+                <input id="screenSourceCheckbox" type="checkbox" disabled />
+                <span data-i18n="screenSourceSoon"></span>
+              </label>
+              <label class="source-checkbox source-checkbox-placeholder" for="mouseSourceCheckbox">
+                <input id="mouseSourceCheckbox" type="checkbox" disabled />
+                <span data-i18n="mouseSourcePlaceholder"></span>
+              </label>
+              <label class="source-checkbox source-checkbox-placeholder" for="keyboardSourceCheckbox">
+                <input id="keyboardSourceCheckbox" type="checkbox" disabled />
+                <span data-i18n="keyboardSourcePlaceholder"></span>
+              </label>
+            </div>
           </div>
           <div class="recording-device-grid">
             <div class="recording-device-column">

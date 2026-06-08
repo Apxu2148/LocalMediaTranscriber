@@ -2,7 +2,9 @@ const startRecordButton = document.querySelector("#startRecordButton");
 const stopRecordButton = document.querySelector("#stopRecordButton");
 const refreshMicDevicesButton = document.querySelector("#refreshMicDevicesButton");
 const refreshOutputDevicesButton = document.querySelector("#refreshOutputDevicesButton");
-const recordingModeSelect = document.querySelector("#recordingModeSelect");
+const micSourceCheckbox = document.querySelector("#micSourceCheckbox");
+const systemSourceCheckbox = document.querySelector("#systemSourceCheckbox");
+const recordingSourceCheckboxes = [micSourceCheckbox, systemSourceCheckbox];
 const micDeviceRow = document.querySelector("#micDeviceRow");
 const systemDeviceRow = document.querySelector("#systemDeviceRow");
 const micDeviceSelect = document.querySelector("#micDeviceSelect");
@@ -116,6 +118,7 @@ let micDevicesRefreshInFlight = false;
 let outputDevicesRefreshInFlight = false;
 let micSwitchInFlight = false;
 let outputSwitchInFlight = false;
+const dynamicOutputRenderers = new Map();
 
 function t(key, variables = {}) {
   return window.LATI18N?.t(key, variables) || key;
@@ -150,6 +153,20 @@ class ApiError extends Error {
 function setOutput(element, message, type = "info") {
   element.textContent = translateUiText(message);
   element.dataset.type = type;
+  dynamicOutputRenderers.delete(element);
+}
+
+function setDynamicOutput(element, renderMessage, type = "info") {
+  dynamicOutputRenderers.set(element, { renderMessage, type });
+  element.textContent = translateUiText(renderMessage());
+  element.dataset.type = type;
+}
+
+function rerenderDynamicOutputs() {
+  for (const [element, state] of dynamicOutputRenderers.entries()) {
+    element.textContent = translateUiText(state.renderMessage());
+    element.dataset.type = state.type;
+  }
 }
 
 function setAppState(message, type = "idle") {
@@ -187,7 +204,23 @@ function selectedDevice() {
 }
 
 function currentMode() {
-  return recordingModeSelect.value;
+  const usesMic = micSourceCheckbox.checked;
+  const usesSystem = systemSourceCheckbox.checked;
+  if (usesMic && usesSystem) {
+    return "both";
+  }
+  if (usesMic) {
+    return "mic";
+  }
+  if (usesSystem) {
+    return "system";
+  }
+  return null;
+}
+
+function setSourcesFromMode(mode) {
+  micSourceCheckbox.checked = mode === "mic" || mode === "both";
+  systemSourceCheckbox.checked = mode === "system" || mode === "both";
 }
 
 function updateFilePickerText(input, target, multiple = false) {
@@ -207,11 +240,11 @@ function resetFilePicker(input, target, multiple = false) {
 }
 
 function modeUsesMic() {
-  return currentMode() === "mic" || currentMode() === "both";
+  return micSourceCheckbox.checked;
 }
 
 function modeUsesSystem() {
-  return currentMode() === "system" || currentMode() === "both";
+  return systemSourceCheckbox.checked;
 }
 
 function hasSelectableDevice(select) {
@@ -226,7 +259,9 @@ function setRecordingUi(recording) {
   isRecording = recording;
   startRecordButton.disabled = recording || isTranscribing || queueActive || benchmarkActive;
   stopRecordButton.disabled = !recording;
-  recordingModeSelect.disabled = recording;
+  for (const checkbox of recordingSourceCheckboxes) {
+    checkbox.disabled = recording;
+  }
   micDeviceSelect.disabled = recording ? !modeUsesMic() || micSwitchInFlight : micSwitchInFlight;
   outputDeviceSelect.disabled = recording ? !modeUsesSystem() || outputSwitchInFlight : outputSwitchInFlight;
   refreshMicDevicesButton.disabled = micDevicesRefreshInFlight;
@@ -600,7 +635,7 @@ async function refreshStatus() {
     syncRecordingTimer(status);
     isTranscribing = localTranscriptionActive || Boolean(transcription.in_progress);
     if (status.recording && status.recording_mode) {
-      recordingModeSelect.value = status.recording_mode;
+      setSourcesFromMode(status.recording_mode);
       updateModeUi();
     }
     setRecordingUi(Boolean(status.recording));
@@ -696,10 +731,10 @@ async function refreshSystemLevel() {
 }
 
 function formatRecordingDiagnostics(diagnostics) {
-  const source = t(diagnostics.source_type === "system" ? "systemAudio" : "microphone");
+  const source = recordingSourceLabel(diagnostics.source_type);
   const device = diagnostics.source_type === "system"
-    ? `${diagnostics.output_device_name} (${diagnostics.output_device_id ?? "default"})`
-    : `${diagnostics.device_name} (${diagnostics.device_id ?? "default"})`;
+    ? `${diagnostics.output_device_name} (${diagnostics.output_device_id ?? t("defaultSuffix")})`
+    : `${diagnostics.device_name} (${diagnostics.device_id ?? t("defaultSuffix")})`;
 
   const lines = [
     `${source}`,
@@ -724,6 +759,20 @@ function formatAllDiagnostics(diagnosticsList, errors = []) {
     chunks.push(t("diagnosticErrors", { value: errors.join("; ") }));
   }
   return chunks.join("\n\n");
+}
+
+function recordingSourceLabel(sourceType) {
+  if (sourceType === "system") {
+    return t("systemAudio");
+  }
+  if (sourceType === "mic") {
+    return t("microphone");
+  }
+  return translateUiText(sourceType || t("localFile"));
+}
+
+function formatRecordingPaths(recordings) {
+  return recordings.map((item) => `${recordingSourceLabel(item.source_type)}: ${item.file_path}`).join("\n");
 }
 
 function formatBenchmark(benchmark, benchmarkPath) {
@@ -836,7 +885,7 @@ async function loadTranscript(filePath, announce = false) {
     transcriptText.value = result.text || "";
     lastLoadedQueueTranscriptPath = filePath;
     if (announce) {
-      setOutput(transcribeOutput, t("transcriptLoaded", { name: transcriptName }), "success");
+      setDynamicOutput(transcribeOutput, () => t("transcriptLoaded", { name: transcriptName }), "success");
     }
   } catch (error) {
     setOutput(transcribeOutput, error.message, "error");
@@ -1107,12 +1156,13 @@ function renderQueue(status) {
   }
 
   if (previousQueueStatus === "running" && status.status === "completed") {
-    const message = t("queueCompletedSummary", { completed, failed, cancelled });
-    setOutput(queueOutput, message, failed ? "warning" : "success");
+    const renderMessage = () => t("queueCompletedSummary", { completed, failed, cancelled });
+    const message = renderMessage();
+    setDynamicOutput(queueOutput, renderMessage, failed ? "warning" : "success");
     showToast(message, failed ? "warning" : "success");
     refreshStorage();
   } else if (previousQueueStatus === "running" && status.status === "cancelled") {
-    setOutput(queueOutput, t("queueStopped"), "warning");
+    setDynamicOutput(queueOutput, () => t("queueStopped"), "warning");
     showToast(t("queueStopped"), "warning");
   }
 
@@ -1238,6 +1288,15 @@ async function refreshBenchmarkStatus() {
 }
 
 startRecordButton.addEventListener("click", async () => {
+  const mode = currentMode();
+  if (!mode) {
+    setRecordingUi(false);
+    setAppState(t("readyToRecord"), "idle");
+    setOutput(recordingOutput, t("selectRecordingSource"), "error");
+    showToast(t("selectRecordingSource"), "error");
+    return;
+  }
+
   setOutput(recordingOutput, t("startingRecording"));
   updateRecordingTranscribeActions([]);
   startRecordButton.disabled = true;
@@ -1247,7 +1306,7 @@ startRecordButton.addEventListener("click", async () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        mode: currentMode(),
+        mode,
         mic_device_id: selectedMicDeviceId(),
         output_device_id: selectedOutputDeviceId(),
       }),
@@ -1259,8 +1318,7 @@ startRecordButton.addEventListener("click", async () => {
     updateRecordingTimerUi();
     setAppState(t("recordingActive"), "active");
     showToast(t("recordingStarted"), "success");
-    const paths = result.recordings.map((item) => `${item.source_type}: ${item.file_path}`).join("\n");
-    setOutput(recordingOutput, `${t("recordingInProgress")}\n${paths}`, "success");
+    setDynamicOutput(recordingOutput, () => `${t("recordingInProgress")}\n${formatRecordingPaths(result.recordings)}`, "success");
   } catch (error) {
     setRecordingUi(false);
     setAppState(t("recordingError"), "error");
@@ -1283,7 +1341,11 @@ stopRecordButton.addEventListener("click", async () => {
     lastRecordingDurationSec = Number(result.duration_sec || Math.max(...diagnosticsList.map((item) => item.duration_sec || 0)));
     updateRecordingTimerUi();
     const hasWarnings = diagnosticsList.some((item) => item?.warnings?.length) || Boolean(result.errors?.length);
-    setOutput(recordingOutput, formatAllDiagnostics(diagnosticsList, result.errors), hasWarnings ? "warning" : "success");
+    setDynamicOutput(
+      recordingOutput,
+      () => formatAllDiagnostics(diagnosticsList, result.errors),
+      hasWarnings ? "warning" : "success",
+    );
     updateRecordingTranscribeActions(diagnosticsList);
     await refreshStorage();
   } catch (error) {
@@ -1296,11 +1358,13 @@ stopRecordButton.addEventListener("click", async () => {
 
 refreshMicDevicesButton.addEventListener("click", () => refreshMicDevices(true));
 refreshOutputDevicesButton.addEventListener("click", () => refreshOutputDevices(true));
-recordingModeSelect.addEventListener("change", () => {
-  updateModeUi();
-  refreshMicLevel();
-  refreshSystemLevel();
-});
+for (const checkbox of recordingSourceCheckboxes) {
+  checkbox.addEventListener("change", () => {
+    updateModeUi();
+    refreshMicLevel();
+    refreshSystemLevel();
+  });
+}
 micDeviceSelect.addEventListener("change", handleMicDeviceChange);
 outputDeviceSelect.addEventListener("change", handleOutputDeviceChange);
 whisperModelSelect.addEventListener("change", () => {
@@ -1442,10 +1506,13 @@ document.addEventListener("lat-language-change", () => {
   updateFilePickerText(audioFileInput, audioFilePickerText);
   updateFilePickerText(queueFileInput, queueFilePickerText, true);
   updateFilePickerText(benchmarkFileInput, benchmarkFilePickerText);
+  updateRecordingTimerUi();
+  setRecordingUi(isRecording);
   updateQueueSettingsSummary(queueActive ? latestQueueStatus : null);
   if (latestQueueStatus) {
     renderQueue(latestQueueStatus);
   }
+  rerenderDynamicOutputs();
   refreshStatus();
   refreshBenchmarkStatus();
   refreshStorage();

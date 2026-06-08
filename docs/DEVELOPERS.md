@@ -307,6 +307,7 @@ The queue is intentionally sequential. Do not parallelize transcription without 
 ## RU/EN Localization Notes
 
 - All static UI labels should live in `static/i18n.js`.
+- Any new visible UI text must use the existing i18n mechanism. Do not hardcode user-facing labels directly in HTML or JS unless this is already the established pattern and both RU/EN variants remain supported.
 - `static/index.html`, `static/app.js`, and `static/tour.js` should not embed Russian user-facing text.
 - Keep RU and EN dictionary keys identical.
 - For new dynamic keys used by `t("key")`, make sure tests can find the key in both dictionaries.

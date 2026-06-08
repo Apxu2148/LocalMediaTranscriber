@@ -194,26 +194,76 @@ h4 {
   display: contents;
 }
 
-.recording-mode-grid {
-  grid-template-columns: 1fr;
+.recording-sources {
+  display: grid;
+  gap: 8px;
 }
 
-.recording-mode-field {
-  max-width: 520px;
+.recording-sources-title {
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.source-checkbox-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.source-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 7px 10px;
+  background: #ffffff;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.source-checkbox input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.source-checkbox:has(input:checked:not(:disabled)) {
+  border-color: rgba(37, 99, 235, 0.45);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.source-checkbox-placeholder {
+  color: var(--muted);
+  background: var(--surface-soft);
+}
+
+.source-checkbox-placeholder input {
+  accent-color: var(--line);
 }
 
 .recording-device-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
+  gap: 12px;
   align-items: start;
-  margin-top: 18px;
+  margin-top: 14px;
 }
 
 .recording-device-column {
   display: grid;
-  gap: 14px;
+  gap: 10px;
   min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--surface-soft);
 }
 
 .model-row,
@@ -334,8 +384,20 @@ summary:focus-visible {
   background: var(--surface-soft);
 }
 
+.recording-device-column .level-block {
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  padding: 10px 0 0;
+  background: transparent;
+}
+
 .level-block[data-active="false"] {
   background: #fbfcfd;
+}
+
+.recording-device-column .level-block[data-active="false"] {
+  background: transparent;
 }
 
 .level-label,
