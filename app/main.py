@@ -11,18 +11,27 @@ from uuid import uuid4
 from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from . import config
 from .audio_recorder import AudioRecorder
 from .benchmark_service import BenchmarkService
 from .queue_manager import QueueFile, QueueManager, QueueUrl
+from .screen_recorder import (
+    ScreenRecorder,
+    ScreenRecorderDependencyError,
+    ScreenRecorderError,
+    ScreenRecorderStateError,
+    ScreenRecorderValidationError,
+    recent_media_sessions,
+)
 from .system_audio_recorder import SystemAudioRecorder
 from .transcript_store import TranscriptStore, safe_filename_part, technical_details_for_exception
 from .transcriber import AudioTranscriber, ModelLoadError
 from .url_downloader import UrlDownloader
 from .utils import setup_logging, timestamp_for_filename, validate_media_for_transcription
+from .video_muxer import VideoMuxer, VideoMuxerDependencyError, VideoMuxerError, VideoMuxerValidationError
 
 
 setup_logging()
@@ -47,6 +56,8 @@ app.mount("/static", NoCacheStaticFiles(directory=str(config.STATIC_DIR)), name=
 
 recorder = AudioRecorder()
 system_recorder = SystemAudioRecorder()
+screen_recorder = ScreenRecorder()
+video_muxer = VideoMuxer()
 transcriber = AudioTranscriber()
 transcript_store = TranscriptStore()
 recording_lock = threading.Lock()
@@ -63,6 +74,14 @@ class StartRecordingRequest(BaseModel):
     device_id: int | None = None
     mic_device_id: int | None = None
     output_device_id: str | None = None
+    screen: bool = False
+    display_indices: list[int] = Field(default_factory=list)
+    screen_fps: int = 3
+
+
+class ScreenRecordingStartRequest(BaseModel):
+    display_indices: list[int] = Field(default_factory=list)
+    fps: int = 3
 
 
 class SwitchMicrophoneRequest(BaseModel):
@@ -107,6 +126,12 @@ class BenchmarkRunRequest(BaseModel):
     model: str
     device: str
     mode: str
+
+
+class VideoMuxMergeRequest(BaseModel):
+    video_file: str
+    mic_audio_file: str | None = None
+    system_audio_file: str | None = None
 
 
 def process_queue_item(item: dict, model_name: str, device_preference: str) -> dict:
@@ -172,6 +197,8 @@ def index() -> FileResponse:
 @app.get("/api/status")
 def status() -> dict:
     transcription = transcriber.status()
+    screen_status = screen_recorder.status()
+    recording_active = any_recording_active()
     recording_elapsed_sec = (
         round(time.monotonic() - active_recording_started_at, 1)
         if active_recording_started_at is not None
@@ -179,12 +206,13 @@ def status() -> dict:
     )
     return {
         "app_version": config.APP_VERSION,
-        "recording": recorder.is_recording or system_recorder.is_recording,
+        "recording": recording_active,
         "recording_mode": active_recording_mode,
         "recording_elapsed_sec": recording_elapsed_sec,
         "last_recording_duration_sec": last_recording_duration_sec,
         "mic_recording": recorder.is_recording,
         "system_recording": system_recorder.is_recording,
+        "screen_recording": screen_status,
         "ffmpeg_found": shutil.which("ffmpeg") is not None,
         "whisper_model": config.WHISPER_MODEL,
         "whisper_models": list(config.SUPPORTED_WHISPER_MODELS),
@@ -216,7 +244,15 @@ def storage() -> dict:
         },
         "recordings": {
             "path": str(config.RECORDINGS_DIR),
-            "files": recent_files(config.RECORDINGS_DIR, allowed_suffixes={".wav"}),
+            "files": recent_files(
+                config.RECORDINGS_DIR,
+                limit=20,
+                allowed_suffixes={".wav", ".mp3", ".m4a", ".mp4", ".avi", ".json"},
+            ),
+        },
+        "media_sessions": {
+            "path": str(config.RECORDINGS_DIR),
+            "sessions": recent_media_sessions(config.RECORDINGS_DIR, legacy_media_sessions_dir=config.MEDIA_SESSIONS_DIR),
         },
         "transcripts": {
             "path": str(config.TRANSCRIPTS_DIR),
@@ -239,6 +275,7 @@ def open_folder(payload: OpenFolderRequest) -> dict:
     folder_key = (payload.folder or "").strip().lower()
     folders = {
         "recordings": config.RECORDINGS_DIR,
+        "media_sessions": config.MEDIA_SESSIONS_DIR,
         "transcripts": config.TRANSCRIPTS_DIR,
     }
     folder_path = folders.get(folder_key)
@@ -302,45 +339,127 @@ def output_audio_level(device_id: str | None = None) -> dict:
         raise_api_error(str(exc), status_code=500)
 
 
+@app.get("/api/displays")
+def displays() -> list[dict]:
+    try:
+        return screen_recorder.list_displays()
+    except ScreenRecorderError as exc:
+        raise_api_error(str(exc), status_code=screen_error_status(exc))
+
+
+@app.post("/api/screen-recording/start")
+def start_screen_recording(payload: ScreenRecordingStartRequest | None = Body(default=None)) -> dict:
+    request = payload or ScreenRecordingStartRequest()
+    try:
+        return screen_recorder.start(request.display_indices, request.fps)
+    except ScreenRecorderError as exc:
+        raise_api_error(str(exc), status_code=screen_error_status(exc))
+
+
+@app.post("/api/screen-recording/stop")
+def stop_screen_recording() -> dict:
+    try:
+        return screen_recorder.stop()
+    except ScreenRecorderError as exc:
+        raise_api_error(str(exc), status_code=screen_error_status(exc))
+
+
+@app.get("/api/screen-recording/status")
+def screen_recording_status() -> dict:
+    return screen_recorder.status()
+
+
+@app.get("/api/media-sessions/recent")
+def recent_media_session_list() -> dict:
+    return {
+        "media_sessions_dir": str(config.RECORDINGS_DIR),
+        "sessions": recent_media_sessions(config.RECORDINGS_DIR, legacy_media_sessions_dir=config.MEDIA_SESSIONS_DIR),
+    }
+
+
+@app.post("/api/video-mux/merge")
+def merge_video_with_audio(payload: VideoMuxMergeRequest) -> dict:
+    try:
+        return video_muxer.merge(
+            video_file=payload.video_file,
+            mic_audio_file=payload.mic_audio_file,
+            system_audio_file=payload.system_audio_file,
+        )
+    except VideoMuxerError as exc:
+        raise_api_error(str(exc), status_code=video_mux_error_status(exc))
+
+
 @app.post("/api/record/start")
 def start_recording(payload: StartRecordingRequest | None = Body(default=None)) -> dict:
     request = payload or StartRecordingRequest()
-    mode = normalize_recording_mode(request.mode)
+    mode = normalize_recording_mode(request.mode, allow_none=True)
+    uses_audio = mode in {"mic", "system", "both"}
+    uses_screen = bool(request.screen)
     mic_device_id = request.mic_device_id if request.mic_device_id is not None else request.device_id
     output_device_id = request.output_device_id
     timestamp = timestamp_for_filename()
     recordings: list[dict] = []
+    audio_files: dict[str, str | None] = {"mic": None, "system": None}
+
+    if not uses_audio and not uses_screen:
+        raise_api_error("Выберите хотя бы один источник записи")
 
     global active_recording_mode, active_recording_started_at
     with recording_lock:
         if benchmark_service.is_running:
             raise_api_error("Дождитесь завершения benchmark перед началом записи.")
-        if recorder.is_recording or system_recorder.is_recording:
+        if any_recording_active():
             raise_api_error("Запись уже идет.")
         active_recording_mode = mode
 
     logger.info(
-        "Start recording request: mode=%s mic_device_id=%s output_device_id=%s",
+        "Start recording request: mode=%s screen=%s display_indices=%s screen_fps=%s mic_device_id=%s output_device_id=%s",
         mode,
+        uses_screen,
+        request.display_indices,
+        request.screen_fps,
         mic_device_id,
         output_device_id,
     )
 
     try:
+        if uses_screen:
+            screen_recorder.validate_request(request.display_indices, request.screen_fps)
         if mode == "mic":
-            recordings.append(recorder.start(mic_device_id, filename_prefix="recording", source_type="mic", timestamp=timestamp))
+            mic_recording = recorder.start(mic_device_id, filename_prefix="recording", source_type="mic", timestamp=timestamp)
+            recordings.append(mic_recording)
+            audio_files["mic"] = Path(mic_recording["file_path"]).name
         elif mode == "system":
-            recordings.append(system_recorder.start(output_device_id, timestamp=timestamp))
+            system_recording = system_recorder.start(output_device_id, timestamp=timestamp)
+            recordings.append(system_recording)
+            audio_files["system"] = Path(system_recording["file_path"]).name
         elif mode == "both":
-            recordings.append(recorder.start(mic_device_id, filename_prefix="mic", source_type="mic", timestamp=timestamp))
-            recordings.append(system_recorder.start(output_device_id, timestamp=timestamp))
-    except RuntimeError as exc:
+            mic_recording = recorder.start(mic_device_id, filename_prefix="mic", source_type="mic", timestamp=timestamp)
+            system_recording = system_recorder.start(output_device_id, timestamp=timestamp)
+            recordings.append(mic_recording)
+            recordings.append(system_recording)
+            audio_files["mic"] = Path(mic_recording["file_path"]).name
+            audio_files["system"] = Path(system_recording["file_path"]).name
+        if uses_screen:
+            recordings.append(
+                screen_recorder.start(
+                    request.display_indices,
+                    request.screen_fps,
+                    source_flags={
+                        "mic": mode in {"mic", "both"},
+                        "system": mode in {"system", "both"},
+                    },
+                    timestamp=timestamp,
+                    audio_files=audio_files,
+                )
+            )
+    except (RuntimeError, ScreenRecorderError) as exc:
         logger.exception("Failed to start recording mode=%s", mode)
         cleanup_started_recorders()
         with recording_lock:
             active_recording_mode = None
             active_recording_started_at = None
-        raise_api_error(str(exc), status_code=500)
+        raise_api_error(str(exc), status_code=screen_error_status(exc))
 
     with recording_lock:
         active_recording_started_at = time.monotonic()
@@ -349,6 +468,7 @@ def start_recording(payload: StartRecordingRequest | None = Body(default=None)) 
         "message": "Запись началась.",
         "recording": True,
         "mode": mode,
+        "screen": uses_screen,
         "recordings": recordings,
     }
     if recordings:
@@ -380,6 +500,13 @@ def stop_recording() -> dict:
             logger.exception("Failed to stop system recording")
             errors.append(str(exc))
 
+    if screen_recorder.is_recording:
+        try:
+            diagnostics_list.append(screen_recorder.stop())
+        except ScreenRecorderError as exc:
+            logger.exception("Failed to stop screen recording")
+            errors.append(str(exc))
+
     with recording_lock:
         active_recording_mode = None
         active_recording_started_at = None
@@ -400,8 +527,8 @@ def stop_recording() -> dict:
         "message": "Запись сохранена.",
         "recording": False,
         "mode": mode,
-        "file_path": diagnostics_list[0]["audio_file"],
-        "file_name": Path(diagnostics_list[0]["audio_file"]).name,
+        "file_path": diagnostics_primary_path(diagnostics_list[0]),
+        "file_name": Path(diagnostics_primary_path(diagnostics_list[0])).name,
         "diagnostics": diagnostics_list[0],
         "diagnostics_list": diagnostics_list,
         "errors": errors,
@@ -592,7 +719,7 @@ def queue_add_urls(payload: QueueUrlsRequest) -> dict:
 @app.post("/api/queue/start")
 def queue_start(payload: QueueStartRequest | None = Body(default=None)) -> dict:
     ensure_benchmark_inactive()
-    if recorder.is_recording or system_recorder.is_recording:
+    if any_recording_active():
         raise_api_error("Остановите запись перед запуском очереди.")
     if transcriber.status()["in_progress"]:
         raise_api_error("Дождитесь завершения текущей транскрибации.")
@@ -725,7 +852,7 @@ def ensure_benchmark_can_start() -> None:
     ensure_benchmark_inactive()
     if queue_manager.is_running:
         raise_api_error("Дождитесь завершения очереди перед запуском benchmark.")
-    if recorder.is_recording or system_recorder.is_recording:
+    if any_recording_active():
         raise_api_error("Остановите запись перед запуском benchmark.")
     if transcriber.status()["in_progress"]:
         raise_api_error("Дождитесь завершения текущей транскрибации.")
@@ -751,10 +878,14 @@ def save_direct_transcription_error(
         logger.exception("Failed to save transcription error JSON")
 
 
-def normalize_recording_mode(mode: str) -> str:
+def normalize_recording_mode(mode: str, allow_none: bool = False) -> str:
     normalized = (mode or "mic").strip().lower()
-    if normalized not in {"mic", "system", "both"}:
-        raise_api_error("Некорректный режим записи. Доступны: mic, system, both.")
+    allowed = {"mic", "system", "both"}
+    if allow_none:
+        allowed.add("none")
+    if normalized not in allowed:
+        allowed_text = "mic, system, both, none" if allow_none else "mic, system, both"
+        raise_api_error(f"Некорректный режим записи. Доступны: {allowed_text}.")
     return normalized
 
 
@@ -907,6 +1038,43 @@ def cleanup_started_recorders() -> None:
                 item.stop()
             except Exception:
                 logger.exception("Failed to cleanup partially started recorder")
+    if screen_recorder.is_recording:
+        try:
+            screen_recorder.stop()
+        except Exception:
+            logger.exception("Failed to cleanup partially started screen recorder")
+
+
+def any_recording_active() -> bool:
+    return recorder.is_recording or system_recorder.is_recording or screen_recorder.is_recording
+
+
+def diagnostics_primary_path(diagnostics: dict) -> str:
+    return (
+        diagnostics.get("audio_file")
+        or diagnostics.get("session_dir")
+        or (diagnostics.get("video_paths") or [""])[0]
+    )
+
+
+def screen_error_status(exc: Exception) -> int:
+    if isinstance(exc, (ScreenRecorderValidationError, ScreenRecorderStateError)):
+        return 400
+    if isinstance(exc, ScreenRecorderDependencyError):
+        return 500
+    if isinstance(exc, ScreenRecorderError):
+        return 500
+    return 500
+
+
+def video_mux_error_status(exc: Exception) -> int:
+    if isinstance(exc, VideoMuxerValidationError):
+        return 400
+    if isinstance(exc, VideoMuxerDependencyError):
+        return 500
+    if isinstance(exc, VideoMuxerError):
+        return 500
+    return 500
 
 
 def raise_api_error(message: str, status_code: int = 400, extra: dict | None = None) -> None:

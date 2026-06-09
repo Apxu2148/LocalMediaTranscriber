@@ -31,3 +31,5 @@ tmp/
 *.mp4
 *.flac
 *.ogg
+
+data/

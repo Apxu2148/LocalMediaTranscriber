@@ -400,6 +400,59 @@ summary:focus-visible {
   background: transparent;
 }
 
+.screen-controls {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--surface-soft);
+}
+
+.screen-controls[hidden] {
+  display: none;
+}
+
+.screen-controls-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(160px, 220px);
+  gap: 12px;
+  align-items: end;
+}
+
+.screen-controls-heading h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.display-list {
+  display: grid;
+  gap: 8px;
+}
+
+.screen-display-option {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: #ffffff;
+}
+
+.screen-display-option input {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+}
+
+.screen-display-option span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .level-label,
 .metrics {
   display: flex;
@@ -1011,6 +1064,7 @@ textarea {
 
   .form-grid,
   .recording-device-grid,
+  .screen-controls-heading,
   .model-row,
     .settings-grid,
     .level-grid,

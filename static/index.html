@@ -76,9 +76,9 @@
                 <input id="systemSourceCheckbox" type="checkbox" checked />
                 <span data-i18n="systemAudio"></span>
               </label>
-              <label class="source-checkbox source-checkbox-placeholder" for="screenSourceCheckbox">
-                <input id="screenSourceCheckbox" type="checkbox" disabled />
-                <span data-i18n="screenSourceSoon"></span>
+              <label class="source-checkbox" for="screenSourceCheckbox">
+                <input id="screenSourceCheckbox" type="checkbox" />
+                <span data-i18n="screenSource"></span>
               </label>
               <label class="source-checkbox source-checkbox-placeholder" for="mouseSourceCheckbox">
                 <input id="mouseSourceCheckbox" type="checkbox" disabled />
@@ -124,6 +124,29 @@
               </div>
             </div>
           </div>
+          <div id="screenControls" class="screen-controls" hidden>
+            <div class="screen-controls-heading">
+              <div>
+                <h3 data-i18n="displays"></h3>
+                <p id="displayFoundSummary" class="section-note"></p>
+              </div>
+              <label class="field screen-fps-field" for="screenFpsSelect">
+                <span data-i18n="screenFps"></span>
+                <select id="screenFpsSelect">
+                  <option value="1">1 FPS</option>
+                  <option value="2">2 FPS</option>
+                  <option value="3" selected>3 FPS</option>
+                  <option value="5">5 FPS</option>
+                  <option value="10">10 FPS</option>
+                  <option value="15">15 FPS</option>
+                  <option value="20">20 FPS</option>
+                  <option value="30">30 FPS</option>
+                </select>
+              </label>
+            </div>
+            <div id="displayList" class="display-list"></div>
+            <output id="screenOutput" class="output compact"></output>
+          </div>
           <details id="helpSection" class="help-block recording-help">
             <summary data-i18n="helpDeviceSummary"></summary>
             <h3 data-i18n="helpMicTitle"></h3>
@@ -131,8 +154,11 @@
             <h3 data-i18n="helpSystemTitle"></h3>
             <p data-i18n="helpSystemText"></p>
             <p data-i18n="helpSystemOutputText"></p>
+            <h3 data-i18n="helpScreenTitle"></h3>
+            <p data-i18n="helpScreenText"></p>
             <p data-i18n="helpDeviceNamesText"></p>
             <p data-i18n="helpLoopbackLimitText"></p>
+            <p data-i18n="helpPlaceholdersText"></p>
             <h3 data-i18n="helpSilentSystemTitle"></h3>
             <ul>
               <li data-i18n="helpSilentSystemWindows"></li>
@@ -179,6 +205,24 @@
                   <button id="transcribeAllRecordingsButton" type="button" disabled data-i18n="addLatestBoth"></button>
                 </div>
               </div>
+
+              <form id="videoMuxForm" class="source-group video-mux-form">
+                <h4 data-i18n="videoMuxTitle"></h4>
+                <label class="field" for="videoMuxVideoSelect">
+                  <span data-i18n="videoMuxSelectVideo"></span>
+                  <select id="videoMuxVideoSelect"></select>
+                </label>
+                <label class="field" for="videoMuxMicSelect">
+                  <span data-i18n="videoMuxSelectMic"></span>
+                  <select id="videoMuxMicSelect"></select>
+                </label>
+                <label class="field" for="videoMuxSystemSelect">
+                  <span data-i18n="videoMuxSelectSystem"></span>
+                  <select id="videoMuxSystemSelect"></select>
+                </label>
+                <button id="videoMuxButton" type="submit" data-i18n="videoMuxStart"></button>
+                <output id="videoMuxOutput" class="output compact"></output>
+              </form>
 
               <form id="transcribeForm" class="source-group">
                 <h4 data-i18n="selectedFileTitle"></h4>

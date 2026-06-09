@@ -9,6 +9,10 @@ This project is a separate fork of `LocalAudioTranscriber`. The current version 
 - Record microphone audio to WAV.
 - Record Windows system audio to WAV through WASAPI loopback.
 - Record microphone and system audio as two separate WAV files.
+- Record one or more physical displays to per-display video files in `data\recordings`.
+- Preserve real-time screen video duration by duplicating the latest frame when capture falls below the selected FPS.
+- Draw a visible mouse cursor marker into screen recordings.
+- Merge one screen video with microphone and/or system audio into a video with sound through FFmpeg.
 - Show microphone and system audio levels.
 - Add latest recordings, local files, or public URLs to a global transcription queue.
 - Transcribe `.wav`, `.mp3`, `.m4a`, `.mp4`, `.webm`, and `.mkv` sources.
@@ -44,6 +48,7 @@ pip install -r requirements-cpu.txt
 ```
 
 `requirements-cpu.txt` contains the base runtime dependencies for local CPU transcription.
+It also includes `mss` and `opencv-python` for screen recording.
 
 ## GPU Setup
 
@@ -58,7 +63,7 @@ pip install -r requirements-cpu.txt
 pip install -r requirements-gpu.txt
 ```
 
-`requirements-gpu.txt` should contain only the additional CUDA/NVIDIA packages needed for GPU acceleration. Keep both requirements files updated when dependencies change.
+`requirements-gpu.txt` contains the CUDA/NVIDIA packages needed for GPU acceleration plus the screen-recording runtime packages mirrored from the CPU file. Keep both requirements files updated when dependencies change.
 
 ## Run
 
@@ -89,6 +94,14 @@ Transcripts:
 C:\Python\LocalMediaTranscriber\data\transcripts
 ```
 
+Screen videos and screen session JSON:
+
+```text
+C:\Python\LocalMediaTranscriber\data\recordings
+```
+
+New screen recordings are stored as a flat list beside audio recordings, for example `screen1_20260609_001122__30fps.mp4` and `session_20260609_001122.json`. Older MVP runs may still exist under `data\media_sessions`.
+
 Downloads from public URLs:
 
 ```text
@@ -103,6 +116,6 @@ C:\Python\LocalMediaTranscriber\data\logs\app.log
 
 ## Notes
 
-For `.mp3`, `.m4a`, `.mp4`, `.webm`, and `.mkv`, make sure `ffmpeg` is installed and available in `PATH`. Current video support extracts the audio track only; video frames are not analyzed yet.
+For `.mp3`, `.m4a`, `.mp4`, `.webm`, and `.mkv`, make sure `ffmpeg` is installed and available in `PATH`. FFmpeg is also required for the "Merge video with audio" workflow. Uploaded video support extracts the audio track only; screen recording creates video files with a cursor marker but does not perform OCR, keyframe extraction, scene detection, mouse event logging, keyboard logging, or VLM analysis yet.
 
 Use the app only with audio, video, and files you are allowed to record, download, process, and transcribe.

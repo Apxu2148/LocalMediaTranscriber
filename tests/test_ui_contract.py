@@ -20,6 +20,16 @@ class UiContractTests(unittest.TestCase):
             "audioFilePickerText",
             "refreshMicDevicesButton",
             "refreshOutputDevicesButton",
+            "screenSourceCheckbox",
+            "screenControls",
+            "displayList",
+            "screenFpsSelect",
+            "videoMuxForm",
+            "videoMuxVideoSelect",
+            "videoMuxMicSelect",
+            "videoMuxSystemSelect",
+            "videoMuxButton",
+            "videoMuxOutput",
             "queueFilePickerButton",
             "queueFilePickerText",
             "queueStartButton",
@@ -38,6 +48,10 @@ class UiContractTests(unittest.TestCase):
         self.assertIn('"/api/queue/add-files"', app_js)
         self.assertIn('"/api/queue/add-urls"', app_js)
         self.assertIn('"/api/queue/start"', app_js)
+        self.assertIn('"/api/video-mux/merge"', app_js)
+        self.assertIn('"/api/displays"', app_js)
+        self.assertIn('"screen_fps"', app_js)
+        self.assertIn('"display_indices"', app_js)
         self.assertIn("latestTechnicalItem.technical_details", app_js)
         self.assertIn("/api/transcripts/read", app_js)
         self.assertIn("loadTranscript(file.name, true)", app_js)
@@ -48,6 +62,8 @@ class UiContractTests(unittest.TestCase):
     def test_file_benchmark_order_and_recording_help_location(self) -> None:
         html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
         self.assertLess(html.index('id="recordingSection"'), html.index('id="queueSection"'))
+        self.assertLess(html.index('id="recordingTranscribeActions"'), html.index('id="videoMuxForm"'))
+        self.assertLess(html.index('id="videoMuxForm"'), html.index('id="transcribeForm"'))
         self.assertLess(html.index('id="transcribeForm"'), html.index('id="benchmarkSection"'))
         self.assertLess(html.index('id="queueSection"'), html.index('id="benchmarkSection"'))
         self.assertLess(html.index('id="filesSection"'), html.index('id="benchmarkSection"'))

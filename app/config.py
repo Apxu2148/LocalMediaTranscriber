@@ -9,6 +9,7 @@ APP_DIR = BASE_DIR / "app"
 STATIC_DIR = BASE_DIR / "static"
 DATA_DIR = BASE_DIR / "data"
 RECORDINGS_DIR = DATA_DIR / "recordings"
+MEDIA_SESSIONS_DIR = DATA_DIR / "media_sessions"
 UPLOADS_DIR = DATA_DIR / "uploads"
 DOWNLOADS_DIR = DATA_DIR / "downloads"
 TRANSCRIPTS_DIR = DATA_DIR / "transcripts"
@@ -82,6 +83,7 @@ def ensure_directories() -> None:
     for path in (
         DATA_DIR,
         RECORDINGS_DIR,
+        MEDIA_SESSIONS_DIR,
         UPLOADS_DIR,
         DOWNLOADS_DIR,
         TRANSCRIPTS_DIR,

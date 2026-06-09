@@ -4,9 +4,15 @@ const refreshMicDevicesButton = document.querySelector("#refreshMicDevicesButton
 const refreshOutputDevicesButton = document.querySelector("#refreshOutputDevicesButton");
 const micSourceCheckbox = document.querySelector("#micSourceCheckbox");
 const systemSourceCheckbox = document.querySelector("#systemSourceCheckbox");
-const recordingSourceCheckboxes = [micSourceCheckbox, systemSourceCheckbox];
+const screenSourceCheckbox = document.querySelector("#screenSourceCheckbox");
+const recordingSourceCheckboxes = [micSourceCheckbox, systemSourceCheckbox, screenSourceCheckbox];
 const micDeviceRow = document.querySelector("#micDeviceRow");
 const systemDeviceRow = document.querySelector("#systemDeviceRow");
+const screenControls = document.querySelector("#screenControls");
+const displayFoundSummary = document.querySelector("#displayFoundSummary");
+const displayList = document.querySelector("#displayList");
+const screenFpsSelect = document.querySelector("#screenFpsSelect");
+const screenOutput = document.querySelector("#screenOutput");
 const micDeviceSelect = document.querySelector("#micDeviceSelect");
 const outputDeviceSelect = document.querySelector("#outputDeviceSelect");
 const recordingState = document.querySelector("#recordingState");
@@ -93,6 +99,12 @@ const benchmarkStatusOutput = document.querySelector("#benchmarkStatusOutput");
 const benchmarkCpuResult = document.querySelector("#benchmarkCpuResult");
 const benchmarkCudaResult = document.querySelector("#benchmarkCudaResult");
 const benchmarkButtons = Array.from(document.querySelectorAll("[data-benchmark-device]"));
+const videoMuxForm = document.querySelector("#videoMuxForm");
+const videoMuxVideoSelect = document.querySelector("#videoMuxVideoSelect");
+const videoMuxMicSelect = document.querySelector("#videoMuxMicSelect");
+const videoMuxSystemSelect = document.querySelector("#videoMuxSystemSelect");
+const videoMuxButton = document.querySelector("#videoMuxButton");
+const videoMuxOutput = document.querySelector("#videoMuxOutput");
 
 let micLevelPollInFlight = false;
 let systemLevelPollInFlight = false;
@@ -108,6 +120,7 @@ let previousQueueStatus = "empty";
 let latestQueueStatus = null;
 let benchmarkActive = false;
 let benchmarkSourceId = null;
+let videoMuxInFlight = false;
 let overlayOwner = null;
 let transcriptionPhase = null;
 let activeRuntimeModel = null;
@@ -116,8 +129,11 @@ let activeMicDeviceValue = "";
 let activeOutputDeviceValue = "";
 let micDevicesRefreshInFlight = false;
 let outputDevicesRefreshInFlight = false;
+let displayRefreshInFlight = false;
+let displaysLoaded = false;
 let micSwitchInFlight = false;
 let outputSwitchInFlight = false;
+let latestRecordingFiles = [];
 const dynamicOutputRenderers = new Map();
 
 function t(key, variables = {}) {
@@ -195,6 +211,16 @@ function selectedOutputDeviceId() {
   return outputDeviceSelect.value === "" ? null : outputDeviceSelect.value;
 }
 
+function selectedDisplayIndices() {
+  return Array.from(displayList.querySelectorAll('input[name="screenDisplay"]:checked'))
+    .map((input) => Number(input.value))
+    .filter((value) => Number.isInteger(value) && value > 0);
+}
+
+function selectedScreenFps() {
+  return Number(screenFpsSelect.value) || 3;
+}
+
 function selectedModel() {
   return whisperModelSelect.value || "small";
 }
@@ -239,12 +265,29 @@ function resetFilePicker(input, target, multiple = false) {
   updateFilePickerText(input, target, multiple);
 }
 
+function fileSuffix(fileName) {
+  const match = String(fileName || "").toLowerCase().match(/\.[^.]+$/);
+  return match ? match[0] : "";
+}
+
+function isMuxVideoFile(fileName) {
+  return [".mp4", ".avi", ".mkv", ".webm"].includes(fileSuffix(fileName));
+}
+
+function isMuxAudioFile(fileName) {
+  return [".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg"].includes(fileSuffix(fileName));
+}
+
 function modeUsesMic() {
   return micSourceCheckbox.checked;
 }
 
 function modeUsesSystem() {
   return systemSourceCheckbox.checked;
+}
+
+function modeUsesScreen() {
+  return screenSourceCheckbox.checked;
 }
 
 function hasSelectableDevice(select) {
@@ -257,7 +300,7 @@ function selectHasValue(select, value) {
 
 function setRecordingUi(recording) {
   isRecording = recording;
-  startRecordButton.disabled = recording || isTranscribing || queueActive || benchmarkActive;
+  startRecordButton.disabled = recording || isTranscribing || queueActive || benchmarkActive || videoMuxInFlight;
   stopRecordButton.disabled = !recording;
   for (const checkbox of recordingSourceCheckboxes) {
     checkbox.disabled = recording;
@@ -266,10 +309,23 @@ function setRecordingUi(recording) {
   outputDeviceSelect.disabled = recording ? !modeUsesSystem() || outputSwitchInFlight : outputSwitchInFlight;
   refreshMicDevicesButton.disabled = micDevicesRefreshInFlight;
   refreshOutputDevicesButton.disabled = outputDevicesRefreshInFlight;
+  screenFpsSelect.disabled = recording || !modeUsesScreen();
+  for (const input of displayList.querySelectorAll('input[name="screenDisplay"]')) {
+    input.disabled = recording || !modeUsesScreen();
+  }
 
   if (!isTranscribing) {
     setAppState(t(recording ? "recordingActive" : "readyToRecord"), recording ? "active" : "idle");
   }
+  setVideoMuxUi();
+}
+
+function setVideoMuxUi() {
+  const blocked = videoMuxInFlight || isRecording || isTranscribing || queueActive || benchmarkActive;
+  videoMuxVideoSelect.disabled = blocked;
+  videoMuxMicSelect.disabled = blocked;
+  videoMuxSystemSelect.disabled = blocked;
+  videoMuxButton.disabled = blocked || !videoMuxVideoSelect.value;
 }
 
 async function requestJson(url, options = {}) {
@@ -371,6 +427,7 @@ async function loadDevices() {
   await Promise.all([
     refreshMicDevices(false),
     refreshOutputDevices(false),
+    refreshDisplays(false),
   ]);
 }
 
@@ -434,6 +491,29 @@ async function refreshOutputDevices(announce = true) {
   }
 }
 
+async function refreshDisplays(announce = true) {
+  const previousSelection = selectedDisplayIndices();
+  displayRefreshInFlight = true;
+  if (announce) {
+    setOutput(screenOutput, t("refreshingDisplays"));
+  }
+
+  try {
+    const displays = await requestJson("/api/displays");
+    fillDisplays(displays, previousSelection);
+    displaysLoaded = true;
+    if (announce) {
+      setOutput(screenOutput, t("displaysUpdated"), "success");
+    }
+  } catch (error) {
+    displayFoundSummary.textContent = t("displayListFailed");
+    setOutput(screenOutput, `${t("displayListFailed")}\n${error.message}`, "error");
+  } finally {
+    displayRefreshInFlight = false;
+    setRecordingUi(isRecording);
+  }
+}
+
 function fillMicDevices(result, previousValue) {
   micDeviceSelect.innerHTML = "";
   const devices = result.devices || [];
@@ -491,6 +571,48 @@ function fillOutputDevices(result, previousValue) {
     outputDeviceSelect.value = previousValue;
   } else if (defaultId !== null && values.includes(String(defaultId))) {
     outputDeviceSelect.value = String(defaultId);
+  }
+}
+
+function fillDisplays(displays, previousSelection = []) {
+  const normalizedDisplays = Array.isArray(displays) ? displays : [];
+  const previous = new Set(previousSelection.map((value) => Number(value)));
+  displayList.innerHTML = "";
+
+  if (!normalizedDisplays.length) {
+    displayFoundSummary.textContent = t("displaysNotFound");
+    const item = document.createElement("p");
+    item.className = "empty";
+    item.textContent = t("displaysNotFound");
+    displayList.append(item);
+    return;
+  }
+
+  displayFoundSummary.textContent = normalizedDisplays.length === 1
+    ? t("displayFound")
+    : t("displaysFound", { count: normalizedDisplays.length });
+
+  const hasPreviousSelection = previous.size > 0;
+  for (const [position, display] of normalizedDisplays.entries()) {
+    const label = document.createElement("label");
+    const input = document.createElement("input");
+    const text = document.createElement("span");
+    const displayIndex = Number(display.index);
+    const isDefault = Boolean(display.is_primary) || position === 0;
+
+    label.className = "screen-display-option";
+    input.type = "checkbox";
+    input.name = "screenDisplay";
+    input.value = String(displayIndex);
+    input.checked = hasPreviousSelection ? previous.has(displayIndex) : isDefault;
+    text.textContent = t("displayOption", {
+      index: displayIndex,
+      width: display.width,
+      height: display.height,
+    });
+
+    label.append(input, text);
+    displayList.append(label);
   }
 }
 
@@ -601,6 +723,7 @@ function updateModeUi() {
   systemDeviceRow.dataset.active = String(modeUsesSystem());
   micLevelBlock.dataset.active = String(modeUsesMic());
   systemLevelBlock.dataset.active = String(modeUsesSystem());
+  screenControls.hidden = !modeUsesScreen();
   setRecordingUi(isRecording);
 }
 
@@ -636,6 +759,7 @@ async function refreshStatus() {
     isTranscribing = localTranscriptionActive || Boolean(transcription.in_progress);
     if (status.recording && status.recording_mode) {
       setSourcesFromMode(status.recording_mode);
+      screenSourceCheckbox.checked = Boolean(status.screen_recording?.is_recording);
       updateModeUi();
     }
     setRecordingUi(Boolean(status.recording));
@@ -731,6 +855,10 @@ async function refreshSystemLevel() {
 }
 
 function formatRecordingDiagnostics(diagnostics) {
+  if (diagnostics.source_type === "screen") {
+    return formatScreenDiagnostics(diagnostics);
+  }
+
   const source = recordingSourceLabel(diagnostics.source_type);
   const device = diagnostics.source_type === "system"
     ? `${diagnostics.output_device_name} (${diagnostics.output_device_id ?? t("defaultSuffix")})`
@@ -753,6 +881,41 @@ function formatRecordingDiagnostics(diagnostics) {
   return lines.join("\n");
 }
 
+function formatScreenDiagnostics(diagnostics) {
+  const lines = [
+    t("screenRecordingStopped"),
+    t("recordingsSavedTo", { path: diagnostics.recordings_dir || diagnostics.session_dir }),
+    t("screenSessionJson", { path: diagnostics.session_json }),
+    t("screenDiagnosticDuration", { value: diagnostics.duration_sec }),
+    t("screenDiagnosticFps", { value: diagnostics.fps }),
+  ];
+
+  const videoPaths = diagnostics.video_paths || [];
+  if (videoPaths.length) {
+    lines.push(t("screenVideoFiles", { value: videoPaths.join("\n") }));
+  }
+  for (const screen of diagnostics.screens || []) {
+    if (screen.requested_fps) {
+      lines.push(t("screenTimingDiagnostic", {
+        index: screen.screen_index,
+        requested: screen.requested_fps,
+        actual: Number(screen.actual_capture_fps || 0).toFixed(1),
+        duplicated: Math.round(Number(screen.duplicate_ratio || 0) * 100),
+      }));
+    }
+  }
+  if ((diagnostics.screens || []).some((screen) => screen.timing_warning)) {
+    lines.push(t("screenTimingWarning"));
+  }
+  if ((diagnostics.screens || []).some((screen) => screen.cursor_warning)) {
+    lines.push(t("screenCursorWarning"));
+  }
+  if (diagnostics.error) {
+    lines.push(diagnostics.error);
+  }
+  return lines.join("\n");
+}
+
 function formatAllDiagnostics(diagnosticsList, errors = []) {
   const chunks = diagnosticsList.map(formatRecordingDiagnostics);
   if (errors.length) {
@@ -768,11 +931,22 @@ function recordingSourceLabel(sourceType) {
   if (sourceType === "mic") {
     return t("microphone");
   }
+  if (sourceType === "screen") {
+    return t("screenSource");
+  }
   return translateUiText(sourceType || t("localFile"));
 }
 
 function formatRecordingPaths(recordings) {
-  return recordings.map((item) => `${recordingSourceLabel(item.source_type)}: ${item.file_path}`).join("\n");
+  return recordings.map((item) => {
+    if (item.source_type === "screen") {
+      return [
+        `${recordingSourceLabel(item.source_type)}: ${item.session_dir}`,
+        ...(item.video_paths || []),
+      ].join("\n");
+    }
+    return `${recordingSourceLabel(item.source_type)}: ${item.file_path}`;
+  }).join("\n");
 }
 
 function formatBenchmark(benchmark, benchmarkPath) {
@@ -806,11 +980,12 @@ function updateRecordingTranscribeActions(recordings) {
   lastRecordings = recordings || [];
   const micRecording = lastRecordings.find((item) => item.source_type === "mic");
   const systemRecording = lastRecordings.find((item) => item.source_type === "system");
+  const audioRecordings = lastRecordings.filter((item) => item.source_type === "mic" || item.source_type === "system");
   const blocked = isTranscribing || queueActive || benchmarkActive;
   recordingTranscribeActions.dataset.empty = String(lastRecordings.length === 0);
   transcribeMicRecordingButton.disabled = !micRecording || blocked;
   transcribeSystemRecordingButton.disabled = !systemRecording || blocked;
-  transcribeAllRecordingsButton.disabled = lastRecordings.length < 2 || blocked;
+  transcribeAllRecordingsButton.disabled = audioRecordings.length < 2 || blocked;
 }
 
 async function addRecordingByType(sourceType) {
@@ -823,11 +998,12 @@ async function addRecordingByType(sourceType) {
 }
 
 async function addAllRecordings() {
-  if (lastRecordings.length < 2) {
+  const audioRecordings = lastRecordings.filter((item) => item.source_type === "mic" || item.source_type === "system");
+  if (audioRecordings.length < 2) {
     setOutput(queueOutput, t("twoRecordingsRequired"), "error");
     return;
   }
-  await addRecordingsToQueue(lastRecordings);
+  await addRecordingsToQueue(audioRecordings);
 }
 
 async function addRecordingsToQueue(recordings) {
@@ -920,11 +1096,54 @@ async function refreshStorage() {
     diskFree.textContent = t("diskFree", { value: storage.disk?.free_gb ?? "?" });
     recordingsPath.textContent = storage.recordings.path;
     transcriptsPath.textContent = storage.transcripts.path;
-    renderFileList(recordingsFileList, storage.recordings.files, t("recordingsEmpty"));
+    latestRecordingFiles = storage.recordings.files || [];
+    renderFileList(recordingsFileList, latestRecordingFiles, t("recordingsEmpty"));
     renderFileList(transcriptsFileList, storage.transcripts.files, t("transcriptsEmpty"), true);
+    fillVideoMuxOptions(latestRecordingFiles);
   } catch (error) {
     renderFileList(recordingsFileList, [], error.message);
     renderFileList(transcriptsFileList, [], error.message);
+    latestRecordingFiles = [];
+    fillVideoMuxOptions([]);
+  }
+}
+
+function fillVideoMuxOptions(files) {
+  const previousVideo = videoMuxVideoSelect.value;
+  const previousMic = videoMuxMicSelect.value;
+  const previousSystem = videoMuxSystemSelect.value;
+  const videoFiles = files.filter((file) => isMuxVideoFile(file.name));
+  const audioFiles = files.filter((file) => isMuxAudioFile(file.name));
+
+  fillSelectOptions(videoMuxVideoSelect, videoFiles, t("videoMuxNoVideo"), previousVideo, false);
+  fillSelectOptions(videoMuxMicSelect, audioFiles, t("videoMuxNoMic"), previousMic, true);
+  fillSelectOptions(videoMuxSystemSelect, audioFiles, t("videoMuxNoSystem"), previousSystem, true);
+  setVideoMuxUi();
+}
+
+function fillSelectOptions(select, files, emptyLabel, previousValue, optional) {
+  select.innerHTML = "";
+  const emptyOption = document.createElement("option");
+  emptyOption.value = "";
+  emptyOption.textContent = emptyLabel;
+  if (!optional && files.length) {
+    emptyOption.disabled = true;
+  }
+  select.append(emptyOption);
+
+  for (const file of files) {
+    const option = document.createElement("option");
+    option.value = file.name;
+    option.textContent = file.name;
+    select.append(option);
+  }
+
+  if (previousValue && Array.from(select.options).some((option) => option.value === previousValue)) {
+    select.value = previousValue;
+  } else if (!optional && files.length) {
+    select.value = files[0].name;
+  } else {
+    select.value = "";
   }
 }
 
@@ -976,6 +1195,46 @@ async function openFolder(folder) {
     showToast(result.message, "success");
   } catch (error) {
     showToast(error.message, "error");
+  }
+}
+
+async function mergeVideoWithAudio() {
+  const videoFile = videoMuxVideoSelect.value;
+  const micAudioFile = videoMuxMicSelect.value;
+  const systemAudioFile = videoMuxSystemSelect.value;
+  if (!videoFile) {
+    setOutput(videoMuxOutput, t("videoMuxSelectVideoError"), "error");
+    return;
+  }
+  if (!micAudioFile && !systemAudioFile) {
+    setOutput(videoMuxOutput, t("videoMuxSelectAudioError"), "error");
+    return;
+  }
+
+  videoMuxInFlight = true;
+  setVideoMuxUi();
+  setOutput(videoMuxOutput, t("videoMuxStarted"), "info");
+
+  try {
+    const result = await requestJson("/api/video-mux/merge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        video_file: videoFile,
+        mic_audio_file: micAudioFile || null,
+        system_audio_file: systemAudioFile || null,
+      }),
+    });
+    const message = t("videoMuxCompleted", { file: result.output_file || result.output_path });
+    setOutput(videoMuxOutput, message, "success");
+    showToast(message, "success");
+    await refreshStorage();
+  } catch (error) {
+    setOutput(videoMuxOutput, `${t("videoMuxFailed")}\n${error.message}`, "error");
+    showToast(t("videoMuxFailed"), "error");
+  } finally {
+    videoMuxInFlight = false;
+    setVideoMuxUi();
   }
 }
 
@@ -1214,7 +1473,7 @@ async function postQueueAction(url, successMessage) {
 }
 
 function updateLongOperationControls() {
-  const active = isTranscribing || queueActive || benchmarkActive;
+  const active = isTranscribing || queueActive || benchmarkActive || videoMuxInFlight;
   whisperModelSelect.disabled = active;
   whisperDeviceSelect.disabled = active;
   transcribeButton.disabled = active;
@@ -1235,6 +1494,7 @@ function updateLongOperationControls() {
     button.disabled = active || !benchmarkSourceId;
   }
   setRecordingUi(isRecording);
+  setVideoMuxUi();
   updateRecordingTranscribeActions(lastRecordings);
 }
 
@@ -1289,11 +1549,19 @@ async function refreshBenchmarkStatus() {
 
 startRecordButton.addEventListener("click", async () => {
   const mode = currentMode();
-  if (!mode) {
+  const usesScreen = modeUsesScreen();
+  if (!mode && !usesScreen) {
     setRecordingUi(false);
     setAppState(t("readyToRecord"), "idle");
     setOutput(recordingOutput, t("selectRecordingSource"), "error");
     showToast(t("selectRecordingSource"), "error");
+    return;
+  }
+  if (usesScreen && !selectedDisplayIndices().length) {
+    setRecordingUi(false);
+    setAppState(t("readyToRecord"), "idle");
+    setOutput(recordingOutput, t("selectDisplayToRecord"), "error");
+    showToast(t("selectDisplayToRecord"), "error");
     return;
   }
 
@@ -1306,9 +1574,12 @@ startRecordButton.addEventListener("click", async () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        mode,
+        mode: mode || "none",
         mic_device_id: selectedMicDeviceId(),
         output_device_id: selectedOutputDeviceId(),
+        screen: usesScreen,
+        "display_indices": selectedDisplayIndices(),
+        "screen_fps": selectedScreenFps(),
       }),
     });
     setRecordingUi(true);
@@ -1361,6 +1632,9 @@ refreshOutputDevicesButton.addEventListener("click", () => refreshOutputDevices(
 for (const checkbox of recordingSourceCheckboxes) {
   checkbox.addEventListener("change", () => {
     updateModeUi();
+    if (checkbox === screenSourceCheckbox && modeUsesScreen() && !displaysLoaded && !displayRefreshInFlight) {
+      refreshDisplays(true);
+    }
     refreshMicLevel();
     refreshSystemLevel();
   });
@@ -1378,6 +1652,13 @@ transcribeSystemRecordingButton.addEventListener("click", () => addRecordingByTy
 transcribeAllRecordingsButton.addEventListener("click", addAllRecordings);
 openRecordingsButton.addEventListener("click", () => openFolder("recordings"));
 openTranscriptsButton.addEventListener("click", () => openFolder("transcripts"));
+videoMuxForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  await mergeVideoWithAudio();
+});
+for (const select of [videoMuxVideoSelect, videoMuxMicSelect, videoMuxSystemSelect]) {
+  select.addEventListener("change", setVideoMuxUi);
+}
 audioFilePickerButton.addEventListener("click", () => audioFileInput.click());
 queueFilePickerButton.addEventListener("click", () => queueFileInput.click());
 benchmarkFilePickerButton.addEventListener("click", () => benchmarkFileInput.click());

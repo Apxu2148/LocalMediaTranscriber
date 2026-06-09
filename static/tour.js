@@ -1,17 +1,17 @@
 (function () {
   const STORAGE_KEY = "latTourSeen";
   const steps = [
+    ["#uiLanguageSelect", "tourLanguageTitle", "tourLanguageText"],
     ["#transcriptionSettings", "tourSettingsTitle", "tourSettingsText"],
     ["#recordingSection", "tourRecordingTitle", "tourRecordingText"],
+    ["#helpSection", "tourHelpTitle", "tourHelpText"],
     ["#transcriptionSources", "tourSourcesTitle", "tourSourcesText"],
+    ["#videoMuxForm", "tourVideoMuxTitle", "tourVideoMuxText"],
     ["#globalQueuePanel", "tourQueueTitle", "tourQueueText"],
     ["#queueMetricsProgress", "tourMetricsTitle", "tourMetricsText"],
     ["#transcriptText", "tourResultTitle", "tourResultText"],
     ["#filesSection", "tourFilesTitle", "tourFilesText"],
-    ["#urlLimitations", "tourUrlTitle", "tourUrlText"],
     ["#benchmarkSection", "tourBenchmarkTitle", "tourBenchmarkText"],
-    ["#uiLanguageSelect", "tourLanguageTitle", "tourLanguageText"],
-    ["#helpSection", "tourHelpTitle", "tourHelpText"],
     ["#restartTourButton", "tourReplayTitle", "tourReplayText"],
   ];
 
