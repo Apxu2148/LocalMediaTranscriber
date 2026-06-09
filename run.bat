@@ -46,6 +46,11 @@ set "APP_URL=http://127.0.0.1:8000/?v=!CACHE_BUSTER!"
 
 echo Opening: !APP_URL!
 start "" powershell.exe -NoProfile -WindowStyle Hidden -Command "Start-Sleep -Seconds 1; Start-Process '!APP_URL!'"
+echo Press Ctrl+C to stop the server.
+echo If shutdown leaves stale Python or uvicorn processes, run stop.bat or cleanup-dev.bat.
 "%PYTHON%" -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+echo.
+echo Server command exited.
+echo If files are still locked or port 8000 is busy, run stop.bat or cleanup-dev.bat.
 
 endlocal

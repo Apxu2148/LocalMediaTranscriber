@@ -61,6 +61,7 @@ class I18nTests(unittest.TestCase):
             "videoMuxStarted",
             "videoMuxCompleted",
             "videoMuxFailed",
+            "recentRecordings",
             "helpDeviceSummary",
             "helpSystemOutputText",
             "helpScreenTitle",

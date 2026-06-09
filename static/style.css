@@ -850,6 +850,13 @@ textarea {
   padding: 0;
 }
 
+.compact-file-list {
+  max-height: 300px;
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-gutter: stable;
+}
+
 .file-list li {
   display: grid;
   gap: 3px;

@@ -42,6 +42,8 @@ NO_CACHE_HEADERS = {
     "Pragma": "no-cache",
     "Expires": "0",
 }
+RECORDING_FILE_SUFFIXES = {".wav", ".mp3", ".m4a", ".mp4", ".avi", ".mkv", ".webm", ".flac", ".ogg"}
+TRANSCRIPT_FILE_SUFFIXES = {".txt"}
 
 
 class NoCacheStaticFiles(StaticFiles):
@@ -247,7 +249,7 @@ def storage() -> dict:
             "files": recent_files(
                 config.RECORDINGS_DIR,
                 limit=20,
-                allowed_suffixes={".wav", ".mp3", ".m4a", ".mp4", ".avi", ".json"},
+                allowed_suffixes=RECORDING_FILE_SUFFIXES,
             ),
         },
         "media_sessions": {
@@ -256,7 +258,7 @@ def storage() -> dict:
         },
         "transcripts": {
             "path": str(config.TRANSCRIPTS_DIR),
-            "files": recent_files(config.TRANSCRIPTS_DIR, allowed_suffixes={".txt"}),
+            "files": recent_files(config.TRANSCRIPTS_DIR, allowed_suffixes=TRANSCRIPT_FILE_SUFFIXES),
         },
     }
 

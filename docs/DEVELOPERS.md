@@ -48,8 +48,13 @@ Queue and benchmark services use these shared objects. This keeps model caching 
 - `requirements-cpu.txt`: Base dependencies for CPU/local runtime.
 - `requirements-gpu.txt`: GPU add-ons plus mirrored screen-recording runtime dependencies.
 - `run.bat`: Windows launcher that uses `.venv\Scripts\python.exe`.
+- `stop.bat`: Project-scoped development stop script for Python/uvicorn server processes.
+- `cleanup-dev.bat`: Developer cleanup entrypoint that calls `scripts\cleanup_dev.ps1`.
+- `scripts\cleanup_dev.ps1`: Stops project-scoped server processes, removes source/test/script caches, safely handles stale `.git\index.lock`, and prints short Git status.
 - `README.md`: Short user-facing documentation.
 - `docs\DEVELOPERS.md`: This technical guide.
+
+Runtime output under `data` is ignored by Git. Keep `data\recordings` available for audio/video output and screen session JSON, but do not treat those runtime files as source artifacts.
 
 ## Backend Modules
 
@@ -257,7 +262,7 @@ Important areas:
 - Queue/source forms.
 - Manual video/audio merge form.
 - Runtime metrics and queue progress.
-- File storage section.
+- File storage section with compact scrollable recordings/transcripts lists.
 - Benchmark section.
 
 The contract tests look for specific IDs, order, and structural elements. Keep ID changes deliberate and update tests only when the product contract truly changes.
@@ -343,9 +348,11 @@ If DOM IDs change, update tour selectors and `tests/test_ui_contract.py`.
 
 Audio files, screen videos, merged videos, and new screen session JSON all live in `data\recordings` as a flat list. `data\media_sessions` is legacy-only for earlier MVP runs.
 
+`GET /api/storage` exposes only user-facing recordings in the normal recordings file list: `.wav`, `.mp3`, `.m4a`, `.mp4`, `.avi`, `.mkv`, `.webm`, `.flac`, and `.ogg`. Service metadata such as `session_*.json`, `.log`, `.tmp`, and `.pyc` remains on disk but is hidden from the regular UI list.
+
 ## Current Video Mux Flow
 
-1. The frontend loads recent `data\recordings` files from `/api/storage`.
+1. The frontend loads recent user-facing `data\recordings` media files from `/api/storage`.
 2. The "Merge video with audio" form lists recent video files and audio files from that directory.
 3. The user selects one video and one or two audio files.
 4. `POST /api/video-mux/merge` validates that every selected file is a simple filename inside `data\recordings`.
@@ -372,6 +379,22 @@ Audio files, screen videos, merged videos, and new screen session JSON all live 
 
 The queue is intentionally sequential. Do not parallelize transcription without a separate design for GPU memory, cancellation, UI status, and job persistence.
 
+## Development Cleanup
+
+Use `run.bat` for normal local startup. It prints a shutdown hint after the server command exits; if Ctrl+C or a closed console leaves stale locks, use the scoped cleanup scripts.
+
+`stop.bat` is the user-facing stop command. It calls `scripts\cleanup_dev.ps1 -StopOnly` and only stops Python/uvicorn processes whose command line references the resolved `C:\Python\LocalMediaTranscriber` project root. It must not kill unrelated `python.exe` processes.
+
+`cleanup-dev.bat` calls the same PowerShell script without `-StopOnly`. It:
+
+- stops project-scoped Python/uvicorn server processes;
+- removes `__pycache__` directories under `app`, `tests`, and `scripts`;
+- removes project `.pytest_cache` when present;
+- removes `.git\index.lock` only when no active `git.exe`, `ssh.exe`, `gpg.exe`, or `codex.exe` command line references this repository;
+- prints `git status --short` at the end.
+
+The PowerShell script uses command-line filtering because process names alone are too broad. If process command lines cannot be read, the script refuses to guess and reports that limitation.
+
 ## RU/EN Localization Notes
 
 - All static UI labels should live in `static/i18n.js`.
@@ -390,6 +413,7 @@ Light checks for small UI/docs iterations:
 ```bat
 .venv\Scripts\python.exe -m compileall app
 .venv\Scripts\python.exe -m unittest tests.test_i18n tests.test_ui_contract
+.venv\Scripts\python.exe -m unittest tests.test_file_listing tests.test_dev_cleanup_scripts
 .venv\Scripts\python.exe -m unittest tests.test_screen_recorder
 .venv\Scripts\python.exe -m unittest tests.test_video_muxer
 git diff --check
@@ -403,6 +427,8 @@ Useful targeted tests:
 
 - `tests.test_i18n`: localization key contract and no Russian static markup in selected frontend files.
 - `tests.test_ui_contract`: DOM IDs, queue endpoint usage, section order, and tour selectors.
+- `tests.test_file_listing`: media-only recordings list suffix contract.
+- `tests.test_dev_cleanup_scripts`: cleanup entrypoint existence and project-scoped safety markers.
 - `tests.test_screen_recorder`: screen FPS/display validation, media session JSON, and lightweight API validation.
 - `tests.test_video_muxer`: FFmpeg command construction, path validation, audio-required validation, and missing-FFmpeg handling.
 - `tests.test_queue_manager`: queue behavior.

@@ -71,6 +71,16 @@ class UiContractTests(unittest.TestCase):
         self.assertLess(html.index('id="helpSection"'), html.index('id="queueSection"'))
         self.assertIn('data-i18n="helpDeviceSummary"', html)
 
+    def test_recordings_and_transcripts_lists_are_compact(self) -> None:
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        css = (STATIC_DIR / "style.css").read_text(encoding="utf-8")
+        self.assertIn('data-i18n="recentRecordings"', html)
+        self.assertIn('id="recordingsFileList" class="file-list compact-file-list"', html)
+        self.assertIn('id="transcriptsFileList" class="file-list compact-file-list"', html)
+        self.assertIn(".compact-file-list", css)
+        self.assertIn("max-height: 300px;", css)
+        self.assertIn("overflow-y: auto;", css)
+
     def test_tour_targets_current_html_elements(self) -> None:
         html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
         tour_js = (STATIC_DIR / "tour.js").read_text(encoding="utf-8")

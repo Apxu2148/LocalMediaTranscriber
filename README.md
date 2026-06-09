@@ -13,6 +13,7 @@ This project is a separate fork of `LocalAudioTranscriber`. The current version 
 - Preserve real-time screen video duration by duplicating the latest frame when capture falls below the selected FPS.
 - Draw a visible mouse cursor marker into screen recordings.
 - Merge one screen video with microphone and/or system audio into a video with sound through FFmpeg.
+- Keep the recent recordings list compact and hide service JSON metadata files from the normal user file list.
 - Show microphone and system audio levels.
 - Add latest recordings, local files, or public URLs to a global transcription queue.
 - Transcribe `.wav`, `.mp3`, `.m4a`, `.mp4`, `.webm`, and `.mkv` sources.
@@ -80,6 +81,24 @@ http://127.0.0.1:8000
 
 `run.bat` uses `.venv\Scripts\python.exe`, starts the FastAPI server, and opens the browser with a cache-busting query parameter. If port `8000` is already in use, the script asks before stopping that process.
 
+To stop a stale development server without touching unrelated Python processes:
+
+```bat
+cd /d C:\Python\LocalMediaTranscriber
+.\stop.bat
+```
+
+`stop.bat` only targets Python/uvicorn processes whose command line references this project folder.
+
+For development cleanup after an interrupted run:
+
+```bat
+cd /d C:\Python\LocalMediaTranscriber
+.\cleanup-dev.bat
+```
+
+`cleanup-dev.bat` stops project-scoped Python/uvicorn processes, removes source/test `__pycache__` directories and `.pytest_cache`, removes `.git\index.lock` only when no related `git.exe`, `ssh.exe`, `gpg.exe`, or `codex.exe` command line references this repository, and prints `git status --short`.
+
 ## Stored Files
 
 Recordings:
@@ -102,6 +121,8 @@ C:\Python\LocalMediaTranscriber\data\recordings
 
 New screen recordings are stored as a flat list beside audio recordings, for example `screen1_20260609_001122__30fps.mp4` and `session_20260609_001122.json`. Older MVP runs may still exist under `data\media_sessions`.
 
+The Recent recordings UI shows user-facing media files only: `.wav`, `.mp3`, `.m4a`, `.mp4`, `.avi`, `.mkv`, `.webm`, `.flac`, and `.ogg`. Service files such as `.json`, `.log`, `.tmp`, and `.pyc` remain hidden from that list. Screen session JSON metadata stays on disk for diagnostics and internal references.
+
 Downloads from public URLs:
 
 ```text
@@ -113,6 +134,8 @@ Logs:
 ```text
 C:\Python\LocalMediaTranscriber\data\logs\app.log
 ```
+
+Runtime output under `data\recordings`, `data\transcripts`, `data\uploads`, `data\downloads`, `data\jobs`, and `data\logs` is ignored by Git.
 
 ## Notes
 
