@@ -19,10 +19,12 @@ This project is a separate fork of `LocalAudioTranscriber`. The current version 
 - Transcribe `.wav`, `.mp3`, `.m4a`, `.mp4`, `.webm`, and `.mkv` sources.
 - Extract and transcribe the audio track from supported video files.
 - Choose Whisper models: `tiny`, `base`, `small`, `medium`, `large-v3`.
+- Manage Whisper models before transcription: check local availability, download, verify, view info, and delete selected local caches.
 - Use CPU by default, or CUDA/GPU when GPU dependencies are installed.
 - Save transcripts and JSON diagnostics in `data\transcripts`.
 - Switch the UI between RU and EN.
 - Run simple CPU/GPU transcription benchmarks.
+- Use a temporary LocalMediaTranscriber browser tab icon from `static\icons`.
 
 ## Project Folder
 
@@ -136,6 +138,34 @@ C:\Python\LocalMediaTranscriber\data\logs\app.log
 ```
 
 Runtime output under `data\recordings`, `data\transcripts`, `data\uploads`, `data\downloads`, `data\jobs`, and `data\logs` is ignored by Git.
+
+## Whisper Models
+
+The Transcription settings section includes a compact Whisper models table. Use it to:
+
+- see whether each supported model is available locally;
+- download a selected model before first transcription;
+- verify that a downloaded model can load with the selected device setting;
+- delete local files for one selected model when you want to reclaim space;
+- open approximate model size, parameter, quality, use, and hardware notes.
+
+Model downloads use the project-local faster-whisper cache under:
+
+```text
+C:\Python\LocalMediaTranscriber\models\faster-whisper
+```
+
+Interrupted downloads should show a clear error and can usually be retried. Delete only removes cache paths that match the selected supported model; it does not wipe the whole Hugging Face cache.
+
+## App Icon
+
+The browser tab icon lives in:
+
+```text
+C:\Python\LocalMediaTranscriber\static\icons\favicon.svg
+```
+
+This is a temporary blue-violet SVG icon. To replace it later, keep the same filename or update the `<link rel="icon">` entry in `static\index.html`. Recommended future formats are SVG for the scalable favicon, PNG 32x32, and optionally 16x16, 48x48, and 180x180 Apple touch icon files.
 
 ## Notes
 

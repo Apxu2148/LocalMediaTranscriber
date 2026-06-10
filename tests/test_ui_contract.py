@@ -24,6 +24,12 @@ class UiContractTests(unittest.TestCase):
             "screenControls",
             "displayList",
             "screenFpsSelect",
+            "whisperModelManager",
+            "modelManagerTable",
+            "modelManagerBody",
+            "modelDownloadProgress",
+            "modelInfoPanel",
+            "refreshModelsButton",
             "videoMuxForm",
             "videoMuxVideoSelect",
             "videoMuxMicSelect",
@@ -56,11 +62,22 @@ class UiContractTests(unittest.TestCase):
         self.assertIn("/api/transcripts/read", app_js)
         self.assertIn("loadTranscript(file.name, true)", app_js)
         self.assertIn('transcriptText.value = result.text || "";', app_js)
+        self.assertIn('"/api/models/download"', app_js)
+        self.assertIn('"/api/models/download-status"', app_js)
+        self.assertIn('"/api/models/verify"', app_js)
+        self.assertIn('"/api/models/delete"', app_js)
+        self.assertIn("/api/models/info", app_js)
+        self.assertIn("latestMicDevicesResult = inputResult", app_js)
+        self.assertIn("latestOutputDevicesResult = outputResult", app_js)
+        self.assertIn("fillMicDevices(latestMicDevicesResult, micDeviceSelect.value)", app_js)
+        self.assertIn("fillOutputDevices(latestOutputDevicesResult, outputDeviceSelect.value)", app_js)
+        self.assertIn('t("defaultSuffix")', app_js)
         self.assertNotIn('"/api/transcribe"', app_js)
         self.assertNotIn('"/api/transcribe/file"', app_js)
 
     def test_file_benchmark_order_and_recording_help_location(self) -> None:
         html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        self.assertLess(html.index('id="whisperModelManager"'), html.index('id="recordingSection"'))
         self.assertLess(html.index('id="recordingSection"'), html.index('id="queueSection"'))
         self.assertLess(html.index('id="recordingTranscribeActions"'), html.index('id="videoMuxForm"'))
         self.assertLess(html.index('id="videoMuxForm"'), html.index('id="transcribeForm"'))
@@ -80,6 +97,12 @@ class UiContractTests(unittest.TestCase):
         self.assertIn(".compact-file-list", css)
         self.assertIn("max-height: 300px;", css)
         self.assertIn("overflow-y: auto;", css)
+
+    def test_favicon_link_exists(self) -> None:
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        icon = STATIC_DIR / "icons" / "favicon.svg"
+        self.assertIn('href="/static/icons/favicon.svg"', html)
+        self.assertTrue(icon.exists())
 
     def test_tour_targets_current_html_elements(self) -> None:
         html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")

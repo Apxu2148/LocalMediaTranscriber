@@ -3,6 +3,7 @@
   const steps = [
     ["#uiLanguageSelect", "tourLanguageTitle", "tourLanguageText"],
     ["#transcriptionSettings", "tourSettingsTitle", "tourSettingsText"],
+    ["#whisperModelManager", "tourModelsTitle", "tourModelsText"],
     ["#recordingSection", "tourRecordingTitle", "tourRecordingText"],
     ["#helpSection", "tourHelpTitle", "tourHelpText"],
     ["#transcriptionSources", "tourSourcesTitle", "tourSourcesText"],

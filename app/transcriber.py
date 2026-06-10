@@ -227,7 +227,23 @@ class AudioTranscriber:
                 and self._model_device_preference == device_preference
             )
 
-    def _get_model(self, model_name: str, device_preference: str) -> WhisperModel:
+    def verify_model(self, model_name: str | None = None, device_preference: str | None = None) -> dict:
+        selected_model = self._normalize_model_name(model_name)
+        selected_device = self._normalize_device_preference(device_preference)
+        started_at = time.perf_counter()
+        model = self._get_model(selected_model, selected_device, local_files_only=True)
+        return {
+            "success": True,
+            "model": selected_model,
+            "requested_device": selected_device,
+            "resolved_device": self._runtime_device or "unknown",
+            "compute_type": self._runtime_compute_type or "unknown",
+            "model_loaded": model is not None,
+            "load_time_sec": round(time.perf_counter() - started_at, 3),
+            "load_errors": list(self._load_errors),
+        }
+
+    def _get_model(self, model_name: str, device_preference: str, local_files_only: bool = False) -> WhisperModel:
         with self._model_lock:
             if (
                 self._model is not None
@@ -264,7 +280,13 @@ class AudioTranscriber:
 
                     for compute_type in cuda_compute_types:
                         cuda_attempted = True
-                        model = self._try_load_model(model_name, "cuda", compute_type, requested_device)
+                        model = self._try_load_model(
+                            model_name,
+                            "cuda",
+                            compute_type,
+                            requested_device,
+                            local_files_only=local_files_only,
+                        )
                         if model is not None:
                             return model
                 else:
@@ -297,7 +319,13 @@ class AudioTranscriber:
                 if compute_type in seen:
                     continue
                 seen.add(compute_type)
-                model = self._try_load_model(model_name, "cpu", compute_type, requested_device)
+                model = self._try_load_model(
+                    model_name,
+                    "cpu",
+                    compute_type,
+                    requested_device,
+                    local_files_only=local_files_only,
+                )
                 if model is not None:
                     return model
 
@@ -311,6 +339,7 @@ class AudioTranscriber:
         device: str,
         compute_type: str,
         device_preference: str,
+        local_files_only: bool = False,
     ) -> WhisperModel | None:
         try:
             logger.info(
@@ -324,6 +353,7 @@ class AudioTranscriber:
                 device=device,
                 compute_type=compute_type,
                 download_root=str(config.MODELS_DIR / "faster-whisper"),
+                local_files_only=local_files_only,
             )
             self._model = model
             self._model_name = model_name

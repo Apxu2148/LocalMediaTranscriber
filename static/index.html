@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title data-i18n="appTitle"></title>
+    <link rel="icon" href="/static/icons/favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/static/style.css" />
   </head>
   <body>
@@ -58,6 +59,45 @@
             </label>
           </div>
           <output id="modelDownloadWarning" class="model-warning"></output>
+          <section id="whisperModelManager" class="model-manager" aria-labelledby="whisperModelManagerTitle">
+            <div class="model-manager-heading">
+              <div>
+                <h3 id="whisperModelManagerTitle" data-i18n="whisperModelsTitle"></h3>
+                <p class="section-note" data-i18n="whisperModelsNote"></p>
+              </div>
+              <button id="refreshModelsButton" type="button" data-i18n="refreshModels"></button>
+            </div>
+            <output id="modelManagerStatus" class="output compact" data-i18n="modelManagerLoading"></output>
+            <div class="model-manager-table-wrap">
+              <table id="modelManagerTable" class="model-manager-table">
+                <thead>
+                  <tr>
+                    <th scope="col" data-i18n="modelManagerModel"></th>
+                    <th scope="col" data-i18n="modelManagerStatusHeader"></th>
+                    <th scope="col" data-i18n="modelManagerSize"></th>
+                    <th scope="col" data-i18n="modelManagerActions"></th>
+                  </tr>
+                </thead>
+                <tbody id="modelManagerBody">
+                  <tr>
+                    <td colspan="4" data-i18n="modelManagerLoading"></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <label id="modelDownloadProgressBlock" class="model-download-progress" for="modelDownloadProgress" hidden>
+              <span id="modelDownloadProgressText" data-i18n="modelManagerIdle"></span>
+              <progress id="modelDownloadProgress" max="100"></progress>
+              <small id="modelDownloadProgressNote" data-i18n="modelProgressUnavailable"></small>
+            </label>
+            <section id="modelInfoPanel" class="model-info-panel" aria-live="polite" hidden>
+              <div class="model-info-heading">
+                <h4 id="modelInfoTitle"></h4>
+                <button id="modelInfoCloseButton" type="button" data-i18n="close"></button>
+              </div>
+              <dl id="modelInfoList"></dl>
+            </section>
+          </section>
         </section>
 
         <section id="recordingSection" class="workspace-section">

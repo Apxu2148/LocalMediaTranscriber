@@ -17,6 +17,7 @@ from starlette.concurrency import run_in_threadpool
 from . import config
 from .audio_recorder import AudioRecorder
 from .benchmark_service import BenchmarkService
+from .model_manager import WhisperModelManager
 from .queue_manager import QueueFile, QueueManager, QueueUrl
 from .screen_recorder import (
     ScreenRecorder,
@@ -61,6 +62,7 @@ system_recorder = SystemAudioRecorder()
 screen_recorder = ScreenRecorder()
 video_muxer = VideoMuxer()
 transcriber = AudioTranscriber()
+model_manager = WhisperModelManager()
 transcript_store = TranscriptStore()
 recording_lock = threading.Lock()
 active_recording_mode: str | None = None
@@ -128,6 +130,20 @@ class BenchmarkRunRequest(BaseModel):
     model: str
     device: str
     mode: str
+
+
+class ModelDownloadRequest(BaseModel):
+    model: str
+
+
+class ModelVerifyRequest(BaseModel):
+    model: str
+    device: str | None = None
+
+
+class ModelDeleteRequest(BaseModel):
+    model: str
+    confirm: bool = False
 
 
 class VideoMuxMergeRequest(BaseModel):
@@ -233,6 +249,82 @@ def models() -> dict:
     statuses = model_statuses()
     logger.info("Model local availability checked: models=%s", statuses)
     return {"models": statuses}
+
+
+@app.post("/api/models/download")
+def model_download(payload: ModelDownloadRequest) -> dict:
+    try:
+        selected_model = validate_whisper_model(payload.model)
+        status = model_manager.start_download(selected_model)
+        logger.info("Model download requested: model=%s accepted=%s status=%s", selected_model, status.get("accepted"), status)
+        return status
+    except ValueError as exc:
+        raise_api_error(str(exc))
+    except RuntimeError as exc:
+        raise_api_error(str(exc), status_code=409)
+
+
+@app.get("/api/models/download-status")
+def model_download_status() -> dict:
+    return model_manager.download_status()
+
+
+@app.post("/api/models/verify")
+def model_verify(payload: ModelVerifyRequest) -> dict:
+    selected_model = validate_whisper_model(payload.model)
+    selected_device = validate_device_preference(payload.device)
+    local_status = model_manager.model_status(selected_model)
+    if not local_status["is_downloaded"]:
+        return {
+            "success": False,
+            "model": selected_model,
+            "requested_device": selected_device,
+            "status": "not_downloaded",
+            "message": "Model is not downloaded.",
+        }
+
+    try:
+        result = transcriber.verify_model(selected_model, selected_device)
+        result["status"] = "available"
+        result["message"] = "Model verified successfully."
+        logger.info("Model verification completed: model=%s result=%s", selected_model, result)
+        return result
+    except Exception as exc:
+        logger.exception("Model verification failed: model=%s device=%s", selected_model, selected_device)
+        return {
+            "success": False,
+            "model": selected_model,
+            "requested_device": selected_device,
+            "status": "verification_error",
+            "message": "Model verification failed.",
+            "technical_details": technical_details_for_exception(exc),
+        }
+
+
+@app.post("/api/models/delete")
+def model_delete(payload: ModelDeleteRequest) -> dict:
+    selected_model = validate_whisper_model(payload.model)
+    if transcriber.status()["in_progress"] or queue_manager.is_running or benchmark_service.is_running:
+        raise_api_error("Wait for the current transcription, queue, or benchmark to finish before deleting a model.", status_code=409)
+    transcriber.clear_model()
+    try:
+        result = model_manager.delete_model(selected_model, confirm=payload.confirm)
+        logger.info("Model delete requested: model=%s result=%s", selected_model, result)
+        return result
+    except ValueError as exc:
+        raise_api_error(str(exc))
+    except RuntimeError as exc:
+        raise_api_error(str(exc), status_code=409)
+
+
+@app.get("/api/models/info")
+def model_info(model: str | None = None) -> dict:
+    try:
+        if model:
+            return {"model": model_manager.model_info(model)}
+        return {"models": model_manager.all_model_info()}
+    except ValueError as exc:
+        raise_api_error(str(exc))
 
 
 @app.get("/api/storage")
@@ -988,10 +1080,12 @@ def recent_files(directory: Path, limit: int = 5, allowed_suffixes: set[str] | N
 
 
 def model_statuses() -> list[dict]:
-    return [model_local_status(model_name) for model_name in config.SUPPORTED_WHISPER_MODELS]
+    return model_manager.list_models()
 
 
 def model_local_status(model_name: str) -> dict:
+    return model_manager.model_status(model_name)
+
     model_dir = config.MODELS_DIR / "faster-whisper" / f"models--Systran--faster-whisper-{model_name}"
     snapshots_dir = model_dir / "snapshots"
     snapshot_paths = sorted(snapshots_dir.glob("*")) if snapshots_dir.exists() else []

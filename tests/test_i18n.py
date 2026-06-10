@@ -77,6 +77,23 @@ class I18nTests(unittest.TestCase):
             "helpSilentSystemTryAnother",
             "helpSilentSystemRuntime",
             "helpOwnVoiceText",
+            "whisperModelsTitle",
+            "modelManagerModel",
+            "downloadModel",
+            "verifyModel",
+            "deleteModel",
+            "defaultSuffix",
+            "modelStatusAvailable",
+            "modelStatusStarting",
+            "modelStatusNotDownloaded",
+            "modelStatusDownloadError",
+            "modelDownloadStarting",
+            "modelDeleteConfirm",
+            "modelInfoOrigin",
+            "modelInfoSmallPositioning",
+            "modelInfoLargeV3Hardware",
+            "tourModelsTitle",
+            "tourModelsText",
         ):
             self.assertIn(key, en_keys)
 

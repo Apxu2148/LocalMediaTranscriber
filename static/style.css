@@ -329,6 +329,137 @@ h4 {
   color: var(--warning);
 }
 
+.model-manager {
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  background: #fbfcfd;
+}
+
+.model-manager-heading,
+.model-info-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.model-manager-heading button,
+.model-info-heading button {
+  min-height: 36px;
+  padding: 0 12px;
+}
+
+.model-manager-table-wrap {
+  margin-top: 12px;
+  overflow-x: auto;
+}
+
+.model-manager-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.model-manager-table th,
+.model-manager-table td {
+  border-bottom: 1px solid var(--line);
+  padding: 9px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.model-manager-table th {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.model-manager-table td[data-status="available"] {
+  color: var(--success);
+}
+
+.model-manager-table td[data-status="download_error"],
+.model-manager-table td[data-status="verification_error"] {
+  color: var(--danger);
+}
+
+.model-manager-table td[data-status="downloading"],
+.model-manager-table td[data-status="starting"],
+.model-manager-table td[data-status="verifying"],
+.model-manager-table td[data-status="deleting"] {
+  color: var(--warning);
+}
+
+.model-manager-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.model-manager-actions button {
+  min-height: 34px;
+  padding: 0 10px;
+  font-size: 13px;
+}
+
+button[data-variant="secondary"] {
+  border-color: var(--line);
+  background: var(--surface);
+  color: var(--accent);
+}
+
+button[data-variant="secondary"]:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+button[data-variant="danger"] {
+  border-color: rgba(180, 35, 24, 0.72);
+  background: var(--surface);
+  color: var(--danger);
+}
+
+button[data-variant="danger"]:hover:not(:disabled) {
+  background: #fff1f0;
+}
+
+.model-download-progress {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.model-download-progress progress {
+  width: 100%;
+  height: 14px;
+}
+
+.model-info-panel {
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.model-info-panel dl {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: 8px 12px;
+  margin: 12px 0 0;
+}
+
+.model-info-panel dt {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.model-info-panel dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 button {
   border: 1px solid var(--accent);
   border-radius: 6px;
@@ -1050,6 +1181,8 @@ textarea {
   }
 
   .app-header,
+  .model-manager-heading,
+  .model-info-heading,
   .section-heading {
     display: block;
   }
@@ -1082,7 +1215,11 @@ textarea {
   .storage-grid,
   .queue-add-form,
   .queue-url-form,
-  .queue-progress-grid {
+    .queue-progress-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .model-info-panel dl {
     grid-template-columns: 1fr;
   }
 

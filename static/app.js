@@ -40,6 +40,17 @@ const whisperDeviceSelect = document.querySelector("#whisperDeviceSelect");
 const deviceAvailabilityOutput = document.querySelector("#deviceAvailabilityOutput");
 const modelAvailabilityOutput = document.querySelector("#modelAvailabilityOutput");
 const modelDownloadWarning = document.querySelector("#modelDownloadWarning");
+const refreshModelsButton = document.querySelector("#refreshModelsButton");
+const modelManagerStatus = document.querySelector("#modelManagerStatus");
+const modelManagerBody = document.querySelector("#modelManagerBody");
+const modelDownloadProgressBlock = document.querySelector("#modelDownloadProgressBlock");
+const modelDownloadProgress = document.querySelector("#modelDownloadProgress");
+const modelDownloadProgressText = document.querySelector("#modelDownloadProgressText");
+const modelDownloadProgressNote = document.querySelector("#modelDownloadProgressNote");
+const modelInfoPanel = document.querySelector("#modelInfoPanel");
+const modelInfoTitle = document.querySelector("#modelInfoTitle");
+const modelInfoList = document.querySelector("#modelInfoList");
+const modelInfoCloseButton = document.querySelector("#modelInfoCloseButton");
 const transcribeButton = document.querySelector("#transcribeButton");
 const transcribeOutput = document.querySelector("#transcribeOutput");
 const transcribeTechnicalDetails = document.querySelector("#transcribeTechnicalDetails");
@@ -113,6 +124,12 @@ let isTranscribing = false;
 let localTranscriptionActive = false;
 let isRecording = false;
 let modelStatusByName = new Map();
+let modelDownloadStatus = null;
+let modelDownloadSeenActive = false;
+let verifyingModels = new Set();
+let deletingModels = new Set();
+let modelOperationStatusByName = new Map();
+let activeInfoModel = null;
 let recordingStartedAtMs = null;
 let lastRecordingDurationSec = null;
 let queueActive = false;
@@ -134,6 +151,8 @@ let displaysLoaded = false;
 let micSwitchInFlight = false;
 let outputSwitchInFlight = false;
 let latestRecordingFiles = [];
+let latestMicDevicesResult = null;
+let latestOutputDevicesResult = null;
 const dynamicOutputRenderers = new Map();
 
 function t(key, variables = {}) {
@@ -255,6 +274,7 @@ function updateFilePickerText(input, target, multiple = false) {
     target.textContent = t(multiple ? "noFilesSelected" : "noFileSelected");
     return;
   }
+
   target.textContent = multiple
     ? t("selectedFilesCount", { count: files.length })
     : files[0].name;
@@ -442,6 +462,7 @@ async function refreshMicDevices(announce = true) {
 
   try {
     const inputResult = await requestJson("/api/audio/devices");
+    latestMicDevicesResult = inputResult;
     fillMicDevices(inputResult, previousMicValue);
     if (!wasRecording) {
       activeMicDeviceValue = micDeviceSelect.value;
@@ -472,6 +493,7 @@ async function refreshOutputDevices(announce = true) {
 
   try {
     const outputResult = await requestJson("/api/audio/output-devices");
+    latestOutputDevicesResult = outputResult;
     fillOutputDevices(outputResult, previousOutputValue);
     if (!wasRecording) {
       activeOutputDeviceValue = outputDeviceSelect.value;
@@ -1242,10 +1264,15 @@ async function refreshModelStatuses() {
   try {
     const payload = await requestJson("/api/models");
     applyModelStatuses(payload.models || []);
+    if (modelManagerStatus.textContent === t("modelManagerLoading")) {
+      setModelManagerStatus(t("modelManagerReady"), "success");
+    }
   } catch (error) {
     modelAvailabilityOutput.textContent = t("modelStatusError", { message: translateUiText(error.message) });
     modelDownloadWarning.textContent = "";
     modelDownloadWarning.dataset.type = "warning";
+    setModelManagerStatus(t("modelStatusError", { message: translateUiText(error.message) }), "error");
+    renderModelManager();
   }
 }
 
@@ -1257,10 +1284,11 @@ function applyModelStatuses(statuses) {
     if (!status) {
       continue;
     }
-    option.textContent = `${status.name} — ${translateUiText(status.description)} (${status.local ? t("modelLocal") : t("modelMissing")})`;
+    option.textContent = `${status.name} - ${modelOptionDescription(status.name)} (${isModelDownloaded(status) ? t("modelLocal") : t("modelNotDownloaded")})`;
   }
 
   updateModelAvailabilityUi();
+  renderModelManager();
 }
 
 function updateModelAvailabilityUi() {
@@ -1272,32 +1300,353 @@ function updateModelAvailabilityUi() {
     return;
   }
 
-  modelAvailabilityOutput.textContent = `${status.name} — ${status.local ? t("modelLocal") : t("modelMissing")}. ${translateUiText(status.size_label)}.`;
+  modelAvailabilityOutput.textContent = `${status.name} - ${isModelDownloaded(status) ? t("modelLocal") : t("modelNotDownloaded")}. ${modelSizeLabel(status.name)}.`;
 
-  if (status.local) {
+  if (isModelDownloaded(status)) {
     modelDownloadWarning.textContent = t("modelReady");
     modelDownloadWarning.dataset.type = "success";
     return;
   }
 
-  const heavyWarning = status.name === "medium"
+  const localizedHeavyWarning = status.name === "medium"
     ? t("mediumDownloadWarning")
     : status.name === "large-v3"
       ? t("largeDownloadWarning")
       : "";
   modelDownloadWarning.textContent = [
     t("modelNeedsDownload"),
-    heavyWarning,
-    heavyWarning ? t("downloadRequirementsWarning") : "",
+    localizedHeavyWarning,
+    localizedHeavyWarning ? t("downloadRequirementsWarning") : "",
   ].filter(Boolean).join("\n");
   modelDownloadWarning.dataset.type = status.name === "medium" || status.name === "large-v3" ? "warning" : "info";
+  return;
 }
 
 function warnAboutSelectedModelDownload() {
   const status = modelStatusByName.get(selectedModel());
-  if (status && !status.local) {
-    showToast(t("modelDownloadToast"), "warning");
+  if (status && !isModelDownloaded(status)) {
+    showToast(t("modelDownloadFirstToast"), "warning");
   }
+}
+
+function modelKeyPrefix(model) {
+  return {
+    tiny: "Tiny",
+    base: "Base",
+    small: "Small",
+    medium: "Medium",
+    "large-v3": "LargeV3",
+  }[model] || "Small";
+}
+
+function modelOptionDescription(model) {
+  return t(`modelOption${modelKeyPrefix(model)}`);
+}
+
+function modelSizeLabel(model) {
+  return t(`modelSize${modelKeyPrefix(model)}`);
+}
+
+function modelInfoFieldKey(model, field) {
+  return `modelInfo${modelKeyPrefix(model)}${field}`;
+}
+
+function isModelDownloaded(status) {
+  return Boolean(status?.local || status?.is_downloaded || status?.status === "available");
+}
+
+function displayedModelStatus(status) {
+  const name = status?.name || "";
+  if (deletingModels.has(name)) {
+    return "deleting";
+  }
+  if (verifyingModels.has(name)) {
+    return "verifying";
+  }
+  const overrideStatus = modelOperationStatusByName.get(name);
+  if (overrideStatus) {
+    return overrideStatus;
+  }
+  if (status?.status === "starting" || (modelDownloadStatus?.status === "starting" && modelDownloadStatus.model === name)) {
+    return "starting";
+  }
+  if (status?.status === "downloading" || (modelDownloadStatus?.active && modelDownloadStatus.model === name)) {
+    return "downloading";
+  }
+  if (status?.status === "download_error") {
+    return "download_error";
+  }
+  return isModelDownloaded(status) ? "available" : "not_downloaded";
+}
+
+function modelStatusLabel(statusCode) {
+  return {
+    available: t("modelStatusAvailable"),
+    starting: t("modelStatusStarting"),
+    not_downloaded: t("modelStatusNotDownloaded"),
+    downloading: t("modelStatusDownloading"),
+    verifying: t("modelStatusVerifying"),
+    download_error: t("modelStatusDownloadError"),
+    verification_error: t("modelStatusVerificationError"),
+    deleting: t("modelStatusDeleting"),
+  }[statusCode] || statusCode;
+}
+
+function setModelManagerStatus(message, type = "info") {
+  modelManagerStatus.textContent = message;
+  modelManagerStatus.dataset.type = type;
+}
+
+function createModelActionButton(labelKey, onClick, disabled = false, variant = "") {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = t(labelKey);
+  button.disabled = disabled;
+  if (variant) {
+    button.dataset.variant = variant;
+  }
+  button.addEventListener("click", onClick);
+  return button;
+}
+
+function renderModelManager() {
+  if (!modelManagerBody) {
+    return;
+  }
+  const statuses = Array.from(modelStatusByName.values());
+  modelManagerBody.innerHTML = "";
+
+  if (!statuses.length) {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 4;
+    cell.textContent = t("modelManagerLoading");
+    row.append(cell);
+    modelManagerBody.append(row);
+    return;
+  }
+
+  for (const status of statuses) {
+    const row = document.createElement("tr");
+    const name = document.createElement("td");
+    const statusCell = document.createElement("td");
+    const size = document.createElement("td");
+    const actions = document.createElement("td");
+    const statusCode = displayedModelStatus(status);
+    const downloaded = isModelDownloaded(status);
+    const busy = isTranscribing || queueActive || benchmarkActive || deletingModels.has(status.name) || verifyingModels.has(status.name);
+    const downloadActive = Boolean(modelDownloadStatus?.active);
+
+    name.textContent = status.name;
+    statusCell.textContent = modelStatusLabel(statusCode);
+    statusCell.dataset.status = statusCode;
+    size.textContent = modelSizeLabel(status.name);
+    actions.className = "model-manager-actions";
+
+    if (!downloaded) {
+      actions.append(createModelActionButton("downloadModel", () => downloadModel(status.name), busy || downloadActive));
+    }
+    actions.append(createModelActionButton("verifyModel", () => verifyModel(status.name), busy || downloadActive, "secondary"));
+    if (downloaded || status.can_delete) {
+      actions.append(createModelActionButton("deleteModel", () => deleteModel(status.name), busy || downloadActive, "danger"));
+    }
+    actions.append(createModelActionButton("modelInfo", () => showModelInfo(status.name), false, "secondary"));
+
+    row.append(name, statusCell, size, actions);
+    modelManagerBody.append(row);
+  }
+}
+
+function renderModelDownloadStatus(status) {
+  modelDownloadStatus = status || null;
+  const active = Boolean(status?.active);
+  if (active) {
+    modelDownloadSeenActive = true;
+    modelDownloadProgressBlock.hidden = false;
+    modelDownloadProgressText.textContent = status.status === "starting"
+      ? t("modelDownloadStarting")
+      : t("modelDownloading", { model: status.model });
+    if (Number.isFinite(Number(status.progress_percent))) {
+      modelDownloadProgress.value = Number(status.progress_percent);
+      modelDownloadProgressNote.textContent = t("modelProgressPercent", { value: Math.round(Number(status.progress_percent)) });
+    } else {
+      modelDownloadProgress.removeAttribute("value");
+      modelDownloadProgressNote.textContent = t("modelProgressUnavailable");
+    }
+    setModelManagerStatus(
+      status.status === "starting" ? t("modelDownloadStarting") : t("modelDownloadInProgress", { model: status.model }),
+      "info",
+    );
+  } else if (status?.status === "download_error") {
+    modelDownloadProgressBlock.hidden = true;
+    modelDownloadProgress.removeAttribute("value");
+    setModelManagerStatus(t("modelDownloadFailed"), "error");
+  } else if (status?.status === "available" && status.model) {
+    modelDownloadProgressBlock.hidden = true;
+    modelDownloadProgress.value = 100;
+    setModelManagerStatus(t("modelDownloadCompleted", { model: status.model }), "success");
+  } else if (!modelManagerStatus.textContent) {
+    setModelManagerStatus(t("modelManagerReady"), "success");
+  }
+  renderModelManager();
+}
+
+async function refreshModelDownloadStatus(force = false) {
+  if (!force && !modelDownloadSeenActive && !modelDownloadStatus?.active) {
+    return;
+  }
+  const previousActive = Boolean(modelDownloadStatus?.active);
+  try {
+    const status = await requestJson("/api/models/download-status");
+    renderModelDownloadStatus(status);
+    if (previousActive && !status.active) {
+      await refreshModelStatuses();
+      if (status.status === "available") {
+        showToast(t("modelDownloadCompleted", { model: status.model }), "success");
+      } else if (status.status === "download_error") {
+        showToast(t("modelDownloadFailed"), "error");
+      }
+    }
+  } catch (error) {
+    setModelManagerStatus(error.message, "error");
+  }
+}
+
+async function downloadModel(model) {
+  modelOperationStatusByName.set(model, "starting");
+  renderModelDownloadStatus({
+    active: true,
+    model,
+    status: "starting",
+    progress_percent: null,
+    progress_available: false,
+    message: t("modelDownloadStarting"),
+    error_message: null,
+  });
+  try {
+    const status = await requestJson("/api/models/download", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model }),
+    });
+    renderModelDownloadStatus(status);
+    if (status.accepted) {
+      modelOperationStatusByName.delete(model);
+      showToast(t("modelDownloadStarted", { model }), "info");
+    } else {
+      modelOperationStatusByName.delete(model);
+      showToast(t("modelDownloadAlreadyRunning"), "warning");
+    }
+    await refreshModelStatuses();
+  } catch (error) {
+    modelOperationStatusByName.set(model, "download_error");
+    setModelManagerStatus(t("modelDownloadFailed"), "error");
+    showToast(t("modelDownloadFailed"), "error");
+    renderModelManager();
+  }
+}
+
+async function verifyModel(model) {
+  verifyingModels.add(model);
+  modelOperationStatusByName.delete(model);
+  setModelManagerStatus(t("modelVerifyInProgress", { model }), "info");
+  renderModelManager();
+  try {
+    const result = await requestJson("/api/models/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model, device: selectedDevice() }),
+    });
+    if (result.success) {
+      modelOperationStatusByName.delete(model);
+      const message = t("modelVerifySuccess", {
+        model,
+        device: result.resolved_device || selectedDevice(),
+        compute: result.compute_type || "auto",
+      });
+      setModelManagerStatus(message, "success");
+      showToast(message, "success");
+    } else {
+      modelOperationStatusByName.set(model, result.status === "not_downloaded" ? "not_downloaded" : "verification_error");
+      const message = result.status === "not_downloaded" ? t("modelVerifyNeedsDownload") : t("modelVerifyFailed");
+      setModelManagerStatus(message, "error");
+      showToast(message, "error");
+    }
+  } catch (error) {
+    modelOperationStatusByName.set(model, "verification_error");
+    setModelManagerStatus(t("modelVerifyFailed"), "error");
+    showToast(t("modelVerifyFailed"), "error");
+  } finally {
+    verifyingModels.delete(model);
+    await refreshModelStatuses();
+  }
+}
+
+async function deleteModel(model) {
+  if (!window.confirm(t("modelDeleteConfirm", { model }))) {
+    return;
+  }
+  deletingModels.add(model);
+  modelOperationStatusByName.set(model, "deleting");
+  setModelManagerStatus(t("modelDeleteInProgress", { model }), "info");
+  renderModelManager();
+  try {
+    const result = await requestJson("/api/models/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model, confirm: true }),
+    });
+    modelOperationStatusByName.delete(model);
+    const message = result.deleted ? t("modelDeleteSuccess", { model }) : t("modelDeleteNothing", { model });
+    setModelManagerStatus(message, result.deleted ? "success" : "warning");
+    showToast(message, result.deleted ? "success" : "warning");
+    if (activeInfoModel === model) {
+      hideModelInfo();
+    }
+    await refreshModelStatuses();
+  } catch (error) {
+    modelOperationStatusByName.delete(model);
+    setModelManagerStatus(t("modelDeleteFailed"), "error");
+    showToast(t("modelDeleteFailed"), "error");
+  } finally {
+    deletingModels.delete(model);
+    renderModelManager();
+  }
+}
+
+async function showModelInfo(model) {
+  activeInfoModel = model;
+  try {
+    await requestJson(`/api/models/info?model=${encodeURIComponent(model)}`);
+  } catch (error) {
+    setModelManagerStatus(error.message, "error");
+    return;
+  }
+  modelInfoTitle.textContent = model;
+  modelInfoList.innerHTML = "";
+  const fields = [
+    ["modelInfoOrigin", t("modelInfoOriginValue")],
+    ["modelInfoParameters", t(modelInfoFieldKey(model, "Parameters"))],
+    ["modelInfoSize", modelSizeLabel(model)],
+    ["modelInfoPositioning", t(modelInfoFieldKey(model, "Positioning"))],
+    ["modelInfoRecommendedUse", t(modelInfoFieldKey(model, "RecommendedUse"))],
+    ["modelInfoHardware", t(modelInfoFieldKey(model, "Hardware"))],
+  ];
+  for (const [labelKey, value] of fields) {
+    const term = document.createElement("dt");
+    const description = document.createElement("dd");
+    term.textContent = t(labelKey);
+    description.textContent = value;
+    modelInfoList.append(term, description);
+  }
+  modelInfoPanel.hidden = false;
+}
+
+function hideModelInfo() {
+  activeInfoModel = null;
+  modelInfoPanel.hidden = true;
+  modelInfoTitle.textContent = "";
+  modelInfoList.innerHTML = "";
 }
 
 function queueStatusLabel(status) {
@@ -1493,9 +1842,11 @@ function updateLongOperationControls() {
   for (const button of benchmarkButtons) {
     button.disabled = active || !benchmarkSourceId;
   }
+  refreshModelsButton.disabled = active || Boolean(modelDownloadStatus?.active);
   setRecordingUi(isRecording);
   setVideoMuxUi();
   updateRecordingTranscribeActions(lastRecordings);
+  renderModelManager();
 }
 
 function formatBenchmarkResult(result) {
@@ -1647,6 +1998,18 @@ whisperModelSelect.addEventListener("change", () => {
   updateQueueSettingsSummary();
 });
 whisperDeviceSelect.addEventListener("change", updateQueueSettingsSummary);
+refreshModelsButton.addEventListener("click", async () => {
+  refreshModelsButton.disabled = true;
+  setModelManagerStatus(t("modelManagerLoading"), "info");
+  try {
+    await refreshModelStatuses();
+    await refreshModelDownloadStatus(true);
+    setModelManagerStatus(t("modelManagerReady"), "success");
+  } finally {
+    updateLongOperationControls();
+  }
+});
+modelInfoCloseButton.addEventListener("click", hideModelInfo);
 transcribeMicRecordingButton.addEventListener("click", () => addRecordingByType("mic"));
 transcribeSystemRecordingButton.addEventListener("click", () => addRecordingByType("system"));
 transcribeAllRecordingsButton.addEventListener("click", addAllRecordings);
@@ -1766,6 +2129,7 @@ async function boot() {
   await loadDevices();
   await refreshStatus();
   await refreshModelStatuses();
+  await refreshModelDownloadStatus(true);
   await refreshStorage();
   await refreshQueueStatus();
   await refreshBenchmarkStatus();
@@ -1782,14 +2146,28 @@ setInterval(refreshStorage, 10000);
 setInterval(updateRecordingTimerUi, 1000);
 setInterval(refreshQueueStatus, 1000);
 setInterval(refreshBenchmarkStatus, 1000);
+setInterval(refreshModelDownloadStatus, 1000);
 
 document.addEventListener("lat-language-change", () => {
   updateFilePickerText(audioFileInput, audioFilePickerText);
   updateFilePickerText(queueFileInput, queueFilePickerText, true);
   updateFilePickerText(benchmarkFileInput, benchmarkFilePickerText);
   updateRecordingTimerUi();
+  if (latestMicDevicesResult) {
+    fillMicDevices(latestMicDevicesResult, micDeviceSelect.value);
+  }
+  if (latestOutputDevicesResult) {
+    fillOutputDevices(latestOutputDevicesResult, outputDeviceSelect.value);
+  }
   setRecordingUi(isRecording);
   updateQueueSettingsSummary(queueActive ? latestQueueStatus : null);
+  renderModelManager();
+  if (modelDownloadStatus) {
+    renderModelDownloadStatus(modelDownloadStatus);
+  }
+  if (activeInfoModel) {
+    showModelInfo(activeInfoModel);
+  }
   if (latestQueueStatus) {
     renderQueue(latestQueueStatus);
   }

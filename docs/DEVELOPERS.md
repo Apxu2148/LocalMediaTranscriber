@@ -26,6 +26,7 @@ system_recorder = SystemAudioRecorder()
 screen_recorder = ScreenRecorder()
 video_muxer = VideoMuxer()
 transcriber = AudioTranscriber()
+model_manager = WhisperModelManager()
 transcript_store = TranscriptStore()
 ```
 
@@ -44,6 +45,7 @@ Queue and benchmark services use these shared objects. This keeps model caching 
 - `data\jobs`: Queue job JSON snapshots.
 - `data\logs`: Runtime logs.
 - `models`: Local model/cache directory, including Hugging Face and faster-whisper caches.
+- `static\icons`: Browser tab/app icon assets. The current favicon is `favicon.svg`.
 - `tmp`: Project-local temporary directory.
 - `requirements-cpu.txt`: Base dependencies for CPU/local runtime.
 - `requirements-gpu.txt`: GPU add-ons plus mirrored screen-recording runtime dependencies.
@@ -74,6 +76,11 @@ Important endpoints include:
 
 - `GET /api/status`
 - `GET /api/models`
+- `POST /api/models/download`
+- `GET /api/models/download-status`
+- `POST /api/models/verify`
+- `POST /api/models/delete`
+- `GET /api/models/info`
 - `GET /api/storage`
 - `GET /api/audio/devices`
 - `GET /api/audio/output-devices`
@@ -205,6 +212,22 @@ Key behavior:
 
 Use the existing normalization and model-loading helpers when adding new transcription paths.
 
+### `app/model_manager.py`
+
+Whisper model management service for the UI.
+
+Key behavior:
+
+- Lists the supported models from `config.SUPPORTED_WHISPER_MODELS`.
+- Detects local faster-whisper snapshots under `models\faster-whisper` without loading every model.
+- Starts one background model download at a time through faster-whisper's Hugging Face download helper.
+- Reports download status with an indeterminate progress fallback when exact percent is unavailable.
+- Returns static model metadata for the Info button.
+- Deletes only exact cache paths for the selected supported model, including the matching `.locks` entry when present.
+- Refuses invalid model names and confirmation-less deletes.
+
+Deletion must stay conservative. Do not delete `models`, `models\huggingface`, or the whole Hugging Face cache from this service. If future custom model directories are added, extend the safety checks before exposing delete controls for those paths.
+
 ### `app/transcript_store.py`
 
 Transcript and metadata persistence.
@@ -256,6 +279,7 @@ Important areas:
 
 - Header and language switch.
 - Global transcription settings.
+- Whisper model manager table below transcription settings.
 - Recording section with microphone, system audio, screen, display, and FPS controls.
 - Recording device selectors, display selectors, and level meters.
 - Help section.
@@ -275,7 +299,7 @@ Responsibilities:
 
 - Bind DOM elements.
 - Call backend APIs.
-- Manage recording, device refresh/switching, level polling, queue actions, storage display, video/audio merge actions, benchmark actions, toasts, operation overlay, and transcript loading.
+- Manage recording, device refresh/switching, level polling, Whisper model manager actions, queue actions, storage display, video/audio merge actions, benchmark actions, toasts, operation overlay, and transcript loading.
 - Use `window.LATI18N` for UI strings and backend text translation.
 - Start the product tour through `window.LocalMediaTranscriberTour`.
 
@@ -326,6 +350,15 @@ Responsibilities:
 - Exposes `window.LocalMediaTranscriberTour`.
 
 If DOM IDs change, update tour selectors and `tests/test_ui_contract.py`.
+
+### `static/icons`
+
+Browser tab/app icon assets.
+
+- `favicon.svg` is the current scalable favicon and is linked from `static/index.html`.
+- If a PNG fallback is added later, prefer `favicon-32x32.png` and add the matching `<link rel="icon">`.
+- Future replacement sets can also include 16x16, 48x48, and 180x180 Apple touch icon files.
+- To change the browser tab icon, replace the files while keeping the same filenames or update the `<link rel="icon">` tags.
 
 ## Current Media Recording Flow
 
@@ -413,6 +446,7 @@ Light checks for small UI/docs iterations:
 ```bat
 .venv\Scripts\python.exe -m compileall app
 .venv\Scripts\python.exe -m unittest tests.test_i18n tests.test_ui_contract
+.venv\Scripts\python.exe -m unittest tests.test_model_manager
 .venv\Scripts\python.exe -m unittest tests.test_file_listing tests.test_dev_cleanup_scripts
 .venv\Scripts\python.exe -m unittest tests.test_screen_recorder
 .venv\Scripts\python.exe -m unittest tests.test_video_muxer
@@ -427,6 +461,7 @@ Useful targeted tests:
 
 - `tests.test_i18n`: localization key contract and no Russian static markup in selected frontend files.
 - `tests.test_ui_contract`: DOM IDs, queue endpoint usage, section order, and tour selectors.
+- `tests.test_model_manager`: model cache status, safe delete behavior, download-status shape, and mocked verification endpoint behavior.
 - `tests.test_file_listing`: media-only recordings list suffix contract.
 - `tests.test_dev_cleanup_scripts`: cleanup entrypoint existence and project-scoped safety markers.
 - `tests.test_screen_recorder`: screen FPS/display validation, media session JSON, and lightweight API validation.
