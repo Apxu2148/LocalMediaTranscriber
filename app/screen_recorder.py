@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import ctypes
 import json
 import logging
@@ -94,6 +95,17 @@ def select_displays(available_displays: list[dict[str, Any]], display_indices: l
         missing_text = ", ".join(str(item) for item in missing)
         raise ScreenRecorderValidationError(f"Дисплей не найден: {missing_text}.")
     return selected
+
+
+def sort_displays_for_layout(displays: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(
+        (dict(display) for display in displays),
+        key=lambda display: (
+            int(display.get("top") or 0),
+            int(display.get("left") or 0),
+            int(display.get("index") or 0),
+        ),
+    )
 
 
 def screen_video_filename(display_index: int, timestamp: str, fps: int, suffix: str = ".mp4") -> str:
@@ -266,6 +278,72 @@ class ScreenRecorder:
         displays = available_displays if available_displays is not None else self.list_displays()
         selected = select_displays(displays, normalized_indices)
         return normalized_indices, normalized_fps, selected
+
+    def capture_display_preview(self, display_index: int, max_width: int = 320) -> dict[str, Any]:
+        try:
+            requested_index = int(display_index)
+        except (TypeError, ValueError) as exc:
+            raise ScreenRecorderValidationError("РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ РёРґРµРЅС‚РёС„РёРєР°С‚РѕСЂ РґРёСЃРїР»РµСЏ.") from exc
+        if requested_index < 1:
+            raise ScreenRecorderValidationError("РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ РёРґРµРЅС‚РёС„РёРєР°С‚РѕСЂ РґРёСЃРїР»РµСЏ.")
+
+        try:
+            thumbnail_width = int(max_width)
+        except (TypeError, ValueError):
+            thumbnail_width = 320
+        thumbnail_width = max(160, min(480, thumbnail_width))
+
+        try:
+            import cv2
+            import mss
+            import numpy as np
+        except ImportError as exc:
+            raise ScreenRecorderDependencyError(
+                "Р—Р°РІРёСЃРёРјРѕСЃС‚Рё Р·Р°РїРёСЃРё СЌРєСЂР°РЅР° РЅРµ СѓСЃС‚Р°РЅРѕРІР»РµРЅС‹. РЈСЃС‚Р°РЅРѕРІРёС‚Рµ mss Рё opencv-python РёР· requirements."
+            ) from exc
+
+        display = select_displays(self.list_displays(), [requested_index])[0]
+        monitor = {
+            "left": int(display["left"]),
+            "top": int(display["top"]),
+            "width": int(display["width"]),
+            "height": int(display["height"]),
+        }
+
+        try:
+            with mss.mss() as screen_capture:
+                frame = np.array(screen_capture.grab(monitor))
+            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+            source_height, source_width = frame_bgr.shape[:2]
+            if source_width <= 0 or source_height <= 0:
+                raise ScreenRecorderError("РџСЂРµРІСЊСЋ РЅРµРґРѕСЃС‚СѓРїРЅРѕ.")
+
+            scale = min(1.0, thumbnail_width / float(source_width))
+            target_width = max(1, int(round(source_width * scale)))
+            target_height = max(1, int(round(source_height * scale)))
+            if scale < 1.0:
+                frame_bgr = cv2.resize(frame_bgr, (target_width, target_height), interpolation=cv2.INTER_AREA)
+
+            ok, encoded = cv2.imencode(".jpg", frame_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 78])
+            if not ok:
+                raise ScreenRecorderError("РџСЂРµРІСЊСЋ РЅРµРґРѕСЃС‚СѓРїРЅРѕ.")
+        except ScreenRecorderError:
+            raise
+        except Exception as exc:
+            logger.exception("Failed to capture display preview: display=%s", requested_index)
+            raise ScreenRecorderError(f"РџСЂРµРІСЊСЋ РЅРµРґРѕСЃС‚СѓРїРЅРѕ: {exc}") from exc
+
+        image_base64 = base64.b64encode(encoded.tobytes()).decode("ascii")
+        return {
+            "screen_index": requested_index,
+            "mime_type": "image/jpeg",
+            "image_base64": image_base64,
+            "image_data_url": f"data:image/jpeg;base64,{image_base64}",
+            "width": target_width,
+            "height": target_height,
+            "source_width": source_width,
+            "source_height": source_height,
+        }
 
     def create_session(
         self,

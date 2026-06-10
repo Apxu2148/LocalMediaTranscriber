@@ -578,7 +578,8 @@ summary:focus-visible {
 
 .display-list {
   display: grid;
-  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
 }
 
 .screen-display-option {
@@ -601,6 +602,116 @@ summary:focus-visible {
 .screen-display-option span {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.display-card {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: #ffffff;
+}
+
+.display-card:has(input[name="screenDisplay"]:checked:not(:disabled)) {
+  border-color: rgba(37, 99, 235, 0.45);
+  background: var(--accent-soft);
+}
+
+.display-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+}
+
+.display-card-title input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  flex: 0 0 auto;
+  accent-color: var(--accent);
+}
+
+.display-card-details {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 5px 10px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.display-card-details dt {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.display-card-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.display-preview-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.display-preview-controls label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.display-preview-controls input {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.display-preview-controls button {
+  min-height: 34px;
+  padding: 0 10px;
+  font-size: 13px;
+}
+
+.display-preview-frame {
+  display: grid;
+  gap: 8px;
+  min-height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px;
+  background: var(--surface-soft);
+}
+
+.display-preview-frame[hidden] {
+  display: none;
+}
+
+.display-preview-frame img {
+  width: 100%;
+  max-width: 360px;
+  height: auto;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #ffffff;
+}
+
+.display-preview-frame small {
+  color: var(--muted);
+  line-height: 1.35;
+  white-space: pre-wrap;
 }
 
 .level-label,

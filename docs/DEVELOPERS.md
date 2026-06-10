@@ -87,6 +87,7 @@ Important endpoints include:
 - `GET /api/audio/level`
 - `GET /api/audio/output-level`
 - `GET /api/displays`
+- `POST /api/displays/preview`
 - `POST /api/screen-recording/start`
 - `POST /api/screen-recording/stop`
 - `GET /api/screen-recording/status`
@@ -157,6 +158,47 @@ Key behavior:
 - References actual audio filenames when the screen recording was started with microphone and/or system audio.
 
 The module lazy-imports `mss`, `cv2`, and `numpy` inside runtime capture paths so unit tests and basic app import do not require an active screen capture environment.
+
+### Display Selection and Preview
+
+Display enumeration comes from `mss.mss().monitors[1:]`. `mss.mss().monitors[0]` is the virtual all-monitor bounding box and is not exposed as a selectable physical display. The app stores and sends display metadata with:
+
+- `index`: the screen/display identifier used by screen recording APIs and session `screen_index`;
+- `width` and `height`: physical display capture size;
+- `left` and `top`: virtual desktop coordinates, which can be negative on Windows multi-monitor layouts;
+- `is_primary`: best-effort primary display marker.
+
+The UI orders display cards by virtual desktop layout: first `top`, then `left`, then `index`. In a common two-monitor setup where the left monitor is `left=-1920, top=0` and the main/right monitor is `left=0, top=0`, the left monitor appears first and visually on the left side of the card grid.
+
+`screen_index` in session JSON, video filenames, and mouse event metadata always refers to the display `index` from `/api/displays`, not the card's visual position after sorting. Mouse event `screen_index` uses the same coordinate bounds (`left`, `top`, `width`, `height`) to decide which recorded screen contains the cursor.
+
+Preview thumbnails are manual and off by default. `POST /api/displays/preview` accepts:
+
+```json
+{
+  "screen_index": 1,
+  "max_width": 320
+}
+```
+
+The endpoint captures the requested display with `mss`, resizes the image on the backend with OpenCV, encodes JPEG, and returns:
+
+```json
+{
+  "screen_index": 1,
+  "mime_type": "image/jpeg",
+  "image_base64": "...",
+  "image_data_url": "data:image/jpeg;base64,...",
+  "width": 320,
+  "height": 180,
+  "source_width": 1920,
+  "source_height": 1080
+}
+```
+
+Preview screenshots are not written to `data\recordings`. Capture runs only when the user enables preview or presses Refresh preview. The endpoint clamps thumbnail width to a small range to avoid expensive large previews. Capture errors return structured API errors and should not crash the recording UI.
+
+Future display identification improvements may include clearer physical monitor identification, temporary on-screen labels, slow live preview mode, and OS-provided monitor names when available.
 
 ### `app/input_event_recorder.py`
 
@@ -401,7 +443,7 @@ Important areas:
 - Header and language switch.
 - Global transcription settings.
 - Whisper model manager table below transcription settings.
-- Recording section with microphone, system audio, screen, display, FPS, mouse action, and keyboard action controls.
+- Recording section with microphone, system audio, screen, coordinate-ordered display cards, FPS, mouse action, keyboard action, and per-display preview controls.
 - Recording device selectors, display selectors, and level meters.
 - Help section.
 - Queue/source forms.
@@ -485,21 +527,22 @@ Browser tab/app icon assets.
 
 1. The frontend loads storage, devices, model status, and initial state.
 2. The user selects recording sources: `mic`, `system`, `screen`, optional mouse actions, optional keyboard actions, or a supported combination.
-3. If Screen is enabled, the UI shows physical displays, the screen FPS selector, and enables mouse/keyboard action logging controls.
+3. If Screen is enabled, the UI shows coordinate-ordered physical display cards, optional manual preview controls, the screen FPS selector, and mouse/keyboard action logging controls.
 4. The frontend polls microphone and/or system levels according to the selected audio sources.
 5. `POST /api/record/start` validates the selected sources and checks for conflicting benchmark work.
 6. If screen is enabled, the backend validates display selection and FPS before opening audio streams.
 7. For `mic`, `AudioRecorder.start()` creates `mic_<timestamp>.wav`.
 8. For `system`, `SystemAudioRecorder.start()` creates `system_<timestamp>.wav`.
 9. For `mic` + `system`, both recorders start with the same timestamp and save separate files. They are not mixed.
-10. For `screen`, `ScreenRecorder.start()` creates flat screen video files and `session_YYYYMMDD_HHMMSS.json` in `data\recordings`.
-11. If mouse or keyboard action logging is enabled, `InputEventRecorder` creates JSONL event files with the same timestamp and updates `events` / `event_logging` in session JSON.
-12. If audio and screen are recorded together, the screen session JSON references the actual audio filenames.
-13. Screen videos use the selected FPS as the `VideoWriter` FPS. When capture falls behind, the latest captured frame is duplicated into missing output frame slots so playback duration remains real time.
-14. A simple cursor marker is drawn into the display video that currently contains the cursor.
-15. While recording, the UI shows level meters, screen selection state, input logging state when available, and a timer.
-16. Device switch endpoints can update microphone or output device during recording.
-17. `POST /api/record/stop` stops the active recorder(s), gathers diagnostics, updates the latest recording references, and refreshes storage.
+10. Display preview, if used, captures only manual thumbnails through `/api/displays/preview` and does not write preview files to disk.
+11. For `screen`, `ScreenRecorder.start()` creates flat screen video files and `session_YYYYMMDD_HHMMSS.json` in `data\recordings`.
+12. If mouse or keyboard action logging is enabled, `InputEventRecorder` creates JSONL event files with the same timestamp and updates `events` / `event_logging` in session JSON.
+13. If audio and screen are recorded together, the screen session JSON references the actual audio filenames.
+14. Screen videos use the selected FPS as the `VideoWriter` FPS. When capture falls behind, the latest captured frame is duplicated into missing output frame slots so playback duration remains real time.
+15. A simple cursor marker is drawn into the display video that currently contains the cursor.
+16. While recording, the UI shows level meters, screen selection state, input logging state when available, and a timer.
+17. Device switch endpoints can update microphone or output device during recording.
+18. `POST /api/record/stop` stops the active recorder(s), gathers diagnostics, updates the latest recording references, and refreshes storage.
 
 Audio files, screen videos, input event JSONL files, merged videos, and new screen session JSON all live in `data\recordings` as a flat list. `data\media_sessions` is legacy-only for earlier MVP runs.
 

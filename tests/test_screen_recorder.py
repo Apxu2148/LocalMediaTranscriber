@@ -19,6 +19,7 @@ from app.screen_recorder import (
     recent_media_sessions,
     screen_video_filename,
     select_displays,
+    sort_displays_for_layout,
 )
 
 from app import main as main_module
@@ -103,6 +104,14 @@ class ScreenRecorderTests(unittest.TestCase):
         self.assertTrue(diagnostics["timing_warning"])
         self.assertEqual(TIMING_MODE_DUPLICATE_FRAMES, diagnostics["timing_mode"])
 
+    def test_display_layout_sort_uses_virtual_desktop_coordinates(self) -> None:
+        displays = [
+            {"index": 2, "width": 1920, "height": 1080, "left": 0, "top": 0},
+            {"index": 1, "width": 1920, "height": 1080, "left": -1920, "top": 0},
+            {"index": 3, "width": 1280, "height": 720, "left": 0, "top": 1080},
+        ]
+        self.assertEqual([1, 2, 3], [display["index"] for display in sort_displays_for_layout(displays)])
+
     def test_screen_recording_api_validation_and_delegation(self) -> None:
         with TestClient(main_module.app) as client:
             empty_response = client.post("/api/screen-recording/start", json={"display_indices": [], "fps": 3})
@@ -122,6 +131,45 @@ class ScreenRecorderTests(unittest.TestCase):
             response = client.post("/api/screen-recording/start", json={"display_indices": [1, 2], "fps": 5})
             self.assertEqual(200, response.status_code)
             start.assert_called_once_with([1, 2], 5)
+
+    def test_displays_and_preview_api_contract(self) -> None:
+        displays = [
+            {"index": 1, "name": "Display 1", "width": 1920, "height": 1080, "left": -1920, "top": 0},
+            {"index": 2, "name": "Display 2", "width": 1920, "height": 1080, "left": 0, "top": 0},
+        ]
+        preview = {
+            "screen_index": 1,
+            "mime_type": "image/jpeg",
+            "image_base64": "abc",
+            "image_data_url": "data:image/jpeg;base64,abc",
+            "width": 320,
+            "height": 180,
+        }
+        with (
+            patch.object(main_module.screen_recorder, "list_displays", return_value=displays),
+            patch.object(main_module.screen_recorder, "capture_display_preview", return_value=preview) as capture_preview,
+            TestClient(main_module.app) as client,
+        ):
+            display_response = client.get("/api/displays")
+            self.assertEqual(200, display_response.status_code)
+            self.assertEqual(-1920, display_response.json()[0]["left"])
+
+            preview_response = client.post("/api/displays/preview", json={"screen_index": 1, "max_width": 320})
+            self.assertEqual(200, preview_response.status_code)
+            self.assertEqual("data:image/jpeg;base64,abc", preview_response.json()["image_data_url"])
+            capture_preview.assert_called_once_with(1, 320)
+
+        with (
+            patch.object(
+                main_module.screen_recorder,
+                "capture_display_preview",
+                side_effect=ScreenRecorderValidationError("invalid display"),
+            ),
+            TestClient(main_module.app) as client,
+        ):
+            response = client.post("/api/displays/preview", json={"screen_index": 99})
+            self.assertEqual(400, response.status_code)
+            self.assertEqual("invalid display", response.json()["detail"]["message"])
 
 
 class ScreenRecorderIdTests(unittest.TestCase):

@@ -90,6 +90,11 @@ class ScreenRecordingStartRequest(BaseModel):
     fps: int = 3
 
 
+class DisplayPreviewRequest(BaseModel):
+    screen_index: int
+    max_width: int = 320
+
+
 class SwitchMicrophoneRequest(BaseModel):
     device_id: int | None = None
 
@@ -441,6 +446,14 @@ def output_audio_level(device_id: str | None = None) -> dict:
 def displays() -> list[dict]:
     try:
         return screen_recorder.list_displays()
+    except ScreenRecorderError as exc:
+        raise_api_error(str(exc), status_code=screen_error_status(exc))
+
+
+@app.post("/api/displays/preview")
+def display_preview(payload: DisplayPreviewRequest) -> dict:
+    try:
+        return screen_recorder.capture_display_preview(payload.screen_index, payload.max_width)
     except ScreenRecorderError as exc:
         raise_api_error(str(exc), status_code=screen_error_status(exc))
 

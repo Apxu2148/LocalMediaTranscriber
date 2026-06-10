@@ -151,6 +151,7 @@ let micDevicesRefreshInFlight = false;
 let outputDevicesRefreshInFlight = false;
 let displayRefreshInFlight = false;
 let displaysLoaded = false;
+let latestDisplays = [];
 let micSwitchInFlight = false;
 let outputSwitchInFlight = false;
 let latestRecordingFiles = [];
@@ -237,6 +238,10 @@ function selectedDisplayIndices() {
   return Array.from(displayList.querySelectorAll('input[name="screenDisplay"]:checked'))
     .map((input) => Number(input.value))
     .filter((value) => Number.isInteger(value) && value > 0);
+}
+
+function displayCardControls() {
+  return Array.from(displayList.querySelectorAll('input[name="screenDisplay"], input[name="displayPreview"], button[data-preview-display]'));
 }
 
 function selectedScreenFps() {
@@ -341,8 +346,8 @@ function setRecordingUi(recording) {
   refreshMicDevicesButton.disabled = micDevicesRefreshInFlight;
   refreshOutputDevicesButton.disabled = outputDevicesRefreshInFlight;
   screenFpsSelect.disabled = recording || !modeUsesScreen();
-  for (const input of displayList.querySelectorAll('input[name="screenDisplay"]')) {
-    input.disabled = recording || !modeUsesScreen();
+  for (const control of displayCardControls()) {
+    control.disabled = recording || !modeUsesScreen();
   }
   syncInputSourceControls(recording);
 
@@ -566,6 +571,7 @@ async function refreshDisplays(announce = true) {
 
   try {
     const displays = await requestJson("/api/displays");
+    latestDisplays = Array.isArray(displays) ? displays : [];
     fillDisplays(displays, previousSelection);
     displaysLoaded = true;
     if (announce) {
@@ -641,7 +647,7 @@ function fillOutputDevices(result, previousValue) {
 }
 
 function fillDisplays(displays, previousSelection = []) {
-  const normalizedDisplays = Array.isArray(displays) ? displays : [];
+  const normalizedDisplays = sortDisplaysForLayout(Array.isArray(displays) ? displays : []);
   const previous = new Set(previousSelection.map((value) => Number(value)));
   displayList.innerHTML = "";
 
@@ -660,25 +666,139 @@ function fillDisplays(displays, previousSelection = []) {
 
   const hasPreviousSelection = previous.size > 0;
   for (const [position, display] of normalizedDisplays.entries()) {
-    const label = document.createElement("label");
-    const input = document.createElement("input");
-    const text = document.createElement("span");
     const displayIndex = Number(display.index);
     const isDefault = Boolean(display.is_primary) || position === 0;
+    displayList.append(createDisplayCard(display, {
+      checked: hasPreviousSelection ? previous.has(displayIndex) : isDefault,
+    }));
+  }
+}
 
-    label.className = "screen-display-option";
-    input.type = "checkbox";
-    input.name = "screenDisplay";
-    input.value = String(displayIndex);
-    input.checked = hasPreviousSelection ? previous.has(displayIndex) : isDefault;
-    text.textContent = t("displayOption", {
-      index: displayIndex,
-      width: display.width,
-      height: display.height,
+function sortDisplaysForLayout(displays) {
+  return [...displays].sort((left, right) => {
+    const leftTop = Number(left.top || 0);
+    const rightTop = Number(right.top || 0);
+    if (leftTop !== rightTop) {
+      return leftTop - rightTop;
+    }
+    const leftPosition = Number(left.left || 0);
+    const rightPosition = Number(right.left || 0);
+    if (leftPosition !== rightPosition) {
+      return leftPosition - rightPosition;
+    }
+    return Number(left.index || 0) - Number(right.index || 0);
+  });
+}
+
+function createDisplayCard(display, options = {}) {
+  const displayIndex = Number(display.index);
+  const card = document.createElement("article");
+  const headingLabel = document.createElement("label");
+  const input = document.createElement("input");
+  const title = document.createElement("strong");
+  const details = document.createElement("dl");
+  const previewControls = document.createElement("div");
+  const previewLabel = document.createElement("label");
+  const previewCheckbox = document.createElement("input");
+  const previewLabelText = document.createElement("span");
+  const refreshButton = document.createElement("button");
+  const previewFrame = document.createElement("div");
+  const previewImage = document.createElement("img");
+  const previewStatus = document.createElement("small");
+
+  card.className = "display-card";
+  card.dataset.displayIndex = String(displayIndex);
+
+  headingLabel.className = "display-card-title";
+  input.type = "checkbox";
+  input.name = "screenDisplay";
+  input.value = String(displayIndex);
+  input.checked = Boolean(options.checked);
+  title.textContent = t("screenCardLabel", { index: displayIndex });
+  headingLabel.append(input, title);
+
+  details.className = "display-card-details";
+  appendDisplayDetail(details, t("displayResolution"), t("displayResolutionValue", {
+    width: display.width,
+    height: display.height,
+  }));
+  appendDisplayDetail(details, t("displayCoordinates"), t("displayCoordinatesValue", {
+    left: display.left,
+    top: display.top,
+  }));
+  appendDisplayDetail(details, t("displayMonitorIndex"), String(displayIndex));
+
+  previewControls.className = "display-preview-controls";
+  previewCheckbox.type = "checkbox";
+  previewCheckbox.name = "displayPreview";
+  previewCheckbox.value = String(displayIndex);
+  previewLabelText.textContent = t("showPreview");
+  previewLabel.append(previewCheckbox, previewLabelText);
+  refreshButton.type = "button";
+  refreshButton.dataset.previewDisplay = String(displayIndex);
+  refreshButton.textContent = t("refreshPreview");
+  refreshButton.hidden = true;
+  previewControls.append(previewLabel, refreshButton);
+
+  previewFrame.className = "display-preview-frame";
+  previewFrame.hidden = true;
+  previewImage.alt = t("previewAlt", { index: displayIndex });
+  previewImage.hidden = true;
+  previewStatus.textContent = t("previewOffByDefault");
+  previewFrame.append(previewImage, previewStatus);
+
+  previewCheckbox.addEventListener("change", async () => {
+    previewLabelText.textContent = previewCheckbox.checked ? t("hidePreview") : t("showPreview");
+    refreshButton.hidden = !previewCheckbox.checked;
+    previewFrame.hidden = !previewCheckbox.checked;
+    if (!previewCheckbox.checked) {
+      previewImage.hidden = true;
+      previewImage.removeAttribute("src");
+      previewStatus.textContent = t("previewOffByDefault");
+      return;
+    }
+    await refreshDisplayPreview(card);
+  });
+  refreshButton.addEventListener("click", () => refreshDisplayPreview(card));
+
+  card.append(headingLabel, details, previewControls, previewFrame);
+  return card;
+}
+
+function appendDisplayDetail(details, labelText, valueText) {
+  const term = document.createElement("dt");
+  const value = document.createElement("dd");
+  term.textContent = labelText;
+  value.textContent = valueText;
+  details.append(term, value);
+}
+
+async function refreshDisplayPreview(card) {
+  const displayIndex = Number(card.dataset.displayIndex);
+  const image = card.querySelector("img");
+  const status = card.querySelector("small");
+  const button = card.querySelector("button[data-preview-display]");
+  if (!Number.isInteger(displayIndex) || displayIndex < 1) {
+    return;
+  }
+  button.disabled = true;
+  status.textContent = t("previewLoading");
+  image.hidden = true;
+  try {
+    const preview = await requestJson("/api/displays/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ screen_index: displayIndex, max_width: 340 }),
     });
-
-    label.append(input, text);
-    displayList.append(label);
+    image.src = preview.image_data_url || `data:${preview.mime_type || "image/jpeg"};base64,${preview.image_base64}`;
+    image.hidden = false;
+    status.textContent = t("previewRefreshed");
+  } catch (error) {
+    image.hidden = true;
+    image.removeAttribute("src");
+    status.textContent = `${t("previewUnavailable")}\n${error.message}`;
+  } finally {
+    button.disabled = isRecording || !modeUsesScreen();
   }
 }
 
@@ -2233,6 +2353,9 @@ document.addEventListener("lat-language-change", () => {
   }
   if (latestOutputDevicesResult) {
     fillOutputDevices(latestOutputDevicesResult, outputDeviceSelect.value);
+  }
+  if (latestDisplays.length) {
+    fillDisplays(latestDisplays, selectedDisplayIndices());
   }
   setRecordingUi(isRecording);
   updateQueueSettingsSummary(queueActive ? latestQueueStatus : null);

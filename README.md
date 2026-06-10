@@ -10,6 +10,7 @@ This project is a separate fork of `LocalAudioTranscriber`. The current version 
 - Record Windows system audio to WAV through WASAPI loopback.
 - Record microphone and system audio as two separate WAV files.
 - Record one or more physical displays to per-display video files in `data\recordings`.
+- Pick displays from visual cards ordered by virtual desktop layout, with resolution, coordinates, and optional thumbnails.
 - Preserve real-time screen video duration by duplicating the latest frame when capture falls below the selected FPS.
 - Draw a visible mouse cursor marker into screen recordings.
 - Log mouse and keyboard input events for screen recording sessions.
@@ -125,6 +126,8 @@ C:\Python\LocalMediaTranscriber\data\recordings
 New screen recordings are stored as a flat list beside audio recordings, for example `screen1_20260609_001122__30fps.mp4` and `session_20260609_001122.json`. When mouse or keyboard logging is enabled, `mouse_events_YYYYMMDD_HHMMSS.jsonl` and `keyboard_events_YYYYMMDD_HHMMSS.jsonl` are saved beside the session JSON. Older MVP runs may still exist under `data\media_sessions`.
 
 Mouse and keyboard event logging is available only when screen recording is enabled. Keyboard logging records special keys and hotkeys by default; ordinary typed text is not recorded. The technical schema is documented in `docs\DEVELOPERS.md`.
+
+When multiple monitors are connected, the screen selection area shows display cards instead of a plain list. Cards show resolution and virtual desktop coordinates (`left`, `top`) so left/right monitor placement is easier to identify. Per-display preview thumbnails can be enabled manually; preview is off by default to reduce resource usage.
 
 The Recent recordings UI shows user-facing media files only: `.wav`, `.mp3`, `.m4a`, `.mp4`, `.avi`, `.mkv`, `.webm`, `.flac`, and `.ogg`. Service files such as `.json`, `.log`, `.tmp`, and `.pyc` remain hidden from that list. Screen session JSON metadata stays on disk for diagnostics and internal references.
 
