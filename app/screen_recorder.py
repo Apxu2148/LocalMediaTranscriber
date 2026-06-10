@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from . import config
+from .input_event_recorder import InputEventRecorder
 from .utils import timestamp_for_filename, write_json_file
 
 
@@ -342,6 +343,14 @@ class ScreenRecorder:
                 "mouse": None,
                 "keyboard": None,
             },
+            "event_logging": {
+                "mouse_enabled": bool(sources["mouse"]),
+                "keyboard_enabled": bool(sources["keyboard"]),
+                "mouse_status": "pending" if sources["mouse"] else "disabled",
+                "keyboard_status": "pending" if sources["keyboard"] else "disabled",
+                "mouse_error": None,
+                "keyboard_error": None,
+            },
             "status": "recording",
         }
         write_json_file(self._recordings_dir / f"{session_id}.json", session)
@@ -355,6 +364,8 @@ class ScreenRecorder:
         *,
         timestamp: str | None = None,
         audio_files: dict[str, str | None] | None = None,
+        record_mouse: bool = False,
+        record_keyboard: bool = False,
     ) -> dict[str, Any]:
         with self._lock:
             if self._thread is not None and self._thread.is_alive():
@@ -364,7 +375,11 @@ class ScreenRecorder:
         session_id, session_dir, session = self.create_session(
             selected_displays,
             normalized_fps,
-            source_flags,
+            {
+                **(source_flags or {}),
+                "mouse": bool(record_mouse),
+                "keyboard": bool(record_keyboard),
+            },
             timestamp=timestamp,
             audio_files=audio_files,
         )
@@ -454,6 +469,7 @@ class ScreenRecorder:
                 if is_recording and self._started_at_perf is not None
                 else 0
             )
+            event_logging = self._session.get("event_logging") if self._session else {}
             return {
                 "is_recording": is_recording,
                 "session_id": self._session.get("session_id") if self._session else None,
@@ -466,6 +482,9 @@ class ScreenRecorder:
                 "elapsed_sec": elapsed,
                 "status": self._session.get("status") if self._session else None,
                 "error": self._error,
+                "event_logging": event_logging,
+                "mouse_events": self._event_api_state(event_logging, "mouse", is_recording),
+                "keyboard_events": self._event_api_state(event_logging, "keyboard", is_recording),
             }
 
     def _record_loop(
@@ -483,6 +502,7 @@ class ScreenRecorder:
         started_at = time.perf_counter()
         finished_at = started_at
         error: str | None = None
+        input_events: InputEventRecorder | None = None
 
         try:
             import cv2
@@ -543,6 +563,15 @@ class ScreenRecorder:
                 for item in writers:
                     item["next_frame_at"] = started_at
 
+                input_events = InputEventRecorder(
+                    recordings_dir=recordings_dir,
+                    timestamp=str(session.get("session_id") or "").removeprefix("session_"),
+                    screens=session.get("screens") or [],
+                    fps=fps,
+                    record_mouse=bool(session.get("sources", {}).get("mouse")),
+                    record_keyboard=bool(session.get("sources", {}).get("keyboard")),
+                )
+                self._apply_input_event_metadata(session, input_events.start(started_at=started_at))
                 write_json_file(session_json_path, session)
                 with self._lock:
                     self._session = session
@@ -586,6 +615,9 @@ class ScreenRecorder:
             if not started_event.is_set():
                 started_event.set()
         finally:
+            if input_events is not None:
+                self._apply_input_event_metadata(session, input_events.stop())
+
             for item in writers:
                 try:
                     item["writer"].release()
@@ -865,6 +897,11 @@ class ScreenRecorder:
             warnings.append("screen_timing_warning")
         if any(screen.get("cursor_warning") for screen in screens):
             warnings.append("screen_cursor_warning")
+        event_logging = session.get("event_logging") or {}
+        if event_logging.get("mouse_status") == "failed":
+            warnings.append("mouse_event_logging_failed")
+        if event_logging.get("keyboard_status") == "failed":
+            warnings.append("keyboard_event_logging_failed")
         return {
             "source_type": "screen",
             "session_id": session.get("session_id"),
@@ -875,6 +912,8 @@ class ScreenRecorder:
             "fps": self._fps,
             "screens": screens,
             "audio": session.get("audio") or {},
+            "events": session.get("events") or {},
+            "event_logging": event_logging,
             "video_paths": video_paths,
             "duration_sec": round(duration, 3),
             "status": session.get("status"),
@@ -886,3 +925,20 @@ class ScreenRecorder:
         with self._lock:
             self._thread = None
             self._started_at_perf = None
+
+    def _apply_input_event_metadata(self, session: dict[str, Any], metadata: dict[str, Any]) -> None:
+        session.setdefault("events", {"mouse": None, "keyboard": None})
+        session.setdefault("event_logging", {})
+        session["events"].update(metadata.get("events") or {})
+        session["event_logging"].update(metadata.get("event_logging") or {})
+
+    def _event_api_state(self, event_logging: dict[str, Any], source: str, is_recording: bool) -> str:
+        enabled = bool(event_logging.get(f"{source}_enabled"))
+        status = str(event_logging.get(f"{source}_status") or ("pending" if enabled else "disabled"))
+        if not enabled:
+            return "disabled"
+        if status == "failed":
+            return "failed"
+        if is_recording and status == "ok":
+            return "recording"
+        return status

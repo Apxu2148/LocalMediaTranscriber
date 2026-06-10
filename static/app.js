@@ -5,7 +5,10 @@ const refreshOutputDevicesButton = document.querySelector("#refreshOutputDevices
 const micSourceCheckbox = document.querySelector("#micSourceCheckbox");
 const systemSourceCheckbox = document.querySelector("#systemSourceCheckbox");
 const screenSourceCheckbox = document.querySelector("#screenSourceCheckbox");
-const recordingSourceCheckboxes = [micSourceCheckbox, systemSourceCheckbox, screenSourceCheckbox];
+const mouseSourceCheckbox = document.querySelector("#mouseSourceCheckbox");
+const keyboardSourceCheckbox = document.querySelector("#keyboardSourceCheckbox");
+const inputSourceHint = document.querySelector("#inputSourceHint");
+const recordingSourceCheckboxes = [micSourceCheckbox, systemSourceCheckbox, screenSourceCheckbox, mouseSourceCheckbox, keyboardSourceCheckbox];
 const micDeviceRow = document.querySelector("#micDeviceRow");
 const systemDeviceRow = document.querySelector("#systemDeviceRow");
 const screenControls = document.querySelector("#screenControls");
@@ -310,6 +313,14 @@ function modeUsesScreen() {
   return screenSourceCheckbox.checked;
 }
 
+function modeUsesMouse() {
+  return mouseSourceCheckbox.checked && modeUsesScreen();
+}
+
+function modeUsesKeyboard() {
+  return keyboardSourceCheckbox.checked && modeUsesScreen();
+}
+
 function hasSelectableDevice(select) {
   return Array.from(select.options).some((option) => !option.disabled && option.value !== "");
 }
@@ -333,11 +344,44 @@ function setRecordingUi(recording) {
   for (const input of displayList.querySelectorAll('input[name="screenDisplay"]')) {
     input.disabled = recording || !modeUsesScreen();
   }
+  syncInputSourceControls(recording);
 
   if (!isTranscribing) {
     setAppState(t(recording ? "recordingActive" : "readyToRecord"), recording ? "active" : "idle");
   }
   setVideoMuxUi();
+}
+
+function syncInputSourceControls(recording) {
+  const screenEnabled = modeUsesScreen();
+  if (!screenEnabled) {
+    mouseSourceCheckbox.checked = false;
+    keyboardSourceCheckbox.checked = false;
+  }
+  mouseSourceCheckbox.disabled = recording || !screenEnabled;
+  keyboardSourceCheckbox.disabled = recording || !screenEnabled;
+  for (const checkbox of [mouseSourceCheckbox, keyboardSourceCheckbox]) {
+    checkbox.closest(".source-checkbox").dataset.disabled = String(!screenEnabled);
+  }
+  updateInputSourceHint();
+}
+
+function updateInputSourceHint() {
+  if (!modeUsesScreen()) {
+    inputSourceHint.textContent = t("inputSourcesScreenRequired");
+    inputSourceHint.hidden = false;
+    inputSourceHint.dataset.type = "info";
+    return;
+  }
+  if (keyboardSourceCheckbox.checked) {
+    inputSourceHint.textContent = t("keyboardPrivacyHint");
+    inputSourceHint.hidden = false;
+    inputSourceHint.dataset.type = "warning";
+    return;
+  }
+  inputSourceHint.textContent = "";
+  inputSourceHint.hidden = true;
+  inputSourceHint.dataset.type = "info";
 }
 
 function setVideoMuxUi() {
@@ -782,6 +826,9 @@ async function refreshStatus() {
     if (status.recording && status.recording_mode) {
       setSourcesFromMode(status.recording_mode);
       screenSourceCheckbox.checked = Boolean(status.screen_recording?.is_recording);
+      const eventLogging = status.screen_recording?.event_logging || {};
+      mouseSourceCheckbox.checked = Boolean(eventLogging.mouse_enabled);
+      keyboardSourceCheckbox.checked = Boolean(eventLogging.keyboard_enabled);
       updateModeUi();
     }
     setRecordingUi(Boolean(status.recording));
@@ -916,6 +963,13 @@ function formatScreenDiagnostics(diagnostics) {
   if (videoPaths.length) {
     lines.push(t("screenVideoFiles", { value: videoPaths.join("\n") }));
   }
+  const eventFiles = diagnostics.events || {};
+  if (eventFiles.mouse) {
+    lines.push(t("mouseEventsFile", { path: eventFiles.mouse }));
+  }
+  if (eventFiles.keyboard) {
+    lines.push(t("keyboardEventsFile", { path: eventFiles.keyboard }));
+  }
   for (const screen of diagnostics.screens || []) {
     if (screen.requested_fps) {
       lines.push(t("screenTimingDiagnostic", {
@@ -932,10 +986,28 @@ function formatScreenDiagnostics(diagnostics) {
   if ((diagnostics.screens || []).some((screen) => screen.cursor_warning)) {
     lines.push(t("screenCursorWarning"));
   }
+  lines.push(...formatInputEventLoggingWarnings(diagnostics.event_logging || {}));
   if (diagnostics.error) {
     lines.push(diagnostics.error);
   }
   return lines.join("\n");
+}
+
+function formatInputEventLoggingWarnings(eventLogging) {
+  const lines = [];
+  if (eventLogging.mouse_status === "failed") {
+    lines.push(t("inputEventLoggingFailed", {
+      source: t("mouseSource"),
+      error: eventLogging.mouse_error || t("notAvailable"),
+    }));
+  }
+  if (eventLogging.keyboard_status === "failed") {
+    lines.push(t("inputEventLoggingFailed", {
+      source: t("keyboardSource"),
+      error: eventLogging.keyboard_error || t("notAvailable"),
+    }));
+  }
+  return lines;
 }
 
 function formatAllDiagnostics(diagnosticsList, errors = []) {
@@ -965,6 +1037,7 @@ function formatRecordingPaths(recordings) {
       return [
         `${recordingSourceLabel(item.source_type)}: ${item.session_dir}`,
         ...(item.video_paths || []),
+        ...formatInputEventLoggingWarnings(item.event_logging || {}),
       ].join("\n");
     }
     return `${recordingSourceLabel(item.source_type)}: ${item.file_path}`;
@@ -1931,6 +2004,8 @@ startRecordButton.addEventListener("click", async () => {
         screen: usesScreen,
         "display_indices": selectedDisplayIndices(),
         "screen_fps": selectedScreenFps(),
+        "record_mouse": modeUsesMouse(),
+        "record_keyboard": modeUsesKeyboard(),
       }),
     });
     setRecordingUi(true);

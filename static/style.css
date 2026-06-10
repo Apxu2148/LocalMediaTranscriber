@@ -248,6 +248,25 @@ h4 {
   accent-color: var(--line);
 }
 
+.input-source-checkbox[data-disabled="true"] {
+  color: var(--muted);
+  background: var(--surface-soft);
+}
+
+.input-source-hint {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.input-source-hint[data-type="warning"] {
+  color: var(--warning);
+}
+
+.input-source-hint[hidden] {
+  display: none;
+}
+
 .recording-device-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -704,12 +723,8 @@ summary:focus-visible {
   overflow-wrap: anywhere;
 }
 
-.result-label {
-  display: block;
+.result-heading {
   margin-top: 18px;
-  color: var(--muted);
-  font-size: 14px;
-  font-weight: 700;
 }
 
 .file-transcribe-form {
@@ -949,6 +964,36 @@ textarea {
   gap: 16px;
 }
 
+.collapsible-summary {
+  cursor: pointer;
+  list-style: none;
+  margin-bottom: 0;
+}
+
+.collapsible-section[open] > .collapsible-summary {
+  margin-bottom: 18px;
+}
+
+.collapsible-summary::-webkit-details-marker {
+  display: none;
+}
+
+.collapse-toggle-label {
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 12px;
+  background: var(--surface);
+  color: var(--accent);
+  font-size: 14px;
+  line-height: 1.2;
+}
+
+.collapsible-section[open] [data-collapsed],
+.collapsible-section:not([open]) [data-expanded] {
+  display: none;
+}
+
 .storage-block {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -1161,6 +1206,11 @@ textarea {
   justify-content: flex-end;
   gap: 10px;
   margin-top: 16px;
+}
+
+.tour-card .tour-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .tour-actions button[data-secondary="true"] {

@@ -3,3 +3,4 @@ nvidia-cudnn-cu12>=9.22,<10.0
 nvidia-cuda-nvrtc-cu12>=12.9,<13.0
 mss>=9.0,<11.0
 opencv-python>=4.9,<5.0
+pynput>=1.7,<2.0

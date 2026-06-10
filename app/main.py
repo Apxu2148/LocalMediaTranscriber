@@ -81,6 +81,8 @@ class StartRecordingRequest(BaseModel):
     screen: bool = False
     display_indices: list[int] = Field(default_factory=list)
     screen_fps: int = 3
+    record_mouse: bool = False
+    record_keyboard: bool = False
 
 
 class ScreenRecordingStartRequest(BaseModel):
@@ -231,6 +233,8 @@ def status() -> dict:
         "mic_recording": recorder.is_recording,
         "system_recording": system_recorder.is_recording,
         "screen_recording": screen_status,
+        "mouse_events": screen_status.get("mouse_events"),
+        "keyboard_events": screen_status.get("keyboard_events"),
         "ffmpeg_found": shutil.which("ffmpeg") is not None,
         "whisper_model": config.WHISPER_MODEL,
         "whisper_models": list(config.SUPPORTED_WHISPER_MODELS),
@@ -489,6 +493,8 @@ def start_recording(payload: StartRecordingRequest | None = Body(default=None)) 
     mode = normalize_recording_mode(request.mode, allow_none=True)
     uses_audio = mode in {"mic", "system", "both"}
     uses_screen = bool(request.screen)
+    uses_mouse = bool(request.record_mouse) and uses_screen
+    uses_keyboard = bool(request.record_keyboard) and uses_screen
     mic_device_id = request.mic_device_id if request.mic_device_id is not None else request.device_id
     output_device_id = request.output_device_id
     timestamp = timestamp_for_filename()
@@ -507,9 +513,11 @@ def start_recording(payload: StartRecordingRequest | None = Body(default=None)) 
         active_recording_mode = mode
 
     logger.info(
-        "Start recording request: mode=%s screen=%s display_indices=%s screen_fps=%s mic_device_id=%s output_device_id=%s",
+        "Start recording request: mode=%s screen=%s mouse=%s keyboard=%s display_indices=%s screen_fps=%s mic_device_id=%s output_device_id=%s",
         mode,
         uses_screen,
+        uses_mouse,
+        uses_keyboard,
         request.display_indices,
         request.screen_fps,
         mic_device_id,
@@ -542,9 +550,13 @@ def start_recording(payload: StartRecordingRequest | None = Body(default=None)) 
                     source_flags={
                         "mic": mode in {"mic", "both"},
                         "system": mode in {"system", "both"},
+                        "mouse": uses_mouse,
+                        "keyboard": uses_keyboard,
                     },
                     timestamp=timestamp,
                     audio_files=audio_files,
+                    record_mouse=uses_mouse,
+                    record_keyboard=uses_keyboard,
                 )
             )
     except (RuntimeError, ScreenRecorderError) as exc:
@@ -563,6 +575,8 @@ def start_recording(payload: StartRecordingRequest | None = Body(default=None)) 
         "recording": True,
         "mode": mode,
         "screen": uses_screen,
+        "record_mouse": uses_mouse,
+        "record_keyboard": uses_keyboard,
         "recordings": recordings,
     }
     if recordings:

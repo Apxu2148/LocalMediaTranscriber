@@ -21,6 +21,9 @@ class UiContractTests(unittest.TestCase):
             "refreshMicDevicesButton",
             "refreshOutputDevicesButton",
             "screenSourceCheckbox",
+            "mouseSourceCheckbox",
+            "keyboardSourceCheckbox",
+            "inputSourceHint",
             "screenControls",
             "displayList",
             "screenFpsSelect",
@@ -42,6 +45,7 @@ class UiContractTests(unittest.TestCase):
             "queueClearButton",
             "queueMetrics",
             "queueProgress",
+            "latestResultHeading",
             "transcriptText",
         ):
             self.assertIn(f'id="{element_id}"', html)
@@ -58,6 +62,10 @@ class UiContractTests(unittest.TestCase):
         self.assertIn('"/api/displays"', app_js)
         self.assertIn('"screen_fps"', app_js)
         self.assertIn('"display_indices"', app_js)
+        self.assertIn('"record_mouse"', app_js)
+        self.assertIn('"record_keyboard"', app_js)
+        self.assertIn("syncInputSourceControls", app_js)
+        self.assertIn("keyboardPrivacyHint", app_js)
         self.assertIn("latestTechnicalItem.technical_details", app_js)
         self.assertIn("/api/transcripts/read", app_js)
         self.assertIn("loadTranscript(file.name, true)", app_js)
@@ -98,6 +106,15 @@ class UiContractTests(unittest.TestCase):
         self.assertIn("max-height: 300px;", css)
         self.assertIn("overflow-y: auto;", css)
 
+    def test_files_and_benchmark_sections_are_collapsible_by_default(self) -> None:
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        css = (STATIC_DIR / "style.css").read_text(encoding="utf-8")
+        self.assertIn('<details id="filesSection" class="workspace-section collapsible-section">', html)
+        self.assertIn('<details id="benchmarkSection" class="workspace-section collapsible-section">', html)
+        self.assertIn('data-i18n="show"', html)
+        self.assertIn('data-i18n="hide"', html)
+        self.assertIn(".collapsible-section[open]", css)
+
     def test_favicon_link_exists(self) -> None:
         html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
         icon = STATIC_DIR / "icons" / "favicon.svg"
@@ -111,6 +128,14 @@ class UiContractTests(unittest.TestCase):
         self.assertGreaterEqual(len(selectors), 10)
         for selector in selectors:
             self.assertIn(f'id="{selector[1:]}"', html, selector)
+
+    def test_tour_buttons_are_back_next_finish_order(self) -> None:
+        tour_js = (STATIC_DIR / "tour.js").read_text(encoding="utf-8")
+        self.assertLess(tour_js.index('createButton("tourBack"'), tour_js.index('createButton("tourNext"'))
+        self.assertLess(tour_js.index('createButton("tourNext"'), tour_js.index('createButton("tourFinish"'))
+        self.assertIn('actions.children[0].dataset.role = "back"', tour_js)
+        self.assertIn('actions.children[1].dataset.role = "next"', tour_js)
+        self.assertIn('actions.children[2].dataset.role = "finish"', tour_js)
 
 
 if __name__ == "__main__":

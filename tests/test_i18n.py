@@ -41,6 +41,10 @@ class I18nTests(unittest.TestCase):
             "microphoneSwitchFailed",
             "outputDeviceSwitchFailed",
             "screenSource",
+            "mouseSource",
+            "keyboardSource",
+            "inputSourcesScreenRequired",
+            "keyboardPrivacyHint",
             "displays",
             "displayFound",
             "displaysFound",
@@ -54,6 +58,9 @@ class I18nTests(unittest.TestCase):
             "screenTimingWarning",
             "screenTimingDiagnostic",
             "screenCursorWarning",
+            "mouseEventsFile",
+            "keyboardEventsFile",
+            "inputEventLoggingFailed",
             "videoMuxTitle",
             "videoMuxSelectVideo",
             "videoMuxSelectMic",
@@ -94,6 +101,8 @@ class I18nTests(unittest.TestCase):
             "modelInfoLargeV3Hardware",
             "tourModelsTitle",
             "tourModelsText",
+            "show",
+            "hide",
         ):
             self.assertIn(key, en_keys)
 

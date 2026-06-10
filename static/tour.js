@@ -101,7 +101,7 @@
       total: steps.length,
     });
     card.querySelector("[data-role='back']").disabled = !findStep(nextIndex - 1, -1);
-    card.querySelector("[data-role='next']").textContent = t(findStep(nextIndex + 1, 1) ? "tourNext" : "tourFinish");
+    card.querySelector("[data-role='next']").disabled = !findStep(nextIndex + 1, 1);
   }
 
   function start() {
@@ -113,8 +113,7 @@
     card.innerHTML = "<small data-role='counter'></small><h2></h2><p></p><div class='tour-actions'></div>";
     const actions = card.querySelector(".tour-actions");
     actions.append(
-      createButton("tourBack", () => showStep(activeIndex - 1, -1), true),
-      createButton("tourFinish", finish, true),
+      createButton("tourBack", () => showStep(activeIndex - 1, -1)),
       createButton("tourNext", () => {
         if (findStep(activeIndex + 1, 1)) {
           showStep(activeIndex + 1, 1);
@@ -122,9 +121,11 @@
           finish();
         }
       }),
+      createButton("tourFinish", finish),
     );
     actions.children[0].dataset.role = "back";
-    actions.children[2].dataset.role = "next";
+    actions.children[1].dataset.role = "next";
+    actions.children[2].dataset.role = "finish";
     document.body.append(backdrop, card);
     showStep(0);
   }

@@ -12,6 +12,7 @@ This project is a separate fork of `LocalAudioTranscriber`. The current version 
 - Record one or more physical displays to per-display video files in `data\recordings`.
 - Preserve real-time screen video duration by duplicating the latest frame when capture falls below the selected FPS.
 - Draw a visible mouse cursor marker into screen recordings.
+- Log mouse and keyboard input events for screen recording sessions.
 - Merge one screen video with microphone and/or system audio into a video with sound through FFmpeg.
 - Keep the recent recordings list compact and hide service JSON metadata files from the normal user file list.
 - Show microphone and system audio levels.
@@ -121,7 +122,9 @@ Screen videos and screen session JSON:
 C:\Python\LocalMediaTranscriber\data\recordings
 ```
 
-New screen recordings are stored as a flat list beside audio recordings, for example `screen1_20260609_001122__30fps.mp4` and `session_20260609_001122.json`. Older MVP runs may still exist under `data\media_sessions`.
+New screen recordings are stored as a flat list beside audio recordings, for example `screen1_20260609_001122__30fps.mp4` and `session_20260609_001122.json`. When mouse or keyboard logging is enabled, `mouse_events_YYYYMMDD_HHMMSS.jsonl` and `keyboard_events_YYYYMMDD_HHMMSS.jsonl` are saved beside the session JSON. Older MVP runs may still exist under `data\media_sessions`.
+
+Mouse and keyboard event logging is available only when screen recording is enabled. Keyboard logging records special keys and hotkeys by default; ordinary typed text is not recorded. The technical schema is documented in `docs\DEVELOPERS.md`.
 
 The Recent recordings UI shows user-facing media files only: `.wav`, `.mp3`, `.m4a`, `.mp4`, `.avi`, `.mkv`, `.webm`, `.flac`, and `.ogg`. Service files such as `.json`, `.log`, `.tmp`, and `.pyc` remain hidden from that list. Screen session JSON metadata stays on disk for diagnostics and internal references.
 
@@ -169,6 +172,6 @@ This is a temporary blue-violet SVG icon. To replace it later, keep the same fil
 
 ## Notes
 
-For `.mp3`, `.m4a`, `.mp4`, `.webm`, and `.mkv`, make sure `ffmpeg` is installed and available in `PATH`. FFmpeg is also required for the "Merge video with audio" workflow. Uploaded video support extracts the audio track only; screen recording creates video files with a cursor marker but does not perform OCR, keyframe extraction, scene detection, mouse event logging, keyboard logging, or VLM analysis yet.
+For `.mp3`, `.m4a`, `.mp4`, `.webm`, and `.mkv`, make sure `ffmpeg` is installed and available in `PATH`. FFmpeg is also required for the "Merge video with audio" workflow. Uploaded video support extracts the audio track only; screen recording creates video files with a cursor marker and optional input event JSONL files, but does not perform OCR, keyframe extraction, scene detection, typed text logging, or VLM analysis yet.
 
 Use the app only with audio, video, and files you are allowed to record, download, process, and transcribe.

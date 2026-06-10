@@ -158,14 +158,135 @@ Key behavior:
 
 The module lazy-imports `mss`, `cv2`, and `numpy` inside runtime capture paths so unit tests and basic app import do not require an active screen capture environment.
 
-Future cursor/event work:
+### `app/input_event_recorder.py`
 
-- Optional soft yellow cursor highlight.
-- Click pulse animation.
-- Mouse event timeline.
-- `mouse_events.jsonl`.
+Input event recorder for screen media sessions.
 
-The future concept is to draw a soft yellow circular highlight around the cursor and briefly enlarge it on click so CV tools can detect clicks more easily. Do not add click visualization or event logging without an explicit task.
+Key behavior:
+
+- Uses `pynput` for global mouse and keyboard listeners.
+- Writes line-delimited UTF-8 JSON into `data\recordings`.
+- Creates `mouse_events_YYYYMMDD_HHMMSS.jsonl` and `keyboard_events_YYYYMMDD_HHMMSS.jsonl` using the same timestamp as `session_YYYYMMDD_HHMMSS.json`.
+- Keeps mouse and keyboard logging optional and tied to screen recording.
+- Maps virtual desktop coordinates to selected recorded displays without assuming monitor coordinates start at `(0, 0)`.
+- Records mouse positions at the selected screen FPS.
+- Records mouse button down/up and scroll events as event-based callbacks.
+- Records keyboard special keys, modifier keys, and hotkeys while suppressing ordinary typed text.
+- Sanitizes listener startup errors for session JSON and never raises fatal errors back into screen/audio recording.
+
+The module lazy-imports `pynput` only when logging is requested so the app and tests can import normally without active global hook support.
+
+### Input Event Logging
+
+Input event logging is an MVP metadata layer for screen recording sessions. It does not draw cursor trails, click pulses, OCR, CV, VLM analysis, or typed text.
+
+#### Event Files
+
+Event files live beside screen videos and session JSON in `data\recordings`:
+
+- `mouse_events_YYYYMMDD_HHMMSS.jsonl`
+- `keyboard_events_YYYYMMDD_HHMMSS.jsonl`
+
+The timestamp is reused from the media session. Session JSON references these files:
+
+```json
+{
+  "events": {
+    "mouse": "mouse_events_20260610_143000.jsonl",
+    "keyboard": "keyboard_events_20260610_143000.jsonl"
+  },
+  "event_logging": {
+    "mouse_enabled": true,
+    "keyboard_enabled": true,
+    "mouse_status": "ok",
+    "keyboard_status": "ok",
+    "mouse_error": null,
+    "keyboard_error": null
+  }
+}
+```
+
+When a source is disabled, its event file reference is `null` and its status is `disabled`. If a listener cannot start, the status is `failed`, the error is a short sanitized message, and any diagnostic JSONL event is best-effort only.
+
+#### Timestamp Semantics
+
+Every input event has `t`, a float number of seconds from the common screen recording/session start. This timeline is intended to be comparable to:
+
+- screen video playback time;
+- microphone/system audio timelines in the same session;
+- future transcript, OCR, CV, and derived visual timelines.
+
+#### Mouse Synchronization
+
+Mouse position events are frame-based and sampled at the selected screen FPS:
+
+```json
+{"t":12.4,"type":"position","x":842,"y":514,"screen_index":1,"screen_status":"recorded_screen"}
+```
+
+Mouse button and scroll events are event-based and must preserve multiple actions between two frame samples:
+
+```json
+{"t":12.455,"type":"down","x":842,"y":514,"screen_index":1,"screen_status":"recorded_screen","button":"left"}
+{"t":12.7,"type":"up","x":900,"y":514,"screen_index":1,"screen_status":"recorded_screen","button":"left"}
+{"t":13.12,"type":"scroll","x":920,"y":600,"screen_index":1,"screen_status":"recorded_screen","dx":0,"dy":-3}
+```
+
+The MVP does not emit exact `frame_index` because screen frame writing and input sampling are separate threads. Future work can add exact frame IDs if the screen recorder exposes a safe shared frame clock.
+
+#### Keyboard Synchronization
+
+Keyboard events are event-based. The MVP records only:
+
+- special keys such as Enter, Esc, Tab, Backspace, Delete, arrows, Home/End, PageUp/PageDown, and F1-F12;
+- modifier key down/up events for Ctrl, Alt, Shift, and Win;
+- hotkeys such as Ctrl+C, Ctrl+V, Ctrl+L, Ctrl+S, Alt+Tab, and Ctrl+Alt+Delete when detectable.
+
+Ordinary typed text is not recorded. Plain letters, digits, and normal text input are suppressed. A letter or digit is logged only when combined with Ctrl, Alt, or Win, for example:
+
+```json
+{"t":2.135,"type":"hotkey","keys":["Ctrl","L"]}
+{"t":2.84,"type":"hotkey","keys":["Ctrl","V"]}
+{"t":3.2,"type":"key_down","key":"Enter"}
+{"t":3.26,"type":"key_up","key":"Enter"}
+```
+
+Shift plus a plain letter is treated as text input and is not logged as a hotkey.
+
+#### Multiple Screens
+
+Mouse events include:
+
+- `screen_index`: the recorded display index that contains the cursor, or `null`;
+- `screen_status`: `recorded_screen` or `outside_recorded_screens`.
+
+If the cursor is outside all selected displays, the event is still written and must not crash logging:
+
+```json
+{"t":20.2,"type":"position","x":-400,"y":500,"screen_index":null,"screen_status":"outside_recorded_screens"}
+```
+
+Display bounds use the monitor `left` and `top` values reported by `mss`, so negative virtual desktop coordinates are valid.
+
+#### Future Derived Analysis
+
+Click vs drag can be inferred from mouse `down`/`up` duration and cursor movement between those timestamps. A future analysis layer may derive a separate `visual_events.json` timeline from the raw JSONL inputs and screen video.
+
+#### Future Backlog
+
+- Cursor trail overlay:
+  - draw a polyline over the last 1.0-1.5 seconds;
+  - use actual mouse position snapshots;
+  - make older segments more transparent;
+  - add a click marker or pulse for 0.3-0.5 seconds.
+- Pause/resume hotkeys:
+  - Ctrl+Alt+F9;
+  - Ctrl+Alt+F10.
+- Optional typed text logging only as an explicit opt-in feature with separate UI consent and storage labeling.
+
+#### Security and Fallback
+
+Corporate security tools, antivirus, or EDR policies may block global input listeners. The app must continue recording screen/audio if mouse or keyboard listener startup fails. The short sanitized error belongs in `session_*.json` under `event_logging`; long stack traces should stay out of session metadata.
 
 ### `app/video_muxer.py`
 
@@ -280,14 +401,14 @@ Important areas:
 - Header and language switch.
 - Global transcription settings.
 - Whisper model manager table below transcription settings.
-- Recording section with microphone, system audio, screen, display, and FPS controls.
+- Recording section with microphone, system audio, screen, display, FPS, mouse action, and keyboard action controls.
 - Recording device selectors, display selectors, and level meters.
 - Help section.
 - Queue/source forms.
 - Manual video/audio merge form.
 - Runtime metrics and queue progress.
-- File storage section with compact scrollable recordings/transcripts lists.
-- Benchmark section.
+- Collapsible file storage section with compact scrollable recordings/transcripts lists.
+- Collapsible benchmark section.
 
 The contract tests look for specific IDs, order, and structural elements. Keep ID changes deliberate and update tests only when the product contract truly changes.
 
@@ -363,8 +484,8 @@ Browser tab/app icon assets.
 ## Current Media Recording Flow
 
 1. The frontend loads storage, devices, model status, and initial state.
-2. The user selects recording sources: `mic`, `system`, `screen`, or a supported combination.
-3. If Screen is enabled, the UI shows physical displays and the screen FPS selector.
+2. The user selects recording sources: `mic`, `system`, `screen`, optional mouse actions, optional keyboard actions, or a supported combination.
+3. If Screen is enabled, the UI shows physical displays, the screen FPS selector, and enables mouse/keyboard action logging controls.
 4. The frontend polls microphone and/or system levels according to the selected audio sources.
 5. `POST /api/record/start` validates the selected sources and checks for conflicting benchmark work.
 6. If screen is enabled, the backend validates display selection and FPS before opening audio streams.
@@ -372,14 +493,15 @@ Browser tab/app icon assets.
 8. For `system`, `SystemAudioRecorder.start()` creates `system_<timestamp>.wav`.
 9. For `mic` + `system`, both recorders start with the same timestamp and save separate files. They are not mixed.
 10. For `screen`, `ScreenRecorder.start()` creates flat screen video files and `session_YYYYMMDD_HHMMSS.json` in `data\recordings`.
-11. If audio and screen are recorded together, the screen session JSON references the actual audio filenames.
-12. Screen videos use the selected FPS as the `VideoWriter` FPS. When capture falls behind, the latest captured frame is duplicated into missing output frame slots so playback duration remains real time.
-13. A simple cursor marker is drawn into the display video that currently contains the cursor.
-14. While recording, the UI shows level meters, screen selection state, and a timer.
-15. Device switch endpoints can update microphone or output device during recording.
-16. `POST /api/record/stop` stops the active recorder(s), gathers diagnostics, updates the latest recording references, and refreshes storage.
+11. If mouse or keyboard action logging is enabled, `InputEventRecorder` creates JSONL event files with the same timestamp and updates `events` / `event_logging` in session JSON.
+12. If audio and screen are recorded together, the screen session JSON references the actual audio filenames.
+13. Screen videos use the selected FPS as the `VideoWriter` FPS. When capture falls behind, the latest captured frame is duplicated into missing output frame slots so playback duration remains real time.
+14. A simple cursor marker is drawn into the display video that currently contains the cursor.
+15. While recording, the UI shows level meters, screen selection state, input logging state when available, and a timer.
+16. Device switch endpoints can update microphone or output device during recording.
+17. `POST /api/record/stop` stops the active recorder(s), gathers diagnostics, updates the latest recording references, and refreshes storage.
 
-Audio files, screen videos, merged videos, and new screen session JSON all live in `data\recordings` as a flat list. `data\media_sessions` is legacy-only for earlier MVP runs.
+Audio files, screen videos, input event JSONL files, merged videos, and new screen session JSON all live in `data\recordings` as a flat list. `data\media_sessions` is legacy-only for earlier MVP runs.
 
 `GET /api/storage` exposes only user-facing recordings in the normal recordings file list: `.wav`, `.mp3`, `.m4a`, `.mp4`, `.avi`, `.mkv`, `.webm`, `.flac`, and `.ogg`. Service metadata such as `session_*.json`, `.log`, `.tmp`, and `.pyc` remains on disk but is hidden from the regular UI list.
 
@@ -528,8 +650,8 @@ Planned product direction:
 3. Screen recording MVP.
 4. Media session structure.
 5. Multiple screens saved as separate video files.
-6. Mouse events.
-7. Keyboard events with a clear privacy warning.
+6. Mouse events MVP.
+7. Keyboard events MVP with a clear privacy warning.
 8. Keyframes.
 9. OCR.
 10. VLM.
@@ -548,7 +670,7 @@ Suggested implementation shape for future media work:
 Do not add these until explicitly requested:
 
 - OCR, VLM, keyframe extraction, or scene detection.
-- Mouse or keyboard logging.
+- Cursor trail overlays, click pulse overlays, or typed text logging.
 - Automatic audio/video muxing at stop time or a complex timeline editor.
 - A complex media-session editor/viewer.
 - Backend audio recording logic changes.
