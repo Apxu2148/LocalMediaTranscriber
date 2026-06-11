@@ -6,9 +6,11 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.frame_extractor import (
+    ALLOWED_JPEG_QUALITIES,
     VideoFrameExtractor,
     estimate_frame_count,
     frame_timestamps,
+    normalize_jpeg_quality,
     read_video_metadata,
 )
 
@@ -22,6 +24,14 @@ try:
 except Exception:
     cv2 = None
     np = None
+
+
+class FrameExtractorSettingsTests(unittest.TestCase):
+    def test_jpeg_quality_100_is_allowed_and_default_stays_90(self) -> None:
+        self.assertIn(100, ALLOWED_JPEG_QUALITIES)
+        self.assertEqual(90, normalize_jpeg_quality(None))
+        self.assertEqual(90, normalize_jpeg_quality(""))
+        self.assertEqual(100, normalize_jpeg_quality(100))
 
 
 @unittest.skipUnless(cv2 is not None and np is not None, "opencv-python is required for frame extractor fixtures")

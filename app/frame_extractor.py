@@ -17,7 +17,7 @@ DEFAULT_FRAME_RATE = {"mode": "interval", "seconds": 10}
 DEFAULT_JPEG_QUALITY = 90
 ALLOWED_INTERVAL_SECONDS = (30, 20, 15, 10, 5, 3, 2, 1)
 ALLOWED_EXTRACTION_FPS = (2, 3, 5, 10, 15, 20, 30)
-ALLOWED_JPEG_QUALITIES = (75, 85, 90, 95)
+ALLOWED_JPEG_QUALITIES = (75, 85, 90, 95, 100)
 
 
 class FrameExtractionError(RuntimeError):
@@ -72,8 +72,8 @@ def normalize_jpeg_quality(value: int | str | None) -> int:
         quality = int(value)
     except (TypeError, ValueError) as exc:
         raise ValueError("JPEG quality must be a number.") from exc
-    if quality < 60 or quality > 95:
-        raise ValueError("JPEG quality must be between 60 and 95.")
+    if quality < 60 or quality > 100:
+        raise ValueError("JPEG quality must be between 60 and 100.")
     return quality
 
 

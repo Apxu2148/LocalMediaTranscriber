@@ -224,6 +224,23 @@ class QueueManagerTests(unittest.TestCase):
         self.assertEqual(90, item["frame_extraction"]["jpeg_quality"])
         self.assertEqual(4, item["frame_extraction"]["estimated_frame_count"])
 
+    def test_video_item_accepts_jpeg_quality_100_without_changing_default(self) -> None:
+        manager = self.make_manager(
+            processor=lambda _item, _model, _device: {},
+            video_metadata_reader=lambda _path: {"duration_sec": 10, "fps": 30, "width": 100, "height": 50},
+        )
+        status = self.track_job(manager.add_files([self.make_file("clip.avi")]))
+        item = status["items"][0]
+        self.assertEqual(90, item["frame_extraction"]["jpeg_quality"])
+
+        updated = manager.update_item(
+            item["index"],
+            operations={"transcribe_audio": False, "extract_frames": True},
+            frame_extraction={"rate": {"mode": "interval", "seconds": 10}, "jpeg_quality": 100},
+        )
+
+        self.assertEqual(100, updated["items"][0]["frame_extraction"]["jpeg_quality"])
+
     def test_video_item_without_executable_operation_is_rejected(self) -> None:
         manager = self.make_manager(
             processor=lambda _item, _model, _device: {},

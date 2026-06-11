@@ -83,6 +83,14 @@ class UiContractTests(unittest.TestCase):
         self.assertIn("data-queue-operation", app_js)
         self.assertIn("data-queue-frame-rate", app_js)
         self.assertIn("data-queue-jpeg-quality", app_js)
+        self.assertIn("75, 85, 90, 95, 100", app_js)
+        self.assertIn('t("transcriptResultPath"', app_js)
+        self.assertIn('t("framesResultFolder"', app_js)
+        self.assertIn('t("framesResultCount"', app_js)
+        self.assertIn('t("framesResultIndex"', app_js)
+        self.assertIn("queueItemOutputLines", app_js)
+        self.assertIn("displayOutputPath", app_js)
+        self.assertIn('lastIndexOf("/data/")', app_js)
         self.assertIn("frameCountWarning", app_js)
         self.assertIn("removeFromQueue", app_js)
         self.assertIn("cancelCurrentItem", app_js)
@@ -104,6 +112,15 @@ class UiContractTests(unittest.TestCase):
         self.assertIn('t("defaultSuffix")', app_js)
         self.assertNotIn('"/api/transcribe"', app_js)
         self.assertNotIn('"/api/transcribe/file"', app_js)
+
+    def test_queue_start_button_uses_processing_copy(self) -> None:
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        i18n = (STATIC_DIR / "i18n.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="queueStartButton" type="button" data-i18n="startProcessing"', html)
+        self.assertIn('startProcessing: "Start processing"', i18n)
+        self.assertNotIn('data-i18n="startTranscription"', html)
+        self.assertNotIn('Start transcription"', i18n)
 
     def test_video_frame_queue_controls_and_avi_accept_contract_exist(self) -> None:
         html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")

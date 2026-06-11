@@ -4,7 +4,7 @@ This guide is the technical handoff for future LocalMediaTranscriber iterations.
 
 ## Project Purpose
 
-LocalMediaTranscriber is a local Windows app for recording and transcribing media. Today it is still close to its source fork, LocalAudioTranscriber: it records microphone audio, records system audio through WASAPI loopback, and transcribes audio or audio tracks from supported media files with `faster-whisper`.
+LocalMediaTranscriber is a local Windows app for recording and processing media. Today it is still close to its source fork, LocalAudioTranscriber: it records microphone audio, records system audio through WASAPI loopback, transcribes audio or audio tracks from supported media files with `faster-whisper`, and can extract JPEG frames from video queue items.
 
 The product direction is broader than audio-only transcription. Future iterations should evolve toward media sessions that can combine microphone audio, system audio, screen video, extracted frames, OCR, and VLM analysis while preserving the stable audio recording and queue behavior already present.
 
@@ -351,7 +351,7 @@ Key behavior:
 
 ### `app/queue_manager.py`
 
-Sequential global transcription queue.
+Sequential media processing queue.
 
 Key behavior:
 
@@ -360,6 +360,9 @@ Key behavior:
 - Creates one job JSON under `data\jobs`.
 - Processes items sequentially in one worker thread.
 - Supports stop-after-current, clear, retry failed items, pending-item removal, running frame-extraction cancellation, status snapshots, elapsed time, ETA, and persistent job snapshots.
+- Treat the queue as a media processing queue, not only a transcription queue.
+- Current executable operations are `transcribe_audio` and `extract_frames`.
+- Visible but disabled future operations are `ocr` and `cv`.
 - Stores per-video operation choices in `operations`: `transcribe_audio`, `extract_frames`, `ocr`, and `cv`.
 - Keeps OCR and CV rejected in the backend; the current UI renders them as disabled coming-soon options.
 - Stores per-video frame settings in `frame_extraction`: extraction rate, JPEG quality, estimates, warning flag, and latest extraction result.
@@ -376,6 +379,8 @@ Key behavior:
 - Supports `.mp4`, `.webm`, `.mkv`, and `.avi` through `config.SUPPORTED_VIDEO_EXTENSIONS`.
 - Normalizes extraction rates to fixed interval values (`30`, `20`, `15`, `10`, `5`, `3`, `2`, `1` seconds) or FPS values (`2`, `3`, `5`, `10`, `15`, `20`, `30`).
 - Defaults to one frame every `10` seconds and JPEG quality `90`.
+- Available UI quality options include `75`, `85`, `90`, `95`, and `100`.
+- JPEG quality `100` can create much larger files and usually should not be required for OCR/CV.
 - Reads metadata with OpenCV: duration, FPS, width, height, and source frame count when available.
 - Estimates output frame count and a rough min/max disk usage range from duration, dimensions, and quality.
 - Writes each extraction to `data\recordings\<base>__frames`.
@@ -625,7 +630,7 @@ Audio files, screen videos, input event JSONL files, merged videos, and new scre
 6. One audio file is mapped as the output audio track. Two audio files are mixed into one AAC track.
 7. The output MP4 is saved back into `data\recordings`.
 
-## Current Transcription Queue Flow
+## Current Media Processing Queue Flow
 
 1. The user adds sources to the queue:
    - latest microphone/system recordings through `/api/queue/add-recordings`;
@@ -641,20 +646,41 @@ Audio files, screen videos, input event JSONL files, merged videos, and new scre
 9. URL items are downloaded/extracted through `UrlDownloader` before processing.
 10. For audio transcription, files are validated and passed to `AudioTranscriber`; `TranscriptStore` saves TXT and JSON outputs.
 11. For frame extraction, `VideoFrameExtractor` writes JPEGs and `frames_index.json` under `data\recordings\<base>__frames`.
-12. A running item can be cancelled only while its status is `extracting_frames`; the item becomes `cancelled` and the worker continues to the next pending item.
-13. Queue status is polled by the UI and shows counts, current item, elapsed time, ETA, progress, operation settings, estimates, and frame results.
-14. `stop-after-current` completes the active item and cancels pending items.
-15. `retry-errors` moves failed items back to pending for a later manual start.
+12. A running item can be cancelled only while its status is `extracting_frames`; cancellation is cooperative, partial frames are kept, `frames_index.json` marks the run cancelled/incomplete, and the worker continues to the next pending item.
+13. Running audio transcription is currently not safely cancellable; the UI disables that cancel action and explains why.
+14. Queue status is polled by the UI and shows counts, current item, elapsed time, ETA, progress, operation settings, estimates, transcript output paths, frame folder paths, frame counts, and frame index paths.
+15. `stop-after-current` completes the active item and cancels pending items.
+16. `retry-errors` moves failed items back to pending for a later manual start.
 
 The queue is intentionally sequential. Do not parallelize transcription or frame extraction without a separate design for GPU memory, disk pressure, cancellation, UI status, and job persistence.
+
+Current output relationship:
+
+```text
+source video
+  -> audio transcript in data/transcripts
+  -> frames folder in data/recordings/<base>__frames/
+  -> frames_index.json inside frames folder
+```
+
+Outputs are not physically unified into one folder yet. The queue derives a shared source/output base so transcript names, frame folders, and future derived artifacts remain visibly related. Future OCR/CV outputs and any combined media index should keep using the same source/output base naming.
 
 ## Development Cleanup
 
 Use `run.bat` for normal local startup. It prints a shutdown hint after the server command exits; if Ctrl+C or a closed console leaves stale locks, use the scoped cleanup scripts.
 
+Current script chain:
+
+```text
+run.bat
+stop.bat
+cleanup-dev.bat
+scripts/cleanup_dev.ps1
+```
+
 `stop.bat` is the user-facing stop command. It calls `scripts\cleanup_dev.ps1 -StopOnly` and only stops Python/uvicorn processes whose command line references the resolved `C:\Python\LocalMediaTranscriber` project root. It must not kill unrelated `python.exe` processes.
 
-`cleanup-dev.bat` calls the same PowerShell script without `-StopOnly`. It:
+`cleanup-dev.bat` calls `scripts\cleanup_dev.ps1` without `-StopOnly`. It:
 
 - stops project-scoped Python/uvicorn server processes;
 - removes `__pycache__` directories under `app`, `tests`, and `scripts`;
@@ -663,6 +689,8 @@ Use `run.bat` for normal local startup. It prints a shutdown hint after the serv
 - prints `git status --short` at the end.
 
 The PowerShell script uses command-line filtering because process names alone are too broad. If process command lines cannot be read, the script refuses to guess and reports that limitation.
+
+Before commit, if Git lock or cache issues appear, `cleanup-dev.bat` is the correct tool.
 
 ## RU/EN Localization Notes
 

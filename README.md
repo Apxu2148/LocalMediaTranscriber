@@ -1,6 +1,6 @@
 # LocalMediaTranscriber
 
-LocalMediaTranscriber is a local Windows web app for recording microphone audio, recording system audio through WASAPI loopback, and transcribing local media with `faster-whisper`.
+LocalMediaTranscriber is a local Windows web app for recording microphone audio, recording system audio through WASAPI loopback, and processing local media with `faster-whisper` plus video frame extraction tools.
 
 This project is a separate fork of `LocalAudioTranscriber`. The current version still keeps the proven audio recording and transcription workflow, while the future direction is broader media capture: media sessions, screen recording, extracted frames, OCR, VLM analysis, and optional local or server-side processing.
 
@@ -17,11 +17,12 @@ This project is a separate fork of `LocalAudioTranscriber`. The current version 
 - Merge one screen video with microphone and/or system audio into a video with sound through FFmpeg.
 - Keep the recent recordings list compact and hide service JSON metadata files from the normal user file list.
 - Show microphone and system audio levels.
-- Add latest recordings, local files, or public URLs to a global transcription queue.
+- Add latest recordings, local files, or public URLs to a global media processing queue.
 - Transcribe `.wav`, `.mp3`, `.m4a`, `.mp4`, `.webm`, `.mkv`, and `.avi` sources.
 - Extract and transcribe the audio track from supported video files.
 - Choose per-video queue operations: transcribe audio, extract frames, or both.
 - Extract video frames to a per-source folder with a `frames_index.json` manifest.
+- Choose JPEG quality `75`, `85`, `90`, `95`, or `100` for frame extraction; `90` is the default.
 - Remove pending queue items, or cancel a running frame extraction item and continue with the rest of the queue.
 - Choose Whisper models: `tiny`, `base`, `small`, `medium`, `large-v3`.
 - Manage Whisper models before transcription: check local availability, download, verify, view info, and delete selected local caches.
@@ -86,6 +87,19 @@ The app opens at:
 http://127.0.0.1:8000
 ```
 
+Existing BAT files:
+
+```text
+run.bat
+  Starts Local Media Transcriber.
+
+stop.bat
+  Stops the app/server processes only.
+
+cleanup-dev.bat
+  Stops the app/server processes, cleans dev caches, safely removes stale .git/index.lock if no related git/ssh/gpg/codex process is active, and shows git status --short.
+```
+
 `run.bat` uses `.venv\Scripts\python.exe`, starts the FastAPI server, and opens the browser with a cache-busting query parameter. If port `8000` is already in use, the script asks before stopping that process.
 
 To stop a stale development server without touching unrelated Python processes:
@@ -106,7 +120,11 @@ cd /d C:\Python\LocalMediaTranscriber
 
 `cleanup-dev.bat` stops project-scoped Python/uvicorn processes, removes source/test `__pycache__` directories and `.pytest_cache`, removes `.git\index.lock` only when no related `git.exe`, `ssh.exe`, `gpg.exe`, or `codex.exe` command line references this repository, and prints `git status --short`.
 
+If Git reports `.git/index.lock` before commit, run `cleanup-dev.bat`.
+
 ## Stored Files
+
+The queue is now a media processing queue. Its main action is "Start processing". Video files can currently be transcribed, split into frames, or both. OCR and CV/VLM options are visible as disabled coming-soon placeholders and are not implemented yet.
 
 Recordings:
 
@@ -119,6 +137,8 @@ Transcripts:
 ```text
 C:\Python\LocalMediaTranscriber\data\transcripts
 ```
+
+Audio transcripts are saved under `data\transcripts`.
 
 Screen videos and screen session JSON:
 
@@ -140,7 +160,13 @@ Video frame extraction creates a folder for each processed video item:
 C:\Python\LocalMediaTranscriber\data\recordings\<base>__frames
 ```
 
-The folder contains JPEG files named like `frame_000001__t000000.000.jpg` and a `frames_index.json` file with source details, frame extraction settings, video metadata, extracted frame records, status, and cancellation/error information. The default extraction setting is one frame every 10 seconds with JPEG quality `90`. The queue UI estimates the frame count and approximate disk usage before processing, and warns when a setting is expected to create more than 1000 images.
+The frame index is saved at:
+
+```text
+C:\Python\LocalMediaTranscriber\data\recordings\<base>__frames\frames_index.json
+```
+
+The folder contains JPEG files named like `frame_000001__t000000.000.jpg` and a `frames_index.json` file with source details, frame extraction settings, video metadata, extracted frame records, status, and cancellation/error information. The default extraction setting is one frame every 10 seconds with JPEG quality `90`. Available JPEG quality options are `75`, `85`, `90`, `95`, and `100`. Quality `100` can significantly increase file size and usually is not necessary for OCR/CV. The queue UI estimates the frame count and approximate disk usage before processing, and warns when a setting is expected to create more than 1000 images.
 
 Downloads from public URLs:
 
@@ -155,6 +181,8 @@ C:\Python\LocalMediaTranscriber\data\logs\app.log
 ```
 
 Runtime output under `data\recordings`, `data\transcripts`, `data\uploads`, `data\downloads`, `data\jobs`, and `data\logs` is ignored by Git.
+
+Current cancellation behavior: pending or waiting queue items can be removed; running frame extraction can be cancelled cooperatively and the queue continues; running audio transcription is not safely cancellable yet, and the UI marks that action as unavailable.
 
 ## Whisper Models
 

@@ -1996,7 +1996,7 @@ function createFrameSettings(queueItem, disabled) {
   const qualitySelect = document.createElement("select");
   qualitySelect.dataset.queueJpegQuality = "true";
   qualitySelect.disabled = disabled || !operations.extract_frames;
-  for (const value of [75, 85, 90, 95]) {
+  for (const value of [75, 85, 90, 95, 100]) {
     const option = document.createElement("option");
     option.value = String(value);
     option.textContent = String(value);
@@ -2031,6 +2031,29 @@ function textLine(value) {
   const line = document.createElement("p");
   line.textContent = translateUiText(value);
   return line;
+}
+
+function displayOutputPath(path) {
+  const normalized = String(path || "").replaceAll("\\", "/");
+  const dataIndex = normalized.toLowerCase().lastIndexOf("/data/");
+  return dataIndex >= 0 ? normalized.slice(dataIndex + 1) : normalized;
+}
+
+function queueItemOutputLines(queueItem) {
+  const lines = [];
+  const result = queueItem.frame_extraction_result || queueItem.frame_extraction?.result;
+  if (queueItem.transcript_path) {
+    lines.push(t("transcriptResultPath", { path: displayOutputPath(queueItem.transcript_path) }));
+  }
+  const framesPath = result?.frames_path || queueItem.frames_path;
+  if (framesPath) {
+    lines.push(t("framesResultFolder", { path: displayOutputPath(framesPath) }));
+    lines.push(t("framesResultCount", { count: result?.extracted_frame_count ?? queueItem.extracted_frame_count ?? 0 }));
+    lines.push(t("framesResultIndex", {
+      path: displayOutputPath(result?.frames_index_path || queueItem.frames_index_path || `${framesPath}/frames_index.json`),
+    }));
+  }
+  return lines;
 }
 
 function queueControlHasActiveFocus() {
@@ -2133,14 +2156,11 @@ function createQueueItemElement(queueItem, status) {
   }
   item.append(optionGroup);
 
-  const result = queueItem.frame_extraction_result || queueItem.frame_extraction?.result;
-  if (result?.frames_path || queueItem.frames_path) {
+  const outputLines = queueItemOutputLines(queueItem);
+  if (outputLines.length) {
     const resultBlock = document.createElement("div");
     resultBlock.className = "queue-frame-result";
-    resultBlock.append(
-      textLine(t("framesResultCount", { count: result?.extracted_frame_count ?? queueItem.extracted_frame_count ?? 0 })),
-      textLine(t("framesResultFolder", { path: result?.frames_path || queueItem.frames_path })),
-    );
+    resultBlock.append(...outputLines.map((line) => textLine(line)));
     item.append(resultBlock);
   }
 

@@ -25,7 +25,7 @@ class I18nTests(unittest.TestCase):
         for key in (
             "transcriptionTitle",
             "addLatestMic",
-            "startTranscription",
+            "startProcessing",
             "clearGlobalQueue",
             "chooseFile",
             "noFileSelected",
@@ -128,6 +128,10 @@ class I18nTests(unittest.TestCase):
             "jpegQuality",
             "estimatedFrames",
             "frameCountWarning",
+            "transcriptResultPath",
+            "framesResultFolder",
+            "framesResultCount",
+            "framesResultIndex",
             "removeFromQueue",
             "cancelCurrentItem",
             "cancelCurrentShort",
@@ -145,6 +149,17 @@ class I18nTests(unittest.TestCase):
         html_keys = set(re.findall(r'data-i18n(?:-title|-aria-label|-placeholder)?="([A-Za-z][A-Za-z0-9_]*)"', html))
         app_keys = set(re.findall(r'(?<![A-Za-z0-9_$])t\("([A-Za-z][A-Za-z0-9_]*)"', app_js))
         self.assertFalse((html_keys | app_keys) - keys)
+
+    def test_queue_start_action_uses_processing_label(self) -> None:
+        i18n = (STATIC_DIR / "i18n.js").read_text(encoding="utf-8")
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+
+        self.assertIn('data-i18n="startProcessing"', html)
+        self.assertIn('startProcessing: "Запустить обработку"', i18n)
+        self.assertIn('startProcessing: "Start processing"', i18n)
+        self.assertNotIn('data-i18n="startTranscription"', html)
+        self.assertNotIn('Start transcription"', i18n)
+        self.assertNotIn('Запустить транскрибацию"', i18n)
 
     def test_user_facing_static_markup_and_app_logic_do_not_embed_russian(self) -> None:
         for filename in ("index.html", "app.js", "tour.js"):
