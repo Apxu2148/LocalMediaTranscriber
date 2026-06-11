@@ -14,16 +14,14 @@ PROJECT_TMP = Path(__file__).resolve().parents[1] / "tmp"
 class MediaValidationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.prefix = f"codex_media_validation_{uuid4().hex}"
-        self.created_paths: list[Path] = []
+        self.root = PROJECT_TMP / self.prefix
+        self.root.mkdir(parents=True, exist_ok=True)
 
     def tearDown(self) -> None:
-        for path in reversed(self.created_paths):
-            path.unlink(missing_ok=True)
+        shutil.rmtree(self.root, ignore_errors=True)
 
     def create_path(self, name: str) -> Path:
-        path = PROJECT_TMP / f"{self.prefix}__{name}"
-        self.created_paths.append(path)
-        return path
+        return self.root / name
 
     def run_ffmpeg(self, *args: str) -> None:
         subprocess.run(
@@ -35,6 +33,11 @@ class MediaValidationTests(unittest.TestCase):
     def test_accepts_mp4_with_audio_track(self) -> None:
         path = self.create_path("with_audio.mp4")
         self.run_ffmpeg("-f", "lavfi", "-i", "sine=frequency=1000:duration=0.2", "-c:a", "aac", str(path))
+        validate_media_for_transcription(path)
+
+    def test_accepts_avi_with_audio_track(self) -> None:
+        path = self.create_path("with_audio.avi")
+        self.run_ffmpeg("-f", "lavfi", "-i", "sine=frequency=1000:duration=0.2", "-c:a", "mp3", str(path))
         validate_media_for_transcription(path)
 
     def test_rejects_mp4_without_audio_track(self) -> None:

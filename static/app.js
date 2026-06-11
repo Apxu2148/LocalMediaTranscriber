@@ -138,6 +138,8 @@ let lastRecordingDurationSec = null;
 let queueActive = false;
 let previousQueueStatus = "empty";
 let latestQueueStatus = null;
+let queueControlsFocused = false;
+let queueFocusRenderTimer = null;
 let benchmarkActive = false;
 let benchmarkSourceId = null;
 let videoMuxInFlight = false;
@@ -158,6 +160,7 @@ let latestRecordingFiles = [];
 let latestMicDevicesResult = null;
 let latestOutputDevicesResult = null;
 const dynamicOutputRenderers = new Map();
+const queueControlSelector = ".queue-item-card select, .queue-item-card input, .queue-item-card button";
 
 function t(key, variables = {}) {
   return window.LATI18N?.t(key, variables) || key;
@@ -299,6 +302,10 @@ function fileSuffix(fileName) {
 }
 
 function isMuxVideoFile(fileName) {
+  return [".mp4", ".avi", ".mkv", ".webm"].includes(fileSuffix(fileName));
+}
+
+function isQueueVideoFile(fileName) {
   return [".mp4", ".avi", ".mkv", ".webm"].includes(fileSuffix(fileName));
 }
 
@@ -1284,7 +1291,9 @@ async function loadTranscript(filePath, announce = false) {
 }
 
 function maybeLoadLatestQueueTranscript(status) {
-  const completedItem = [...(status.items || [])].reverse().find((item) => item.status === "completed" && item.transcript_path);
+  const completedItem = [...(status.items || [])]
+    .reverse()
+    .find((item) => ["completed", "error", "failed"].includes(item.status) && item.transcript_path);
   if (completedItem?.transcript_path && completedItem.transcript_path !== lastLoadedQueueTranscriptPath) {
     loadTranscript(completedItem.transcript_path);
   }
@@ -1849,9 +1858,11 @@ function queueStatusLabel(status) {
     downloaded: t("statusDownloaded"),
     analyzing: t("statusAnalyzing"),
     extracting_audio: t("statusExtracting"),
+    extracting_frames: t("statusExtractingFrames"),
     transcribing: t("statusTranscribing"),
     completed: t("statusCompleted"),
     error: t("statusError"),
+    failed: t("statusError"),
     cancelled: t("statusCancelled"),
   }[status] || status;
 }
@@ -1863,7 +1874,288 @@ function updateQueueSettingsSummary(status = null) {
   });
 }
 
-function renderQueue(status) {
+function frameRateOptions() {
+  return [
+    { value: "interval:30", rate: { mode: "interval", seconds: 30 }, label: t("frameRateEvery30Seconds") },
+    { value: "interval:20", rate: { mode: "interval", seconds: 20 }, label: t("frameRateEvery20Seconds") },
+    { value: "interval:15", rate: { mode: "interval", seconds: 15 }, label: t("frameRateEvery15Seconds") },
+    { value: "interval:10", rate: { mode: "interval", seconds: 10 }, label: t("frameRateEvery10Seconds") },
+    { value: "interval:5", rate: { mode: "interval", seconds: 5 }, label: t("frameRateEvery5Seconds") },
+    { value: "interval:3", rate: { mode: "interval", seconds: 3 }, label: t("frameRateEvery3Seconds") },
+    { value: "interval:2", rate: { mode: "interval", seconds: 2 }, label: t("frameRateEvery2Seconds") },
+    { value: "interval:1", rate: { mode: "interval", seconds: 1 }, label: t("frameRateEvery1Second") },
+    { value: "fps:2", rate: { mode: "fps", fps: 2 }, label: t("frameRate2Fps") },
+    { value: "fps:3", rate: { mode: "fps", fps: 3 }, label: t("frameRate3Fps") },
+    { value: "fps:5", rate: { mode: "fps", fps: 5 }, label: t("frameRate5Fps") },
+    { value: "fps:10", rate: { mode: "fps", fps: 10 }, label: t("frameRate10Fps") },
+    { value: "fps:15", rate: { mode: "fps", fps: 15 }, label: t("frameRate15Fps") },
+    { value: "fps:20", rate: { mode: "fps", fps: 20 }, label: t("frameRate20Fps") },
+    { value: "fps:30", rate: { mode: "fps", fps: 30 }, label: t("frameRate30Fps") },
+  ];
+}
+
+function frameRateValue(rate) {
+  if (rate?.mode === "fps") {
+    return `fps:${rate.fps || 10}`;
+  }
+  return `interval:${rate?.seconds || 10}`;
+}
+
+function frameRateFromValue(value) {
+  const [mode, amount] = String(value || "interval:10").split(":");
+  const numeric = Number(amount) || 10;
+  return mode === "fps"
+    ? { mode: "fps", fps: numeric }
+    : { mode: "interval", seconds: numeric };
+}
+
+function queueItemIsVideo(queueItem) {
+  return queueItem.media_kind === "video" || isQueueVideoFile(queueItem.source_filename || queueItem.source_path);
+}
+
+function formatDurationShort(seconds) {
+  if (seconds === null || seconds === undefined) {
+    return "";
+  }
+  return formatElapsed(seconds);
+}
+
+function formatQueueMediaSummary(queueItem) {
+  if (!queueItemIsVideo(queueItem)) {
+    return t("audio");
+  }
+  const metadata = queueItem.video_metadata || {};
+  const dimensions = metadata.width && metadata.height ? `${metadata.width}x${metadata.height}` : "";
+  const duration = formatDurationShort(metadata.duration_sec ?? queueItem.audio_duration_sec);
+  return [t("video"), dimensions, duration].filter(Boolean).join(" - ");
+}
+
+function formatDiskUsageEstimate(estimate) {
+  if (!estimate?.min_bytes || !estimate?.max_bytes) {
+    return t("frameDiskUsageNote");
+  }
+  const minMb = Math.max(1, Math.round(Number(estimate.min_bytes) / (1024 * 1024)));
+  const maxMb = Math.max(minMb, Math.round(Number(estimate.max_bytes) / (1024 * 1024)));
+  return t("frameDiskUsageRange", { min: minMb, max: maxMb });
+}
+
+function createQueueCheckbox(key, checked, disabled, name) {
+  const label = document.createElement("label");
+  label.className = "queue-option";
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.checked = Boolean(checked);
+  input.disabled = disabled;
+  input.dataset.queueOperation = name;
+  const span = document.createElement("span");
+  span.textContent = t(key);
+  label.append(input, span);
+  return label;
+}
+
+function createComingSoonOption(key) {
+  const label = document.createElement("label");
+  label.className = "queue-option queue-option-disabled";
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.disabled = true;
+  const span = document.createElement("span");
+  span.textContent = `${t(key)} ${t("comingSoon")}`;
+  label.append(input, span);
+  return label;
+}
+
+function createFrameSettings(queueItem, disabled) {
+  const settings = queueItem.frame_extraction || {};
+  const operations = queueItem.operations || {};
+  const wrapper = document.createElement("div");
+  wrapper.className = "queue-frame-settings";
+  wrapper.hidden = !operations.extract_frames;
+
+  const rateLabel = document.createElement("label");
+  rateLabel.className = "queue-setting-field";
+  const rateText = document.createElement("span");
+  rateText.textContent = t("frameExtractionRate");
+  const rateSelect = document.createElement("select");
+  rateSelect.dataset.queueFrameRate = "true";
+  rateSelect.disabled = disabled || !operations.extract_frames;
+  const selectedRate = frameRateValue(settings.rate);
+  for (const optionSpec of frameRateOptions()) {
+    const option = document.createElement("option");
+    option.value = optionSpec.value;
+    option.textContent = optionSpec.label;
+    option.selected = optionSpec.value === selectedRate;
+    rateSelect.append(option);
+  }
+  rateLabel.append(rateText, rateSelect);
+
+  const qualityLabel = document.createElement("label");
+  qualityLabel.className = "queue-setting-field";
+  const qualityText = document.createElement("span");
+  qualityText.textContent = t("jpegQuality");
+  const qualitySelect = document.createElement("select");
+  qualitySelect.dataset.queueJpegQuality = "true";
+  qualitySelect.disabled = disabled || !operations.extract_frames;
+  for (const value of [75, 85, 90, 95]) {
+    const option = document.createElement("option");
+    option.value = String(value);
+    option.textContent = String(value);
+    option.selected = Number(settings.jpeg_quality || 90) === value;
+    qualitySelect.append(option);
+  }
+  qualityLabel.append(qualityText, qualitySelect);
+
+  const estimate = document.createElement("div");
+  estimate.className = "queue-frame-estimate";
+  const count = settings.estimated_frame_count;
+  estimate.append(
+    textLine(t("estimatedFrames", { count: count ?? t("notAvailable") })),
+    textLine(formatDiskUsageEstimate(settings.estimated_disk_usage)),
+  );
+  if (settings.estimated_frames_warning) {
+    const warning = textLine(t("frameCountWarning"));
+    warning.dataset.type = Number(count || 0) > 5000 ? "strong-warning" : "warning";
+    estimate.append(warning);
+  }
+  if (queueItem.video_metadata_error) {
+    const metadataWarning = textLine(queueItem.video_metadata_error);
+    metadataWarning.dataset.type = "warning";
+    estimate.append(metadataWarning);
+  }
+
+  wrapper.append(rateLabel, qualityLabel, estimate);
+  return wrapper;
+}
+
+function textLine(value) {
+  const line = document.createElement("p");
+  line.textContent = translateUiText(value);
+  return line;
+}
+
+function queueControlHasActiveFocus() {
+  const activeElement = document.activeElement;
+  return Boolean(activeElement && queueList.contains(activeElement) && activeElement.matches(queueControlSelector));
+}
+
+function formatQueueItemError(queueItem) {
+  const frameResult = queueItem.frame_extraction_result || queueItem.frame_extraction?.result;
+  if (frameResult?.error_code === "frame_write_failed") {
+    return t("frameWriteError", {
+      filename: frameResult.error_filename || frameResult.error_message?.replace("Could not write JPEG frame: ", "") || "-",
+    });
+  }
+  if (queueItem.error_message?.startsWith("Could not write JPEG frame: ")) {
+    return t("frameWriteError", { filename: queueItem.error_message.replace("Could not write JPEG frame: ", "") });
+  }
+  return translateUiText(queueItem.error_message || "");
+}
+
+function createQueueItemElement(queueItem, status) {
+  const item = document.createElement("li");
+  item.className = "queue-item-card";
+  item.dataset.queueIndex = String(queueItem.index);
+  item.dataset.mediaKind = queueItem.media_kind || (queueItemIsVideo(queueItem) ? "video" : "audio");
+
+  const header = document.createElement("div");
+  header.className = "queue-item-header";
+  const titleBlock = document.createElement("div");
+  titleBlock.className = "queue-item-title";
+  const name = document.createElement("span");
+  const sourceLabel = queueItem.source_type === "url"
+    ? t("queueSourceUrl", {
+      name: queueItem.source_title || queueItem.source_filename,
+      platform: queueItem.source_platform || "unknown",
+    })
+    : t("queueSourceFile", {
+      name: queueItem.source_filename,
+      type: queueItem.source_type === "mic"
+        ? t("microphone")
+        : queueItem.source_type === "system"
+          ? t("systemAudio")
+          : t("localFile"),
+    });
+  name.textContent = `${queueItem.index}. ${sourceLabel}`;
+  const mediaSummary = document.createElement("small");
+  mediaSummary.textContent = formatQueueMediaSummary(queueItem);
+  titleBlock.append(name, mediaSummary);
+
+  const headerActions = document.createElement("div");
+  headerActions.className = "queue-item-actions";
+  const state = document.createElement("small");
+  state.textContent = queueStatusLabel(queueItem.status);
+  state.dataset.type = queueItem.status;
+  headerActions.append(state);
+
+  const isCurrent = status.current_item?.index === queueItem.index;
+  const canRemove = queueItem.status === "pending";
+  const canCancel = isCurrent && queueItem.status === "extracting_frames";
+  const currentButCannotCancel = isCurrent && !canCancel && status.status === "running";
+  if (canRemove || canCancel || currentButCannotCancel) {
+    const actionButton = document.createElement("button");
+    actionButton.type = "button";
+    actionButton.className = canCancel || currentButCannotCancel
+      ? "queue-item-remove queue-item-cancel"
+      : "queue-item-remove";
+    actionButton.textContent = canRemove ? "\u00d7" : t("cancelCurrentShort");
+    actionButton.dataset.queueAction = canCancel ? "cancel" : "remove";
+    actionButton.disabled = currentButCannotCancel;
+    actionButton.title = canCancel
+      ? t("cancelCurrentItem")
+      : currentButCannotCancel
+        ? t("runningAudioCannotCancel")
+        : t("removeFromQueue");
+    actionButton.setAttribute("aria-label", actionButton.title);
+    headerActions.append(actionButton);
+  }
+
+  header.append(titleBlock, headerActions);
+  item.append(header);
+
+  const options = queueItem.operations || {};
+  const controlsDisabled = queueActive || queueItem.status !== "pending";
+  const optionGroup = document.createElement("div");
+  optionGroup.className = "queue-options";
+  if (queueItemIsVideo(queueItem)) {
+    const label = document.createElement("div");
+    label.className = "queue-options-label";
+    label.textContent = t("processingOptions");
+    optionGroup.append(
+      label,
+      createQueueCheckbox("transcribeAudio", options.transcribe_audio, controlsDisabled, "transcribe_audio"),
+      createQueueCheckbox("extractFrames", options.extract_frames, controlsDisabled, "extract_frames"),
+      createFrameSettings(queueItem, controlsDisabled),
+      createComingSoonOption("ocr"),
+      createComingSoonOption("cv"),
+    );
+  } else {
+    optionGroup.append(createQueueCheckbox("transcribeAudio", true, true, "transcribe_audio"));
+  }
+  item.append(optionGroup);
+
+  const result = queueItem.frame_extraction_result || queueItem.frame_extraction?.result;
+  if (result?.frames_path || queueItem.frames_path) {
+    const resultBlock = document.createElement("div");
+    resultBlock.className = "queue-frame-result";
+    resultBlock.append(
+      textLine(t("framesResultCount", { count: result?.extracted_frame_count ?? queueItem.extracted_frame_count ?? 0 })),
+      textLine(t("framesResultFolder", { path: result?.frames_path || queueItem.frames_path })),
+    );
+    item.append(resultBlock);
+  }
+
+  if (queueItem.error_message) {
+    const error = document.createElement("p");
+    error.className = "queue-item-error";
+    error.textContent = formatQueueItemError(queueItem);
+    item.append(error);
+  }
+
+  item.title = formatQueueItemError(queueItem) || translateUiText(queueItem.source_url || queueItem.source_path || "");
+  return item;
+}
+
+function renderQueue(status, options = {}) {
   latestQueueStatus = status;
   queueActive = status.status === "running";
   const total = Number(status.total_items || 0);
@@ -1887,35 +2179,18 @@ function renderQueue(status) {
   queueProgress.value = progress;
   queueProgressText.textContent = t("queueProgress", { done: finished, total, value: Math.round(progress) });
 
-  queueList.innerHTML = "";
-  if (!status.items?.length) {
-    const item = document.createElement("li");
-    item.textContent = t("queueEmpty");
-    queueList.append(item);
-  } else {
-    for (const queueItem of status.items) {
+  const preserveQueueControls = options.preserveFocusedQueueControls
+    && (queueControlsFocused || queueControlHasActiveFocus());
+  if (!preserveQueueControls) {
+    queueList.innerHTML = "";
+    if (!status.items?.length) {
       const item = document.createElement("li");
-      const name = document.createElement("span");
-      const state = document.createElement("small");
-      const sourceLabel = queueItem.source_type === "url"
-        ? t("queueSourceUrl", {
-          name: queueItem.source_title || queueItem.source_filename,
-          platform: queueItem.source_platform || "unknown",
-        })
-        : t("queueSourceFile", {
-          name: queueItem.source_filename,
-          type: queueItem.source_type === "mic"
-            ? t("microphone")
-            : queueItem.source_type === "system"
-              ? t("systemAudio")
-              : t("localFile"),
-        });
-      name.textContent = `${queueItem.index}. ${sourceLabel}`;
-      state.textContent = queueStatusLabel(queueItem.status);
-      state.dataset.type = queueItem.status;
-      item.title = translateUiText(queueItem.error_message || queueItem.source_url || queueItem.source_path);
-      item.append(name, state);
+      item.textContent = t("queueEmpty");
       queueList.append(item);
+    } else {
+      for (const queueItem of status.items) {
+        queueList.append(createQueueItemElement(queueItem, status));
+      }
     }
   }
 
@@ -1994,7 +2269,7 @@ function renderQueue(status) {
 
 async function refreshQueueStatus() {
   try {
-    renderQueue(await requestJson("/api/queue/status"));
+    renderQueue(await requestJson("/api/queue/status"), { preserveFocusedQueueControls: true });
   } catch (error) {
     setOutput(queueOutput, error.message, "error");
   }
@@ -2012,6 +2287,83 @@ async function postQueueAction(url, successMessage) {
     setOutput(queueOutput, error.message, "error");
     showToast(error.message, "error");
   }
+}
+
+function queueCardFromTarget(target) {
+  return target.closest(".queue-item-card");
+}
+
+function collectQueueItemPayload(card) {
+  const operations = {
+    transcribe_audio: card.querySelector('[data-queue-operation="transcribe_audio"]')?.checked ?? true,
+    extract_frames: card.querySelector('[data-queue-operation="extract_frames"]')?.checked ?? false,
+    ocr: false,
+    cv: false,
+  };
+  const rateSelect = card.querySelector("[data-queue-frame-rate]");
+  const qualitySelect = card.querySelector("[data-queue-jpeg-quality]");
+  return {
+    index: Number(card.dataset.queueIndex),
+    operations,
+    frame_extraction: {
+      rate: frameRateFromValue(rateSelect?.value),
+      jpeg_quality: Number(qualitySelect?.value || 90),
+    },
+  };
+}
+
+async function updateQueueItemFromCard(card) {
+  if (!card || queueActive) {
+    return;
+  }
+  try {
+    renderQueue(await requestJson("/api/queue/update-item", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(collectQueueItemPayload(card)),
+    }));
+  } catch (error) {
+    setOutput(queueOutput, error.message, "error");
+    showToast(error.message, "error");
+    await refreshQueueStatus();
+  }
+}
+
+async function removeOrCancelQueueItem(card, action) {
+  if (!card) {
+    return;
+  }
+  const index = Number(card.dataset.queueIndex);
+  const url = action === "cancel" ? "/api/queue/cancel-item" : "/api/queue/remove-item";
+  try {
+    renderQueue(await requestJson(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ index }),
+    }));
+    const message = action === "cancel" ? t("queueItemCancelRequested") : t("queueItemRemoved");
+    setOutput(queueOutput, message, action === "cancel" ? "warning" : "success");
+    showToast(message, action === "cancel" ? "warning" : "success");
+  } catch (error) {
+    setOutput(queueOutput, error.message, "error");
+    showToast(error.message, "error");
+  }
+}
+
+function validateQueueStartOptions() {
+  const invalid = (latestQueueStatus?.items || []).find((item) => {
+    const operations = item.operations || {};
+    return item.status === "pending"
+      && queueItemIsVideo(item)
+      && !operations.transcribe_audio
+      && !operations.extract_frames;
+  });
+  if (!invalid) {
+    return true;
+  }
+  setOutput(queueOutput, t("selectAtLeastOneVideoOperation"), "error");
+  showToast(t("selectAtLeastOneVideoOperation"), "error");
+  return false;
 }
 
 function updateLongOperationControls() {
@@ -2223,6 +2575,36 @@ benchmarkFilePickerButton.addEventListener("click", () => benchmarkFileInput.cli
 audioFileInput.addEventListener("change", () => updateFilePickerText(audioFileInput, audioFilePickerText));
 queueFileInput.addEventListener("change", () => updateFilePickerText(queueFileInput, queueFilePickerText, true));
 benchmarkFileInput.addEventListener("change", () => updateFilePickerText(benchmarkFileInput, benchmarkFilePickerText));
+queueList.addEventListener("focusin", (event) => {
+  if (!event.target.matches(queueControlSelector)) {
+    return;
+  }
+  queueControlsFocused = true;
+  window.clearTimeout(queueFocusRenderTimer);
+});
+queueList.addEventListener("focusout", () => {
+  window.clearTimeout(queueFocusRenderTimer);
+  queueFocusRenderTimer = window.setTimeout(() => {
+    queueControlsFocused = queueControlHasActiveFocus();
+    if (!queueControlsFocused && latestQueueStatus) {
+      renderQueue(latestQueueStatus);
+    }
+  }, 150);
+});
+queueList.addEventListener("change", async (event) => {
+  const target = event.target;
+  if (!target.matches("[data-queue-operation], [data-queue-frame-rate], [data-queue-jpeg-quality]")) {
+    return;
+  }
+  await updateQueueItemFromCard(queueCardFromTarget(target));
+});
+queueList.addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-queue-action]");
+  if (!button) {
+    return;
+  }
+  await removeOrCancelQueueItem(queueCardFromTarget(button), button.dataset.queueAction);
+});
 queueAddForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const files = Array.from(queueFileInput.files || []);
@@ -2254,6 +2636,9 @@ queueUrlForm.addEventListener("submit", async (event) => {
   }
 });
 queueStartButton.addEventListener("click", async () => {
+  if (!validateQueueStartOptions()) {
+    return;
+  }
   warnAboutSelectedModelDownload();
   try {
     renderQueue(await requestJson("/api/queue/start", {

@@ -4,7 +4,6 @@ import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 import time
-from uuid import uuid4
 
 import numpy as np
 import soundfile as sf
@@ -38,20 +37,15 @@ def write_json_file(path: Path, payload: dict) -> Path:
 
 def write_json_file_atomic(path: Path, payload: dict) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
-    temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    try:
-        for attempt in range(3):
-            try:
-                temp_path.replace(path)
-                break
-            except PermissionError:
-                if attempt == 2:
-                    raise
-                time.sleep(0.05)
-    finally:
-        if temp_path.exists():
-            temp_path.unlink(missing_ok=True)
+    text = json.dumps(payload, ensure_ascii=False, indent=2)
+    for attempt in range(5):
+        try:
+            path.write_text(text, encoding="utf-8")
+            return path
+        except PermissionError:
+            if attempt == 4:
+                raise
+            time.sleep(0.05)
     return path
 
 
@@ -90,7 +84,7 @@ def audio_duration_seconds(audio_path: Path) -> float | None:
 
 
 def validate_media_for_transcription(media_path: Path) -> None:
-    if media_path.suffix.lower() != ".mp4":
+    if media_path.suffix.lower() not in config.SUPPORTED_VIDEO_EXTENSIONS:
         return
 
     try:

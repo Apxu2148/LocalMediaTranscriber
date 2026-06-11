@@ -6,13 +6,26 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
+from . import config
+from .frame_extractor import (
+    DEFAULT_FRAME_RATE,
+    DEFAULT_JPEG_QUALITY,
+    estimate_disk_usage_bytes,
+    estimate_frame_count,
+    is_video_path,
+    normalize_frame_extraction_settings,
+    normalize_frame_rate,
+    normalize_jpeg_quality,
+    read_video_metadata,
+)
+from .transcript_store import safe_filename_part, source_stem_for
 from .utils import audio_duration_seconds, timestamp_for_filename, write_json_file_atomic
 
 
 logger = logging.getLogger(__name__)
 
-TERMINAL_STATUSES = {"completed", "error", "cancelled"}
-ACTIVE_STATUSES = {"downloading", "downloaded", "analyzing", "extracting_audio", "transcribing"}
+TERMINAL_STATUSES = {"completed", "error", "failed", "cancelled"}
+ACTIVE_STATUSES = {"downloading", "downloaded", "analyzing", "extracting_audio", "transcribing", "extracting_frames"}
 
 
 @dataclass(frozen=True)
@@ -20,6 +33,8 @@ class QueueFile:
     source_path: Path
     source_filename: str
     source_type: str = "local_file"
+    operations: dict | None = None
+    frame_extraction: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -37,6 +52,8 @@ class QueueManager:
         duration_reader: Callable[[Path], float | None] = audio_duration_seconds,
         media_validator: Callable[[Path], None] | None = None,
         downloader: Callable[[str], dict] | None = None,
+        frame_processor: Callable[[dict, threading.Event, Callable[[dict], None]], dict] | None = None,
+        video_metadata_reader: Callable[[Path], dict] | None = read_video_metadata,
     ) -> None:
         self.jobs_dir = jobs_dir
         self.processor = processor
@@ -44,6 +61,8 @@ class QueueManager:
         self.duration_reader = duration_reader
         self.media_validator = media_validator or (lambda _path: None)
         self.downloader = downloader
+        self.frame_processor = frame_processor
+        self.video_metadata_reader = video_metadata_reader
 
         self._lock = threading.RLock()
         self._items: list[dict] = []
@@ -58,6 +77,7 @@ class QueueManager:
         self._current_index: int | None = None
         self._stop_after_current = False
         self._worker: threading.Thread | None = None
+        self._cancel_events: dict[int, threading.Event] = {}
 
     @property
     def is_running(self) -> bool:
@@ -75,22 +95,8 @@ class QueueManager:
 
             start_index = len(self._items) + 1
             for offset, queue_file in enumerate(files):
-                self._items.append(
-                    {
-                        "index": start_index + offset,
-                        "source_type": queue_file.source_type,
-                        "source_path": str(queue_file.source_path),
-                        "source_filename": queue_file.source_filename,
-                        "status": "pending",
-                        "audio_duration_sec": None,
-                        "processing_time_sec": None,
-                        "realtime_factor": None,
-                        "transcript_path": None,
-                        "json_path": None,
-                        "error_message": None,
-                        "technical_details": None,
-                    }
-                )
+                item = self._new_file_item_locked(start_index + offset, queue_file)
+                self._items.append(item)
 
             self._status = "pending"
             self._finished_at = None
@@ -123,6 +129,7 @@ class QueueManager:
                     {
                         "index": index,
                         "source_type": "url",
+                        "media_kind": "audio",
                         "source_url": source_url,
                         "source_title": None,
                         "source_platform": "unknown",
@@ -130,6 +137,10 @@ class QueueManager:
                         "source_filename": f"url_{index:03d}",
                         "downloaded_audio_path": None,
                         "status": "pending",
+                        "operations": self._default_operations("audio"),
+                        "frame_extraction": None,
+                        "video_metadata": None,
+                        "video_metadata_error": None,
                         "audio_duration_sec": None,
                         "processing_time_sec": None,
                         "realtime_factor": None,
@@ -152,6 +163,7 @@ class QueueManager:
             if not any(item["status"] == "pending" for item in self._items):
                 raise RuntimeError("В очереди нет ожидающих задач.")
 
+            self._validate_pending_operations_locked()
             self._model = model
             self._device_preference = device_preference
             self._started_at = self._started_at or self._now()
@@ -204,7 +216,7 @@ class QueueManager:
     def retry_errors(self) -> dict:
         with self._lock:
             self._ensure_inactive_locked("Нельзя повторить задачи во время обработки очереди.")
-            failed_items = [item for item in self._items if item["status"] == "error"]
+            failed_items = [item for item in self._items if item["status"] in {"error", "failed"}]
             if not failed_items:
                 raise RuntimeError("В очереди нет ошибочных задач для повтора.")
 
@@ -216,10 +228,17 @@ class QueueManager:
                         "realtime_factor": None,
                         "transcript_path": None,
                         "json_path": None,
+                        "frames_dir": None,
+                        "frames_path": None,
+                        "frames_index_path": None,
+                        "extracted_frame_count": None,
+                        "frame_extraction_result": None,
                         "error_message": None,
                         "technical_details": None,
                     }
                 )
+                if item.get("frame_extraction") is not None:
+                    item["frame_extraction"]["result"] = None
             self._status = "pending"
             self._finished_at = None
             self._persist_locked()
@@ -230,11 +249,243 @@ class QueueManager:
         with self._lock:
             return self._status_snapshot_locked()
 
+    def update_item(
+        self,
+        index: int,
+        *,
+        operations: dict | None = None,
+        frame_extraction: dict | None = None,
+    ) -> dict:
+        with self._lock:
+            self._ensure_inactive_locked("Нельзя менять параметры задач во время обработки очереди.")
+            item = self._find_item_locked(index)
+            if item["status"] != "pending":
+                raise RuntimeError("Можно менять только ожидающие задачи очереди.")
+
+            media_kind = item.get("media_kind") or self._media_kind_for(item.get("source_path") or item["source_filename"])
+            if operations is not None:
+                item["operations"] = self._normalize_operations(operations, media_kind)
+            if frame_extraction is not None:
+                item["frame_extraction"] = self._frame_extraction_payload(
+                    item,
+                    normalize_frame_extraction_settings(frame_extraction),
+                )
+            self._refresh_frame_estimate_locked(item)
+            self._persist_locked()
+            logger.info("Queue item updated: job_id=%s index=%s", self._job_id, index)
+            return self._status_snapshot_locked()
+
+    def remove_item(self, index: int) -> dict:
+        with self._lock:
+            item = self._find_item_locked(index)
+            if item["status"] != "pending":
+                raise RuntimeError("Можно удалить только ожидающую задачу очереди.")
+
+            self._items = [entry for entry in self._items if entry["index"] != index]
+            if not self._items and not self._is_running_locked():
+                self._status = "empty"
+                self._job_id = None
+                self._job_path = None
+                self._created_at = None
+                self._started_at = None
+                self._finished_at = None
+                self._model = None
+                self._device_preference = None
+                self._current_index = None
+                self._stop_after_current = False
+            elif not self._is_running_locked() and any(entry["status"] == "pending" for entry in self._items):
+                self._status = "pending"
+            self._persist_locked()
+            logger.info("Queue item removed: job_id=%s index=%s", self._job_id, index)
+            return self._status_snapshot_locked()
+
+    def cancel_item(self, index: int) -> dict:
+        with self._lock:
+            item = self._find_item_locked(index)
+            if self._current_index != index:
+                if item["status"] == "pending":
+                    return self.remove_item(index)
+                if item["status"] in TERMINAL_STATUSES:
+                    return self._status_snapshot_locked()
+                raise RuntimeError("Эта задача сейчас не выполняется.")
+
+            if item["status"] != "extracting_frames":
+                raise RuntimeError("Текущую аудио-транскрибацию нельзя безопасно отменить на этом этапе.")
+
+            cancel_event = self._cancel_events.get(index)
+            if cancel_event is not None:
+                cancel_event.set()
+            item["cancel_requested"] = True
+            self._persist_locked()
+            logger.info("Queue item cancellation requested: job_id=%s index=%s", self._job_id, index)
+            return self._status_snapshot_locked()
+
     def wait(self, timeout: float | None = None) -> None:
         with self._lock:
             worker = self._worker
         if worker is not None:
             worker.join(timeout=timeout)
+
+    def _new_file_item_locked(self, index: int, queue_file: QueueFile) -> dict:
+        media_kind = self._media_kind_for(queue_file.source_path)
+        settings = normalize_frame_extraction_settings(queue_file.frame_extraction)
+        item = {
+            "index": index,
+            "source_type": queue_file.source_type,
+            "media_kind": media_kind,
+            "source_path": str(queue_file.source_path),
+            "source_filename": queue_file.source_filename,
+            "status": "pending",
+            "operations": self._normalize_operations(queue_file.operations, media_kind),
+            "frame_extraction": None,
+            "video_metadata": None,
+            "video_metadata_error": None,
+            "audio_duration_sec": None,
+            "processing_time_sec": None,
+            "realtime_factor": None,
+            "transcript_path": None,
+            "json_path": None,
+            "frames_dir": None,
+            "frames_path": None,
+            "frames_index_path": None,
+            "extracted_frame_count": None,
+            "frame_extraction_result": None,
+            "output_base": None,
+            "error_message": None,
+            "technical_details": None,
+        }
+        if media_kind == "video":
+            item["frame_extraction"] = self._frame_extraction_payload(item, settings)
+            self._refresh_video_analysis_locked(item)
+        return item
+
+    @staticmethod
+    def _media_kind_for(path_or_name: Path | str) -> str:
+        return "video" if is_video_path(path_or_name) else "audio"
+
+    @staticmethod
+    def _default_operations(media_kind: str) -> dict:
+        return {
+            "transcribe_audio": True,
+            "extract_frames": False,
+            "ocr": False,
+            "cv": False,
+        }
+
+    def _normalize_operations(self, operations: dict | None, media_kind: str) -> dict:
+        normalized = self._default_operations(media_kind)
+        if operations:
+            for key in normalized:
+                if key in operations:
+                    normalized[key] = bool(operations[key])
+        if normalized.get("ocr"):
+            raise RuntimeError("OCR is not implemented yet.")
+        if normalized.get("cv"):
+            raise RuntimeError("CV is not implemented yet.")
+        if media_kind != "video":
+            normalized["extract_frames"] = False
+            normalized["ocr"] = False
+            normalized["cv"] = False
+        return normalized
+
+    def _frame_extraction_payload(self, item: dict, settings: dict) -> dict:
+        payload = item.get("frame_extraction") or {}
+        payload.update(
+            {
+                "rate": normalize_frame_rate(settings.get("rate")),
+                "jpeg_quality": normalize_jpeg_quality(settings.get("jpeg_quality")),
+                "estimated_frame_count": None,
+                "estimated_disk_usage": None,
+                "estimated_frames_warning": False,
+                "result": payload.get("result"),
+            }
+        )
+        return payload
+
+    def _refresh_video_analysis_locked(self, item: dict) -> None:
+        if item.get("media_kind") != "video":
+            return
+        if self.video_metadata_reader is None:
+            self._refresh_frame_estimate_locked(item)
+            return
+        try:
+            metadata = self.video_metadata_reader(Path(item["source_path"]))
+            item["video_metadata"] = metadata
+            item["video_metadata_error"] = None
+        except Exception as exc:
+            item["video_metadata"] = None
+            item["video_metadata_error"] = str(exc)
+        self._refresh_frame_estimate_locked(item)
+
+    def _refresh_frame_estimate_locked(self, item: dict) -> None:
+        frame_settings = item.get("frame_extraction")
+        if item.get("media_kind") != "video" or not frame_settings:
+            return
+        metadata = item.get("video_metadata") or {}
+        estimated_count = estimate_frame_count(metadata.get("duration_sec"), frame_settings.get("rate"))
+        frame_settings["estimated_frame_count"] = estimated_count
+        frame_settings["estimated_disk_usage"] = estimate_disk_usage_bytes(
+            estimated_count,
+            metadata.get("width"),
+            metadata.get("height"),
+            frame_settings.get("jpeg_quality"),
+        )
+        frame_settings["estimated_frames_warning"] = bool(estimated_count and estimated_count > 1000)
+
+    def _validate_pending_operations_locked(self) -> None:
+        for item in self._items:
+            if item["status"] != "pending":
+                continue
+            media_kind = item.get("media_kind") or self._media_kind_for(item.get("source_path") or item["source_filename"])
+            operations = item.get("operations") or self._default_operations(media_kind)
+            if operations.get("ocr"):
+                raise RuntimeError("OCR is not implemented yet.")
+            if operations.get("cv"):
+                raise RuntimeError("CV is not implemented yet.")
+            if media_kind == "video" and not (operations.get("transcribe_audio") or operations.get("extract_frames")):
+                raise RuntimeError("Выберите хотя бы одну операцию для этого видео.")
+
+    def _find_item_locked(self, index: int) -> dict:
+        item = next((entry for entry in self._items if entry["index"] == index), None)
+        if item is None:
+            raise RuntimeError("Задача очереди не найдена.")
+        return item
+
+    def _frame_progress_callback(self, index: int) -> Callable[[dict], None]:
+        def update(progress: dict) -> None:
+            with self._lock:
+                item = next((entry for entry in self._items if entry["index"] == index), None)
+                if item is None:
+                    return
+                item["frame_extraction_result"] = progress
+                item["extracted_frame_count"] = progress.get("extracted_frame_count")
+                item["frames_dir"] = progress.get("frames_dir")
+                item["frames_path"] = progress.get("frames_path")
+                item["frames_index_path"] = progress.get("frames_index_path")
+                frame_settings = item.get("frame_extraction")
+                if frame_settings is not None:
+                    frame_settings["result"] = progress
+                self._persist_locked()
+
+        return update
+
+    @staticmethod
+    def _output_base_from_transcript_path(transcript_path: str | None, model: str) -> str | None:
+        if not transcript_path:
+            return None
+        stem = Path(transcript_path).stem
+        safe_model = safe_filename_part(model, max_length=32)
+        suffix = f"__{safe_model}__transcript"
+        if stem.endswith(suffix):
+            return stem[: -len(suffix)]
+        transcript_suffix = "__transcript"
+        if stem.endswith(transcript_suffix):
+            return stem[: -len(transcript_suffix)]
+        return None
+
+    @staticmethod
+    def _frames_only_output_base(source_filename: str) -> str:
+        return f"{source_stem_for(source_filename)}_{timestamp_for_filename()}"
 
     def _worker_loop(self) -> None:
         while True:
@@ -245,6 +496,7 @@ class QueueManager:
                     return
 
                 self._current_index = item["index"]
+                item["status"] = "downloading" if item.get("source_type") == "url" else "analyzing"
                 self._persist_locked()
                 item_snapshot = copy.deepcopy(item)
                 model = self._model or ""
@@ -260,7 +512,16 @@ class QueueManager:
 
             try:
                 source_path = self._prepare_source(item, item_snapshot)
+                task_cancelled = False
+                task_failed = False
                 with self._lock:
+                    item["media_kind"] = item.get("media_kind") or self._media_kind_for(source_path)
+                    if item["media_kind"] == "video" and item.get("frame_extraction") is None:
+                        item["frame_extraction"] = self._frame_extraction_payload(
+                            item,
+                            {"rate": DEFAULT_FRAME_RATE, "jpeg_quality": DEFAULT_JPEG_QUALITY},
+                        )
+                    self._refresh_video_analysis_locked(item)
                     item["status"] = "analyzing"
                     self._persist_locked()
                     item_snapshot = copy.deepcopy(item)
@@ -269,42 +530,137 @@ class QueueManager:
                     item["audio_duration_sec"] = self._rounded(duration) or item.get("audio_duration_sec")
                     self._persist_locked()
 
-                self.media_validator(source_path)
-                if source_path.suffix.lower() == ".mp4":
+                operations = item_snapshot.get("operations") or self._default_operations(item_snapshot.get("media_kind", "audio"))
+                transcript_result: dict = {}
+                if operations.get("transcribe_audio"):
+                    self.media_validator(source_path)
+                    if source_path.suffix.lower() in config.SUPPORTED_VIDEO_EXTENSIONS:
+                        with self._lock:
+                            item["status"] = "extracting_audio"
+                            self._persist_locked()
+
                     with self._lock:
-                        item["status"] = "extracting_audio"
+                        item["status"] = "transcribing"
+                        self._persist_locked()
+                        item_snapshot = copy.deepcopy(item)
+
+                    transcript_result = self.processor(item_snapshot, model, device_preference)
+                    with self._lock:
+                        output_base = self._output_base_from_transcript_path(
+                            transcript_result.get("transcript_path"),
+                            model,
+                        )
+                        item.update(
+                            {
+                                "audio_duration_sec": transcript_result.get("audio_duration_sec", item["audio_duration_sec"]),
+                                "processing_time_sec": transcript_result.get("processing_time_sec"),
+                                "realtime_factor": transcript_result.get("realtime_factor"),
+                                "transcript_path": transcript_result.get("transcript_path"),
+                                "json_path": transcript_result.get("json_path") or transcript_result.get("benchmark_path"),
+                                "output_base": output_base or item.get("output_base"),
+                                "error_message": None,
+                                "technical_details": None,
+                            }
+                        )
                         self._persist_locked()
 
-                with self._lock:
-                    item["status"] = "transcribing"
-                    self._persist_locked()
-                    item_snapshot = copy.deepcopy(item)
+                frame_result: dict = {}
+                if operations.get("extract_frames"):
+                    if self.frame_processor is None:
+                        raise RuntimeError("Frame extraction service is not configured.")
+                    with self._lock:
+                        item["status"] = "extracting_frames"
+                        item["cancel_requested"] = False
+                        if not item.get("output_base"):
+                            item["output_base"] = self._frames_only_output_base(item["source_filename"])
+                        self._persist_locked()
+                        item_snapshot = copy.deepcopy(item)
+                        cancel_event = threading.Event()
+                        self._cancel_events[item["index"]] = cancel_event
+                    try:
+                        frame_result = self.frame_processor(
+                            item_snapshot,
+                            cancel_event,
+                            self._frame_progress_callback(item["index"]),
+                        )
+                    finally:
+                        with self._lock:
+                            self._cancel_events.pop(item["index"], None)
 
-                result = self.processor(item_snapshot, model, device_preference)
-                with self._lock:
-                    item.update(
-                        {
-                            "status": "completed",
-                            "audio_duration_sec": result.get("audio_duration_sec", item["audio_duration_sec"]),
-                            "processing_time_sec": result.get("processing_time_sec"),
-                            "realtime_factor": result.get("realtime_factor"),
-                            "transcript_path": result.get("transcript_path"),
-                            "json_path": result.get("json_path") or result.get("benchmark_path"),
-                            "error_message": None,
-                            "technical_details": None,
-                        }
-                    )
-                    self._persist_locked()
-                    logger.info(
-                        "Queue task completed: job_id=%s index=%s transcript=%s json=%s duration=%s processing_time=%s realtime_factor=%s",
-                        self._job_id,
-                        item["index"],
-                        item["transcript_path"],
-                        item["json_path"],
-                        item["audio_duration_sec"],
-                        item["processing_time_sec"],
-                        item["realtime_factor"],
-                    )
+                    with self._lock:
+                        item["frame_extraction_result"] = frame_result
+                        item["extracted_frame_count"] = frame_result.get("extracted_frame_count")
+                        item["frames_dir"] = frame_result.get("frames_dir")
+                        item["frames_path"] = frame_result.get("frames_path")
+                        item["frames_index_path"] = frame_result.get("frames_index_path")
+                        frame_settings = item.get("frame_extraction")
+                        if frame_settings is not None:
+                            frame_settings["result"] = frame_result
+                        self._persist_locked()
+
+                    if frame_result.get("status") == "cancelled":
+                        with self._lock:
+                            item.update(
+                                {
+                                    "status": "cancelled",
+                                    "error_message": None,
+                                    "technical_details": None,
+                                }
+                            )
+                            self._persist_locked()
+                            logger.info(
+                                "Queue task cancelled: job_id=%s index=%s frames=%s",
+                                self._job_id,
+                                item["index"],
+                                item.get("extracted_frame_count"),
+                            )
+                        task_cancelled = True
+                    elif frame_result.get("status") == "failed":
+                        if transcript_result.get("transcript_path") or item.get("transcript_path"):
+                            error_message = frame_result.get("error_message") or "Frame extraction failed."
+                            with self._lock:
+                                item.update(
+                                    {
+                                        "status": "error",
+                                        "error_message": error_message,
+                                        "technical_details": error_message,
+                                        "processing_time_sec": transcript_result.get("processing_time_sec"),
+                                    }
+                                )
+                                self._persist_locked()
+                                logger.error(
+                                    "Queue frame extraction failed after transcription: job_id=%s index=%s frames_dir=%s",
+                                    self._job_id,
+                                    item["index"],
+                                    item.get("frames_dir"),
+                                )
+                            task_failed = True
+                        else:
+                            raise RuntimeError(frame_result.get("error_message") or "Frame extraction failed.")
+
+                if not task_cancelled and not task_failed:
+                    with self._lock:
+                        combined_processing = transcript_result.get("processing_time_sec")
+                        item.update(
+                            {
+                                "status": "completed",
+                                "error_message": None,
+                                "technical_details": None,
+                                "processing_time_sec": combined_processing,
+                            }
+                        )
+                        self._persist_locked()
+                        logger.info(
+                            "Queue task completed: job_id=%s index=%s transcript=%s json=%s frames=%s duration=%s processing_time=%s realtime_factor=%s",
+                            self._job_id,
+                            item["index"],
+                            item["transcript_path"],
+                            item["json_path"],
+                            item.get("extracted_frame_count"),
+                            item["audio_duration_sec"],
+                            item["processing_time_sec"],
+                            item["realtime_factor"],
+                        )
             except Exception as exc:
                 error_metadata: dict = {}
                 if self.error_recorder is not None:
@@ -352,7 +708,7 @@ class QueueManager:
             self._job_id,
             status,
             self._count_locked("completed"),
-            self._count_locked("error"),
+            self._count_failed_locked(),
             self._count_locked("cancelled"),
         )
 
@@ -403,7 +759,7 @@ class QueueManager:
             "status": self._status,
             "total_items": len(self._items),
             "completed_items": self._count_locked("completed"),
-            "failed_items": self._count_locked("error"),
+            "failed_items": self._count_failed_locked(),
             "cancelled_items": self._count_locked("cancelled"),
             "items": copy.deepcopy(self._items),
         }
@@ -486,6 +842,9 @@ class QueueManager:
 
     def _count_locked(self, status: str) -> int:
         return sum(1 for item in self._items if item["status"] == status)
+
+    def _count_failed_locked(self) -> int:
+        return sum(1 for item in self._items if item["status"] in {"error", "failed"})
 
     @staticmethod
     def _rounded(value: float | None) -> float | None:

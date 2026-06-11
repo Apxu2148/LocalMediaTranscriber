@@ -1,6 +1,7 @@
 import logging
 import shutil
 import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -206,7 +207,7 @@ class WhisperModelManager:
 
         for path in existing_paths:
             logger.info("Deleting Whisper model cache path: model=%s path=%s", selected_model, path)
-            shutil.rmtree(path)
+            self._remove_tree_with_retries(path)
 
         return {
             "deleted": True,
@@ -217,6 +218,19 @@ class WhisperModelManager:
 
     def can_delete_model(self, model_name: str) -> bool:
         return any(path.exists() for path in self.deletable_paths(model_name))
+
+    @staticmethod
+    def _remove_tree_with_retries(path: Path) -> None:
+        for attempt in range(10):
+            try:
+                shutil.rmtree(path)
+                return
+            except FileNotFoundError:
+                return
+            except PermissionError:
+                if attempt == 9:
+                    raise
+                time.sleep(0.1)
 
     def deletable_paths(self, model_name: str) -> list[Path]:
         selected_model = self.validate_model(model_name)

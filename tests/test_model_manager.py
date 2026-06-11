@@ -1,7 +1,8 @@
+import shutil
 import unittest
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from unittest.mock import patch
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
@@ -18,6 +19,18 @@ with patch.object(utils_module, "setup_logging"):
 
 
 class ModelManagerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.root = PROJECT_TMP / f"model_manager_{uuid4().hex}"
+        self.root.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def temp_root(self, name: str) -> Path:
+        root = self.root / name
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
     def make_manager(self, root: Path) -> WhisperModelManager:
         return WhisperModelManager(models_dir=root, supported_models=("tiny", "small"))
 
@@ -29,52 +42,48 @@ class ModelManagerTests(unittest.TestCase):
         return snapshot
 
     def test_supported_model_list_returns_expected_shape(self) -> None:
-        with TemporaryDirectory(dir=PROJECT_TMP) as temp_dir:
-            manager = self.make_manager(Path(temp_dir))
-            snapshot = self.write_complete_snapshot(manager)
+        manager = self.make_manager(self.temp_root("supported"))
+        snapshot = self.write_complete_snapshot(manager)
 
-            models = manager.list_models()
-            small = next(item for item in models if item["name"] == "small")
+        models = manager.list_models()
+        small = next(item for item in models if item["name"] == "small")
 
-            self.assertTrue(small["is_downloaded"])
-            self.assertEqual("available", small["status"])
-            self.assertEqual(str(snapshot), small["local_path"])
-            self.assertTrue(small["can_delete"])
-            self.assertIn("size_label", small)
-            self.assertIn("repo_id", small)
+        self.assertTrue(small["is_downloaded"])
+        self.assertEqual("available", small["status"])
+        self.assertEqual(str(snapshot), small["local_path"])
+        self.assertTrue(small["can_delete"])
+        self.assertIn("size_label", small)
+        self.assertIn("repo_id", small)
 
     def test_invalid_model_is_rejected_and_info_exists(self) -> None:
-        with TemporaryDirectory(dir=PROJECT_TMP) as temp_dir:
-            manager = self.make_manager(Path(temp_dir))
-            with self.assertRaises(ValueError):
-                manager.model_status("medium")
+        manager = self.make_manager(self.temp_root("invalid"))
+        with self.assertRaises(ValueError):
+            manager.model_status("medium")
 
-            info = manager.model_info("tiny")
-            self.assertEqual("tiny", info["name"])
-            self.assertIn("parameter_count_label", info)
+        info = manager.model_info("tiny")
+        self.assertEqual("tiny", info["name"])
+        self.assertIn("parameter_count_label", info)
 
     def test_delete_removes_only_selected_model_cache(self) -> None:
-        with TemporaryDirectory(dir=PROJECT_TMP) as temp_dir:
-            manager = self.make_manager(Path(temp_dir))
-            selected_snapshot = self.write_complete_snapshot(manager, "small")
-            other_snapshot = self.write_complete_snapshot(manager, "tiny")
+        manager = self.make_manager(self.temp_root("delete"))
+        selected_snapshot = self.write_complete_snapshot(manager, "small")
+        other_snapshot = self.write_complete_snapshot(manager, "tiny")
 
-            result = manager.delete_model("small", confirm=True)
+        result = manager.delete_model("small", confirm=True)
 
-            self.assertTrue(result["deleted"])
-            self.assertFalse(selected_snapshot.exists())
-            self.assertTrue(other_snapshot.exists())
+        self.assertTrue(result["deleted"])
+        self.assertFalse(selected_snapshot.exists())
+        self.assertTrue(other_snapshot.exists())
 
     def test_delete_refuses_invalid_and_unsafe_paths(self) -> None:
-        with TemporaryDirectory(dir=PROJECT_TMP) as temp_dir:
-            manager = self.make_manager(Path(temp_dir))
+        manager = self.make_manager(self.temp_root("unsafe"))
 
-            with self.assertRaises(ValueError):
-                manager.delete_model("medium", confirm=True)
-            with self.assertRaises(ValueError):
-                manager.delete_model("small", confirm=False)
+        with self.assertRaises(ValueError):
+            manager.delete_model("medium", confirm=True)
+        with self.assertRaises(ValueError):
+            manager.delete_model("small", confirm=False)
 
-            self.assertFalse(manager._is_safe_model_cache_path(manager.cache_dir, "small"))
+        self.assertFalse(manager._is_safe_model_cache_path(manager.cache_dir, "small"))
 
     def test_download_status_endpoint_shape(self) -> None:
         with TestClient(main_module.app) as client:
@@ -93,24 +102,23 @@ class ModelManagerTests(unittest.TestCase):
             def start(self) -> None:
                 pass
 
-        with TemporaryDirectory(dir=PROJECT_TMP) as temp_dir:
-            manager = self.make_manager(Path(temp_dir))
-            manager._download_state = DownloadState(
-                active=False,
-                model="small",
-                status="download_error",
-                message="old error",
-                error_message="old technical error",
-            )
+        manager = self.make_manager(self.temp_root("download"))
+        manager._download_state = DownloadState(
+            active=False,
+            model="small",
+            status="download_error",
+            message="old error",
+            error_message="old technical error",
+        )
 
-            with patch("app.model_manager.threading.Thread", FakeThread):
-                status = manager.start_download("small")
+        with patch("app.model_manager.threading.Thread", FakeThread):
+            status = manager.start_download("small")
 
-            self.assertTrue(status["accepted"])
-            self.assertTrue(status["active"])
-            self.assertEqual("starting", status["status"])
-            self.assertIsNone(status["error_message"])
-            self.assertNotIn("old", status["message"])
+        self.assertTrue(status["accepted"])
+        self.assertTrue(status["active"])
+        self.assertEqual("starting", status["status"])
+        self.assertIsNone(status["error_message"])
+        self.assertNotIn("old", status["message"])
 
     def test_verify_endpoint_uses_mocked_transcriber_without_downloading(self) -> None:
         with (

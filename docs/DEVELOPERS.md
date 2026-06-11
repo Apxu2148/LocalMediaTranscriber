@@ -6,7 +6,7 @@ This guide is the technical handoff for future LocalMediaTranscriber iterations.
 
 LocalMediaTranscriber is a local Windows app for recording and transcribing media. Today it is still close to its source fork, LocalAudioTranscriber: it records microphone audio, records system audio through WASAPI loopback, and transcribes audio or audio tracks from supported media files with `faster-whisper`.
 
-The product direction is broader than audio-only transcription. Future iterations should evolve toward media sessions that can combine microphone audio, system audio, screen video, keyframes, OCR, and VLM analysis while preserving the stable audio recording and queue behavior already present.
+The product direction is broader than audio-only transcription. Future iterations should evolve toward media sessions that can combine microphone audio, system audio, screen video, extracted frames, OCR, and VLM analysis while preserving the stable audio recording and queue behavior already present.
 
 ## Current Architecture
 
@@ -25,6 +25,7 @@ recorder = AudioRecorder()
 system_recorder = SystemAudioRecorder()
 screen_recorder = ScreenRecorder()
 video_muxer = VideoMuxer()
+frame_extractor = VideoFrameExtractor()
 transcriber = AudioTranscriber()
 model_manager = WhisperModelManager()
 transcript_store = TranscriptStore()
@@ -37,7 +38,7 @@ Queue and benchmark services use these shared objects. This keeps model caching 
 - `app`: Python backend modules.
 - `static`: Browser UI assets.
 - `tests`: Focused unit and contract tests.
-- `data\recordings`: WAV files created by microphone and system audio recording, screen video files, flat screen `session_*.json` files, and merged video outputs.
+- `data\recordings`: WAV files created by microphone and system audio recording, screen video files, flat screen `session_*.json` files, merged video outputs, and `<base>__frames` frame extraction folders.
 - `data\media_sessions`: Legacy screen recording MVP session folders from earlier builds.
 - `data\uploads`: Files uploaded through the UI for transcription or benchmarks.
 - `data\downloads`: Audio extracted or downloaded from public URLs.
@@ -100,6 +101,9 @@ Important endpoints include:
 - `POST /api/queue/add-files`
 - `POST /api/queue/add-recordings`
 - `POST /api/queue/add-urls`
+- `POST /api/queue/update-item`
+- `POST /api/queue/remove-item`
+- `POST /api/queue/cancel-item`
 - `POST /api/queue/start`
 - `POST /api/queue/stop-after-current`
 - `POST /api/queue/clear`
@@ -352,12 +356,75 @@ Sequential global transcription queue.
 Key behavior:
 
 - Accepts local uploaded files, latest recordings, and URL sources.
+- Marks local `.mp4`, `.webm`, `.mkv`, and `.avi` sources as video items.
 - Creates one job JSON under `data\jobs`.
 - Processes items sequentially in one worker thread.
-- Supports stop-after-current, clear, retry failed items, status snapshots, elapsed time, ETA, and persistent job snapshots.
-- Uses callbacks supplied by `app/main.py` to download URLs, transcribe files, and record errors.
+- Supports stop-after-current, clear, retry failed items, pending-item removal, running frame-extraction cancellation, status snapshots, elapsed time, ETA, and persistent job snapshots.
+- Stores per-video operation choices in `operations`: `transcribe_audio`, `extract_frames`, `ocr`, and `cv`.
+- Keeps OCR and CV rejected in the backend; the current UI renders them as disabled coming-soon options.
+- Stores per-video frame settings in `frame_extraction`: extraction rate, JPEG quality, estimates, warning flag, and latest extraction result.
+- Uses callbacks supplied by `app/main.py` to download URLs, transcribe files, extract frames, and record errors.
 
 The queue intentionally processes one item at a time. This lowers CUDA memory pressure and keeps the UI progress model simple.
+
+### `app/frame_extractor.py`
+
+OpenCV-backed video frame extraction for queue video items.
+
+Key behavior:
+
+- Supports `.mp4`, `.webm`, `.mkv`, and `.avi` through `config.SUPPORTED_VIDEO_EXTENSIONS`.
+- Normalizes extraction rates to fixed interval values (`30`, `20`, `15`, `10`, `5`, `3`, `2`, `1` seconds) or FPS values (`2`, `3`, `5`, `10`, `15`, `20`, `30`).
+- Defaults to one frame every `10` seconds and JPEG quality `90`.
+- Reads metadata with OpenCV: duration, FPS, width, height, and source frame count when available.
+- Estimates output frame count and a rough min/max disk usage range from duration, dimensions, and quality.
+- Writes each extraction to `data\recordings\<base>__frames`.
+- Writes JPEGs as `frame_000001__t000000.000.jpg`, where `t` is seconds from video start.
+- Writes and updates `frames_index.json` during processing, cancellation, completion, and failure.
+- Accepts a cancellation event; cancellation preserves partial JPEGs and marks the index as `cancelled`.
+
+The index payload has schema version `1` and includes:
+
+```json
+{
+  "schema_version": 1,
+  "status": "completed",
+  "completed": true,
+  "source_video": "clip.avi",
+  "source_path": "data/uploads/clip.avi",
+  "source_stem": "clip",
+  "output_base": "clip_20260611_120000",
+  "frames_dir": "clip_20260611_120000__frames",
+  "frames_path": "data/recordings/clip_20260611_120000__frames",
+  "extraction": {
+    "mode": "interval",
+    "seconds": 10,
+    "requested_fps": null,
+    "jpeg_quality": 90
+  },
+  "video_metadata": {
+    "duration_sec": 31.0,
+    "fps": 30.0,
+    "width": 1920,
+    "height": 1080,
+    "frame_count": 930
+  },
+  "estimated_frame_count": 4,
+  "extracted_frame_count": 4,
+  "requested_fps_exceeds_source_fps": false,
+  "frames": [
+    {
+      "index": 1,
+      "t": 0.0,
+      "file": "frame_000001__t000000.000.jpg",
+      "width": 1920,
+      "height": 1080
+    }
+  ]
+}
+```
+
+On cancellation, `status` is `cancelled`, `completed` is `false`, `cancelled` is `true`, and `cancelled_at_t` records the next timestamp that would have been processed. On failure, `status` is `failed` and `error_message` is populated.
 
 ### `app/transcriber.py`
 
@@ -565,17 +632,21 @@ Audio files, screen videos, input event JSONL files, merged videos, and new scre
    - selected local files through `/api/queue/add-files`;
    - public URLs through `/api/queue/add-urls`.
 2. `QueueManager` creates or updates a job under `data\jobs`.
-3. The user starts the queue with `/api/queue/start`, passing the selected model and device preference.
-4. Queue settings are frozen for that run.
-5. A single worker thread processes items in order.
-6. URL items are downloaded/extracted through `UrlDownloader` before transcription.
-7. Files are validated and passed to `AudioTranscriber`.
-8. `TranscriptStore` saves TXT and JSON outputs.
-9. Queue status is polled by the UI and shows counts, current item, elapsed time, ETA, and progress.
-10. `stop-after-current` completes the active item and cancels pending items.
-11. `retry-errors` moves failed items back to pending for a later manual start.
+3. Video items receive default operations: `transcribe_audio=true`, `extract_frames=false`, `ocr=false`, and `cv=false`.
+4. Before the queue starts, the UI can call `/api/queue/update-item` to change video operations and frame extraction settings.
+5. Before the queue starts, or while another item is running, pending items can be removed through `/api/queue/remove-item`.
+6. The user starts the queue with `/api/queue/start`, passing the selected model and device preference.
+7. Queue settings are frozen for that run.
+8. A single worker thread processes items in order.
+9. URL items are downloaded/extracted through `UrlDownloader` before processing.
+10. For audio transcription, files are validated and passed to `AudioTranscriber`; `TranscriptStore` saves TXT and JSON outputs.
+11. For frame extraction, `VideoFrameExtractor` writes JPEGs and `frames_index.json` under `data\recordings\<base>__frames`.
+12. A running item can be cancelled only while its status is `extracting_frames`; the item becomes `cancelled` and the worker continues to the next pending item.
+13. Queue status is polled by the UI and shows counts, current item, elapsed time, ETA, progress, operation settings, estimates, and frame results.
+14. `stop-after-current` completes the active item and cancels pending items.
+15. `retry-errors` moves failed items back to pending for a later manual start.
 
-The queue is intentionally sequential. Do not parallelize transcription without a separate design for GPU memory, cancellation, UI status, and job persistence.
+The queue is intentionally sequential. Do not parallelize transcription or frame extraction without a separate design for GPU memory, disk pressure, cancellation, UI status, and job persistence.
 
 ## Development Cleanup
 
@@ -611,10 +682,12 @@ Light checks for small UI/docs iterations:
 ```bat
 .venv\Scripts\python.exe -m compileall app
 .venv\Scripts\python.exe -m unittest tests.test_i18n tests.test_ui_contract
+.venv\Scripts\python.exe -m unittest tests.test_frame_extractor
 .venv\Scripts\python.exe -m unittest tests.test_model_manager
 .venv\Scripts\python.exe -m unittest tests.test_file_listing tests.test_dev_cleanup_scripts
 .venv\Scripts\python.exe -m unittest tests.test_screen_recorder
 .venv\Scripts\python.exe -m unittest tests.test_video_muxer
+.venv\Scripts\python.exe -m unittest tests.test_queue_manager tests.test_media_validation
 git diff --check
 git diff --stat
 git status
@@ -631,7 +704,8 @@ Useful targeted tests:
 - `tests.test_dev_cleanup_scripts`: cleanup entrypoint existence and project-scoped safety markers.
 - `tests.test_screen_recorder`: screen FPS/display validation, media session JSON, and lightweight API validation.
 - `tests.test_video_muxer`: FFmpeg command construction, path validation, audio-required validation, and missing-FFmpeg handling.
-- `tests.test_queue_manager`: queue behavior.
+- `tests.test_frame_extractor`: video metadata, estimates, JPEG output, index persistence, and cancellation.
+- `tests.test_queue_manager`: queue behavior, video item operation settings, pending removal, and frame extraction cancellation.
 - `tests.test_transcript_store`: transcript filename and metadata persistence.
 - `tests.test_media_validation`: supported media validation.
 - `tests.test_url_downloader`: URL downloader logic.
@@ -695,7 +769,7 @@ Planned product direction:
 5. Multiple screens saved as separate video files.
 6. Mouse events MVP.
 7. Keyboard events MVP with a clear privacy warning.
-8. Keyframes.
+8. Advanced keyframe selection.
 9. OCR.
 10. VLM.
 11. Local/server processing modes.
@@ -712,7 +786,7 @@ Suggested implementation shape for future media work:
 
 Do not add these until explicitly requested:
 
-- OCR, VLM, keyframe extraction, or scene detection.
+- OCR, VLM, advanced keyframe selection, or scene detection.
 - Cursor trail overlays, click pulse overlays, or typed text logging.
 - Automatic audio/video muxing at stop time or a complex timeline editor.
 - A complex media-session editor/viewer.

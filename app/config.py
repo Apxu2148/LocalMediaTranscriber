@@ -76,7 +76,9 @@ SILENCE_PEAK_THRESHOLD = float(os.getenv("SILENCE_PEAK_THRESHOLD", "0.005"))
 LEVEL_RMS_REFERENCE = float(os.getenv("LEVEL_RMS_REFERENCE", "0.02"))
 LEVEL_PEAK_REFERENCE = float(os.getenv("LEVEL_PEAK_REFERENCE", "0.05"))
 
-SUPPORTED_AUDIO_EXTENSIONS = {".wav", ".mp3", ".m4a", ".mp4", ".webm", ".mkv"}
+SUPPORTED_AUDIO_ONLY_EXTENSIONS = {".wav", ".mp3", ".m4a"}
+SUPPORTED_VIDEO_EXTENSIONS = {".mp4", ".webm", ".mkv", ".avi"}
+SUPPORTED_AUDIO_EXTENSIONS = SUPPORTED_AUDIO_ONLY_EXTENSIONS | SUPPORTED_VIDEO_EXTENSIONS
 
 
 def ensure_directories() -> None:

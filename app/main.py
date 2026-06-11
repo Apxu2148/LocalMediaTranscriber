@@ -17,6 +17,7 @@ from starlette.concurrency import run_in_threadpool
 from . import config
 from .audio_recorder import AudioRecorder
 from .benchmark_service import BenchmarkService
+from .frame_extractor import VideoFrameExtractor
 from .model_manager import WhisperModelManager
 from .queue_manager import QueueFile, QueueManager, QueueUrl
 from .screen_recorder import (
@@ -61,6 +62,7 @@ recorder = AudioRecorder()
 system_recorder = SystemAudioRecorder()
 screen_recorder = ScreenRecorder()
 video_muxer = VideoMuxer()
+frame_extractor = VideoFrameExtractor()
 transcriber = AudioTranscriber()
 model_manager = WhisperModelManager()
 transcript_store = TranscriptStore()
@@ -119,6 +121,16 @@ class QueueStartRequest(BaseModel):
     device: str | None = None
 
 
+class QueueItemIndexRequest(BaseModel):
+    index: int
+
+
+class QueueItemUpdateRequest(BaseModel):
+    index: int
+    operations: dict | None = None
+    frame_extraction: dict | None = None
+
+
 class QueueUrlsRequest(BaseModel):
     urls: list[str]
 
@@ -171,6 +183,20 @@ def process_queue_item(item: dict, model_name: str, device_preference: str) -> d
     )
 
 
+def process_queue_frame_extraction(item: dict, cancel_event: threading.Event, progress_callback) -> dict:
+    source_path = Path(item["source_path"])
+    frame_settings = item.get("frame_extraction") or {}
+    return frame_extractor.extract_frames(
+        source_path=source_path,
+        source_filename=item.get("source_filename") or source_path.name,
+        output_base=item.get("output_base"),
+        rate=frame_settings.get("rate"),
+        jpeg_quality=frame_settings.get("jpeg_quality"),
+        cancel_event=cancel_event,
+        progress_callback=progress_callback,
+    )
+
+
 def save_queue_item_error(item: dict, model_name: str, _device_preference: str, exc: Exception) -> dict:
     source_path = Path(item.get("source_path") or config.DOWNLOADS_DIR / item["source_filename"])
     return transcript_store.save_error(
@@ -191,6 +217,7 @@ queue_manager = QueueManager(
     error_recorder=save_queue_item_error,
     media_validator=validate_media_for_transcription,
     downloader=url_downloader.download,
+    frame_processor=process_queue_frame_extraction,
 )
 benchmark_service = BenchmarkService(
     transcriber=transcriber,
@@ -850,6 +877,39 @@ def queue_start(payload: QueueStartRequest | None = Body(default=None)) -> dict:
     selected_device = validate_device_preference(request.device)
     try:
         return queue_manager.start(selected_model, selected_device)
+    except RuntimeError as exc:
+        raise_api_error(str(exc))
+
+
+@app.post("/api/queue/update-item")
+def queue_update_item(payload: QueueItemUpdateRequest) -> dict:
+    ensure_benchmark_inactive()
+    try:
+        return queue_manager.update_item(
+            payload.index,
+            operations=payload.operations,
+            frame_extraction=payload.frame_extraction,
+        )
+    except RuntimeError as exc:
+        raise_api_error(str(exc))
+    except ValueError as exc:
+        raise_api_error(str(exc))
+
+
+@app.post("/api/queue/remove-item")
+def queue_remove_item(payload: QueueItemIndexRequest) -> dict:
+    ensure_benchmark_inactive()
+    try:
+        return queue_manager.remove_item(payload.index)
+    except RuntimeError as exc:
+        raise_api_error(str(exc))
+
+
+@app.post("/api/queue/cancel-item")
+def queue_cancel_item(payload: QueueItemIndexRequest) -> dict:
+    ensure_benchmark_inactive()
+    try:
+        return queue_manager.cancel_item(payload.index)
     except RuntimeError as exc:
         raise_api_error(str(exc))
 

@@ -118,6 +118,22 @@ class I18nTests(unittest.TestCase):
             "tourModelsText",
             "show",
             "hide",
+            "processingOptions",
+            "transcribeAudio",
+            "extractFrames",
+            "ocr",
+            "cv",
+            "comingSoon",
+            "frameExtractionRate",
+            "jpegQuality",
+            "estimatedFrames",
+            "frameCountWarning",
+            "removeFromQueue",
+            "cancelCurrentItem",
+            "cancelCurrentShort",
+            "runningAudioCannotCancel",
+            "frameWriteError",
+            "statusExtractingFrames",
         ):
             self.assertIn(key, en_keys)
 

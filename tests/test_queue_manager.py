@@ -1,4 +1,5 @@
 import json
+import shutil
 import threading
 import unittest
 from pathlib import Path
@@ -14,7 +15,8 @@ PROJECT_TMP = Path(__file__).resolve().parents[1] / "tmp"
 class QueueManagerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.prefix = f"codex_queue_manager_{uuid4().hex}"
-        self.created_paths: list[Path] = []
+        self.root = PROJECT_TMP / self.prefix
+        self.root.mkdir(parents=True, exist_ok=True)
         self.managers: list[QueueManager] = []
         self.timestamp_patch = patch("app.queue_manager.timestamp_for_filename", return_value=self.prefix)
         self.timestamp_patch.start()
@@ -23,24 +25,19 @@ class QueueManagerTests(unittest.TestCase):
         for manager in self.managers:
             manager.wait(timeout=1)
         self.timestamp_patch.stop()
-        paths = set(self.created_paths)
-        paths.update(PROJECT_TMP.glob(f"*{self.prefix}*"))
-        for path in paths:
-            path.unlink(missing_ok=True)
+        shutil.rmtree(self.root, ignore_errors=True)
 
     def make_file(self, name: str) -> QueueFile:
-        path = PROJECT_TMP / f"{self.prefix}__{name}"
+        path = self.root / name
         path.write_bytes(b"test")
-        self.created_paths.append(path)
         return QueueFile(source_path=path, source_filename=name)
 
     def make_manager(self, **kwargs) -> QueueManager:
-        manager = QueueManager(jobs_dir=PROJECT_TMP, **kwargs)
+        manager = QueueManager(jobs_dir=self.root, **kwargs)
         self.managers.append(manager)
         return manager
 
     def track_job(self, status: dict) -> dict:
-        self.created_paths.append(Path(status["job_path"]))
         return status
 
     def test_processes_files_sequentially_and_persists_job_json(self) -> None:
@@ -205,6 +202,219 @@ class QueueManagerTests(unittest.TestCase):
             )
         ]))
         self.assertEqual("mic", status["items"][0]["source_type"])
+
+    def test_video_item_includes_operations_and_frame_estimate(self) -> None:
+        manager = self.make_manager(
+            processor=lambda _item, _model, _device: {},
+            video_metadata_reader=lambda _path: {
+                "duration_sec": 31,
+                "fps": 30,
+                "width": 100,
+                "height": 50,
+                "frame_count": 930,
+            },
+        )
+        status = self.track_job(manager.add_files([self.make_file("clip.avi")]))
+        item = status["items"][0]
+
+        self.assertEqual("video", item["media_kind"])
+        self.assertTrue(item["operations"]["transcribe_audio"])
+        self.assertFalse(item["operations"]["extract_frames"])
+        self.assertEqual({"mode": "interval", "seconds": 10}, item["frame_extraction"]["rate"])
+        self.assertEqual(90, item["frame_extraction"]["jpeg_quality"])
+        self.assertEqual(4, item["frame_extraction"]["estimated_frame_count"])
+
+    def test_video_item_without_executable_operation_is_rejected(self) -> None:
+        manager = self.make_manager(
+            processor=lambda _item, _model, _device: {},
+            video_metadata_reader=lambda _path: {"duration_sec": 10, "fps": 30, "width": 100, "height": 50},
+        )
+        status = self.track_job(manager.add_files([self.make_file("clip.mp4")]))
+        manager.update_item(
+            status["items"][0]["index"],
+            operations={"transcribe_audio": False, "extract_frames": False},
+        )
+
+        with self.assertRaises(RuntimeError):
+            manager.start("small")
+
+    def test_pending_item_can_be_removed(self) -> None:
+        manager = self.make_manager(processor=lambda _item, _model, _device: {})
+        status = self.track_job(manager.add_files([self.make_file("one.wav"), self.make_file("two.wav")]))
+
+        status = manager.remove_item(status["items"][1]["index"])
+
+        self.assertEqual(1, status["total_items"])
+        self.assertEqual(["one.wav"], [item["source_filename"] for item in status["items"]])
+
+    def test_pending_item_can_be_removed_while_another_item_is_running(self) -> None:
+        started = threading.Event()
+        release = threading.Event()
+
+        def processor(_item: dict, _model: str, _device: str) -> dict:
+            started.set()
+            release.wait(timeout=3)
+            return {"processing_time_sec": 1}
+
+        manager = self.make_manager(processor=processor, duration_reader=lambda _path: 1)
+        status = self.track_job(manager.add_files([self.make_file("one.wav"), self.make_file("two.wav")]))
+        manager.start("small")
+        self.assertTrue(started.wait(timeout=2))
+        manager.remove_item(status["items"][1]["index"])
+        release.set()
+        manager.wait(timeout=3)
+
+        status = manager.status()
+        self.assertEqual("completed", status["status"])
+        self.assertEqual(["completed"], [item["status"] for item in status["items"]])
+        self.assertEqual(["one.wav"], [item["source_filename"] for item in status["items"]])
+
+    def test_running_frame_extraction_can_be_cancelled_and_queue_continues(self) -> None:
+        frame_started = threading.Event()
+        processed: list[str] = []
+
+        def processor(item: dict, _model: str, _device: str) -> dict:
+            processed.append(item["source_filename"])
+            return {"processing_time_sec": 1}
+
+        def frame_processor(item: dict, cancel_event: threading.Event, _progress) -> dict:
+            frame_started.set()
+            cancel_event.wait(timeout=3)
+            return {
+                "status": "cancelled",
+                "completed": False,
+                "cancelled": True,
+                "frames_dir": f"{item['output_base']}__frames",
+                "frames_path": f"data/recordings/{item['output_base']}__frames",
+                "frames_index_path": f"data/recordings/{item['output_base']}__frames/frames_index.json",
+                "estimated_frame_count": 10,
+                "extracted_frame_count": 1,
+            }
+
+        manager = self.make_manager(
+            processor=processor,
+            frame_processor=frame_processor,
+            duration_reader=lambda _path: 1,
+            video_metadata_reader=lambda _path: {"duration_sec": 10, "fps": 30, "width": 100, "height": 50},
+        )
+        self.track_job(manager.add_files([
+            QueueFile(
+                source_path=self.make_file("video.mp4").source_path,
+                source_filename="video.mp4",
+                operations={"transcribe_audio": False, "extract_frames": True},
+            ),
+            self.make_file("after.wav"),
+        ]))
+
+        manager.start("small", "cpu")
+        self.assertTrue(frame_started.wait(timeout=2))
+        manager.cancel_item(1)
+        manager.cancel_item(1)
+        manager.wait(timeout=3)
+
+        status = manager.status()
+        self.assertEqual("completed", status["status"])
+        self.assertEqual(["cancelled", "completed"], [item["status"] for item in status["items"]])
+        self.assertEqual(["after.wav"], processed)
+        self.assertEqual(1, status["items"][0]["extracted_frame_count"])
+
+    def test_video_item_with_both_operations_records_transcript_and_frames(self) -> None:
+        def processor(item: dict, _model: str, _device: str) -> dict:
+            return {
+                "audio_duration_sec": 5,
+                "processing_time_sec": 2,
+                "realtime_factor": 2.5,
+                "transcript_path": f"{item['source_path']}.txt",
+                "json_path": f"{item['source_path']}.json",
+            }
+
+        def frame_processor(item: dict, _cancel_event: threading.Event, _progress) -> dict:
+            return {
+                "status": "completed",
+                "completed": True,
+                "frames_dir": f"{item['output_base']}__frames",
+                "frames_path": f"data/recordings/{item['output_base']}__frames",
+                "frames_index_path": f"data/recordings/{item['output_base']}__frames/frames_index.json",
+                "estimated_frame_count": 3,
+                "extracted_frame_count": 3,
+            }
+
+        manager = self.make_manager(
+            processor=processor,
+            frame_processor=frame_processor,
+            duration_reader=lambda _path: 5,
+            video_metadata_reader=lambda _path: {"duration_sec": 5, "fps": 30, "width": 100, "height": 50},
+        )
+        self.track_job(manager.add_files([
+            QueueFile(
+                source_path=self.make_file("both.webm").source_path,
+                source_filename="both.webm",
+                operations={"transcribe_audio": True, "extract_frames": True},
+            )
+        ]))
+
+        manager.start("small", "cpu")
+        manager.wait(timeout=3)
+
+        item = manager.status()["items"][0]
+        self.assertEqual("completed", item["status"])
+        self.assertTrue(item["transcript_path"].endswith(".txt"))
+        self.assertTrue(item["json_path"].endswith(".json"))
+        self.assertTrue(item["frames_index_path"].endswith("frames_index.json"))
+        self.assertEqual(3, item["extracted_frame_count"])
+
+    def test_frame_failure_after_audio_transcription_preserves_transcript_result(self) -> None:
+        def processor(item: dict, _model: str, _device: str) -> dict:
+            return {
+                "audio_duration_sec": 5,
+                "processing_time_sec": 2,
+                "realtime_factor": 2.5,
+                "transcript_path": f"{item['source_path']}.txt",
+                "json_path": f"{item['source_path']}.json",
+            }
+
+        def frame_processor(item: dict, _cancel_event: threading.Event, _progress) -> dict:
+            return {
+                "status": "failed",
+                "completed": False,
+                "error_message": "Could not write JPEG frame: frame_000001__t000000.000.jpg",
+                "error_code": "frame_write_failed",
+                "error_filename": "frame_000001__t000000.000.jpg",
+                "frames_dir": f"{item['output_base']}__frames",
+                "frames_path": f"data/recordings/{item['output_base']}__frames",
+                "frames_index_path": f"data/recordings/{item['output_base']}__frames/frames_index.json",
+                "estimated_frame_count": 3,
+                "extracted_frame_count": 0,
+            }
+
+        manager = self.make_manager(
+            processor=processor,
+            frame_processor=frame_processor,
+            duration_reader=lambda _path: 5,
+            video_metadata_reader=lambda _path: {"duration_sec": 5, "fps": 30, "width": 100, "height": 50},
+        )
+        self.track_job(manager.add_files([
+            QueueFile(
+                source_path=self.make_file("partial.webm").source_path,
+                source_filename="partial.webm",
+                operations={"transcribe_audio": True, "extract_frames": True},
+            ),
+            self.make_file("after.wav"),
+        ]))
+
+        manager.start("small", "cpu")
+        manager.wait(timeout=3)
+
+        status = manager.status()
+        first = status["items"][0]
+        self.assertEqual("completed", status["status"])
+        self.assertEqual("error", first["status"])
+        self.assertEqual(1, status["failed_items"])
+        self.assertTrue(first["transcript_path"].endswith(".txt"))
+        self.assertTrue(first["json_path"].endswith(".json"))
+        self.assertEqual("failed", first["frame_extraction_result"]["status"])
+        self.assertEqual("frame_write_failed", first["frame_extraction_result"]["error_code"])
+        self.assertEqual("completed", status["items"][1]["status"])
 
     def test_url_download_error_does_not_stop_queue(self) -> None:
         processed: list[str] = []
