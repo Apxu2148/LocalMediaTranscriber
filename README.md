@@ -18,6 +18,8 @@ This project is a separate fork of `LocalAudioTranscriber`. The current version 
 - Keep the recent recordings list compact and hide service JSON metadata files from the normal user file list.
 - Show microphone and system audio levels.
 - Add latest recordings, local files, or public URLs to a global media processing queue.
+- See persistent queue stage status while long operations run.
+- Add controls are disabled while a file, recording, or link is being added to prevent accidental duplicate queue items.
 - Transcribe `.wav`, `.mp3`, `.m4a`, `.mp4`, `.webm`, `.mkv`, `.avi`, and `.mov` sources.
 - Extract and transcribe the audio track from supported video files.
 - Choose per-video queue operations: transcribe audio, extract frames, or both.
@@ -126,6 +128,14 @@ If Git reports `.git/index.lock` before commit, run `cleanup-dev.bat`.
 ## Stored Files
 
 The queue is now a media processing queue. Its main action is "Start processing". Video files and supported video URLs can currently be transcribed, split into frames, or both. OCR and CV/VLM options are visible as disabled coming-soon placeholders and are not implemented yet.
+
+Queue usability:
+
+- The app shows persistent queue stage status near the queue controls and inside running item cards.
+- Add buttons are disabled while a file, latest recording, or link is being added. If the laptop is slow, wait for the visible "Adding..." or stage message instead of clicking repeatedly.
+- Fast repeated clicks and active duplicate file/link adds are ignored before they can create duplicate queue items.
+- Queue stages include preparing source, downloading media/video, transcribing audio, extracting frames, completed, failed, and cancelled.
+- OCR/CV/media-index stage labels are reserved for future work, but OCR/CV processing is not implemented yet.
 
 Recordings:
 

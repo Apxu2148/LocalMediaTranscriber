@@ -364,12 +364,19 @@ Key behavior:
 - Current executable operations are `transcribe_audio` and `extract_frames`.
 - URL items are created as media processing items. By default they transcribe audio, keep frame extraction off, and carry default frame extraction settings for later opt-in.
 - Visible but disabled future operations are `ocr` and `cv`.
+- Queue item status remains the behavior switch for existing logic. Stage fields are a small UI/status model layered on top: `stage`, `stage_label_key`, and `stage_detail`.
+- Current stage IDs are `idle`, `preparing_source`, `downloading_media`, `downloading_video`, `transcribing_audio`, `extracting_frames`, `cancelling`, `completed`, `failed`, and `cancelled`.
+- Future reserved stage IDs are `ocr_pending_future`, `cv_pending_future`, and `media_index_pending_future`; they are labels only and must not imply OCR/CV/media-index implementation.
 - Stores per-video operation choices in `operations`: `transcribe_audio`, `extract_frames`, `ocr`, and `cv`.
 - Keeps OCR and CV rejected in the backend; the current UI renders them as disabled coming-soon options.
 - Stores per-video frame settings in `frame_extraction`: extraction rate, JPEG quality, estimates, warning flag, and latest extraction result.
 - Uses callbacks supplied by `app/main.py` to download URLs, transcribe files, extract frames, and record errors.
 
 The queue intentionally processes one item at a time. This lowers CUDA memory pressure and keeps the UI progress model simple.
+
+Stage labels are frontend-localized through `static/i18n.js`. Backend snapshots should send stable stage IDs and label keys, not hardcoded UI copy. Persistent stage messages belong in normal page content such as `#queueStageStatus` and `.queue-item-stage`; they must not be implemented only as auto-hiding toasts because the user needs to see the current long-running stage at any time.
+
+Add-button safety lives primarily in `static/app.js`. The UI keeps `isAddingFile`, `isAddingUrl`, `isAddingRecording`, and `pendingAddKeys` guards so repeated clicks during a slow backend response do not enqueue duplicates. Browser file keys use file name, size, and `lastModified`; URL keys use normalized URL text; latest-recording keys use source type plus saved audio path. The backend also ignores active duplicate source paths and normalized URL adds as a secondary guard. Controls must be re-enabled in `finally` paths after success or failure.
 
 ### `app/frame_extractor.py`
 
@@ -647,16 +654,28 @@ Audio files, screen videos, input event JSONL files, merged videos, and new scre
 6. The user starts the queue with `/api/queue/start`, passing the selected model and device preference.
 7. Queue settings are frozen for that run.
 8. A single worker thread processes items in order.
-9. URL items are downloaded/extracted through `UrlDownloader` before processing.
-10. For URL audio-only transcription, `UrlDownloader.download()` downloads direct media URLs directly; non-direct URLs keep the stable `yt-dlp` audio-only extraction path.
-11. For URL frame extraction, `UrlDownloader.download_video()` downloads direct media URLs directly or asks `yt-dlp` for a video-readable media file under `data\downloads`; the queue reuses it for frame extraction and, when selected, transcription.
-12. For audio transcription, files are validated and passed to `AudioTranscriber`; `TranscriptStore` saves TXT and JSON outputs.
-13. For frame extraction, `VideoFrameExtractor` writes JPEGs and `frames_index.json` under `data\recordings\<base>__frames`.
-14. A running item can be cancelled only while its status is `extracting_frames`; cancellation is cooperative, partial frames are kept, `frames_index.json` marks the run cancelled/incomplete, and the worker continues to the next pending item.
-15. Running URL download and audio transcription are currently not safely cancellable; the UI disables that cancel action and explains why.
-16. Queue status is polled by the UI and shows counts, current item, elapsed time, ETA, progress, operation settings, estimates, downloaded media paths, transcript output paths, frame folder paths, frame counts, and frame index paths.
-17. `stop-after-current` completes the active item and cancels pending items.
-18. `retry-errors` moves failed items back to pending for a later manual start.
+9. The UI polls `/api/queue/status` and renders persistent stage status. Stage labels come from `static/i18n.js`, and stage text must stay visible for the whole active stage.
+10. URL items are downloaded/extracted through `UrlDownloader` before processing.
+11. For URL audio-only transcription, `UrlDownloader.download()` downloads direct media URLs directly; non-direct URLs keep the stable `yt-dlp` audio-only extraction path.
+12. For URL frame extraction, `UrlDownloader.download_video()` downloads direct media URLs directly or asks `yt-dlp` for a video-readable media file under `data\downloads`; the queue reuses it for frame extraction and, when selected, transcription.
+13. For audio transcription, files are validated and passed to `AudioTranscriber`; `TranscriptStore` saves TXT and JSON outputs.
+14. For frame extraction, `VideoFrameExtractor` writes JPEGs and `frames_index.json` under `data\recordings\<base>__frames`.
+15. A running item can be cancelled only while its status is `extracting_frames`; cancellation is cooperative, partial frames are kept, `frames_index.json` marks the run cancelled/incomplete, and the worker continues to the next pending item.
+16. Running URL download and audio transcription are currently not safely cancellable; the UI disables that cancel action and explains why.
+17. Queue status shows counts, current item, current stage, elapsed time, ETA, progress, operation settings, estimates, downloaded media paths, transcript output paths, frame folder paths, frame counts, and frame index paths.
+18. `stop-after-current` completes the active item and cancels pending items.
+19. `retry-errors` moves failed items back to pending for a later manual start.
+
+Stage transitions are intentionally coarse and persistent:
+
+- pending item: `idle`;
+- local item setup and post-download metadata/duration checks: `preparing_source`;
+- URL audio/media download: `downloading_media`;
+- URL video-readable download for frame extraction: `downloading_video`;
+- audio extraction/transcription: `transcribing_audio`;
+- frame extraction: `extracting_frames`;
+- requested frame extraction cancellation: `cancelling`;
+- terminal item states: `completed`, `failed`, or `cancelled`.
 
 The queue is intentionally sequential. Do not parallelize transcription or frame extraction without a separate design for GPU memory, disk pressure, cancellation, UI status, and job persistence.
 

@@ -930,6 +930,11 @@ summary:focus-visible {
   height: 18px;
 }
 
+.queue-stage-status {
+  margin-top: 10px;
+  font-weight: 700;
+}
+
 .queue-list {
   list-style: none;
   display: grid;
@@ -975,6 +980,18 @@ summary:focus-visible {
   align-items: center;
   justify-content: end;
   gap: 8px;
+}
+
+.queue-item-stage {
+  display: grid;
+  gap: 2px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.queue-item-stage p {
+  margin: 0;
 }
 
 .queue-item-remove {

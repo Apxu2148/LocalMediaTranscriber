@@ -224,12 +224,130 @@ class QueueManagerTests(unittest.TestCase):
 
         self.assertEqual("url", item["source_type"])
         self.assertEqual("url", item["media_kind"])
+        self.assertEqual("idle", item["stage"])
+        self.assertEqual("queueStageIdle", item["stage_label_key"])
         self.assertTrue(item["operations"]["transcribe_audio"])
         self.assertFalse(item["operations"]["extract_frames"])
         self.assertFalse(item["operations"]["ocr"])
         self.assertFalse(item["operations"]["cv"])
         self.assertEqual({"mode": "interval", "seconds": 10}, item["frame_extraction"]["rate"])
         self.assertEqual(90, item["frame_extraction"]["jpeg_quality"])
+
+    def test_duplicate_pending_file_add_is_ignored(self) -> None:
+        manager = self.make_manager(processor=lambda _item, _model, _device: {})
+        queue_file = self.make_file("one.wav")
+
+        self.track_job(manager.add_files([queue_file]))
+        status = manager.add_files([queue_file])
+
+        self.assertEqual(1, status["total_items"])
+        self.assertEqual(["one.wav"], [item["source_filename"] for item in status["items"]])
+
+    def test_duplicate_pending_url_add_is_ignored(self) -> None:
+        manager = self.make_manager(processor=lambda _item, _model, _device: {})
+
+        self.track_job(manager.add_urls([QueueUrl("https://example.test/video")]))
+        status = manager.add_urls([QueueUrl("https://example.test/video#again")])
+
+        self.assertEqual(1, status["total_items"])
+        self.assertEqual(["https://example.test/video"], [item["source_url"] for item in status["items"]])
+
+    def test_url_video_download_exposes_downloading_video_stage(self) -> None:
+        started = threading.Event()
+        release = threading.Event()
+        video = self.make_file("stage_video.mkv")
+
+        def video_downloader(_url: str) -> dict:
+            started.set()
+            release.wait(timeout=3)
+            return {
+                "source_path": str(video.source_path),
+                "source_title": "Stage Video",
+                "source_platform": "youtube",
+                "audio_duration_sec": 5,
+                "downloaded_media_path": str(video.source_path),
+                "downloaded_video_path": str(video.source_path),
+            }
+
+        manager = self.make_manager(
+            processor=lambda _item, _model, _device: {},
+            video_downloader=video_downloader,
+            frame_processor=lambda _item, _cancel_event, _progress: {"status": "completed", "completed": True},
+            duration_reader=lambda _path: 5,
+            video_metadata_reader=lambda _path: {"duration_sec": 5, "fps": 30, "width": 100, "height": 50},
+        )
+        status = self.track_job(manager.add_urls([QueueUrl("https://example.test/video")]))
+        manager.update_item(status["items"][0]["index"], operations={"transcribe_audio": False, "extract_frames": True})
+
+        manager.start("small")
+        self.assertTrue(started.wait(timeout=2))
+        status = manager.status()
+        self.assertEqual("downloading_video", status["current_stage"])
+        self.assertEqual("queueStageDownloadingVideo", status["current_stage_label_key"])
+        self.assertEqual("downloading_video", status["current_item"]["stage"])
+        release.set()
+        manager.wait(timeout=3)
+
+    def test_audio_transcription_exposes_transcribing_audio_stage(self) -> None:
+        started = threading.Event()
+        release = threading.Event()
+
+        def processor(_item: dict, _model: str, _device: str) -> dict:
+            started.set()
+            release.wait(timeout=3)
+            return {"processing_time_sec": 1}
+
+        manager = self.make_manager(processor=processor, duration_reader=lambda _path: 1)
+        self.track_job(manager.add_files([self.make_file("speech.wav")]))
+
+        manager.start("small")
+        self.assertTrue(started.wait(timeout=2))
+        status = manager.status()
+        self.assertEqual("transcribing_audio", status["current_stage"])
+        self.assertEqual("queueStageTranscribingAudio", status["current_stage_label_key"])
+        release.set()
+        manager.wait(timeout=3)
+
+    def test_frame_extraction_exposes_stage_and_terminal_cancel_stage(self) -> None:
+        started = threading.Event()
+
+        def frame_processor(item: dict, cancel_event: threading.Event, _progress) -> dict:
+            started.set()
+            cancel_event.wait(timeout=3)
+            return {
+                "status": "cancelled",
+                "completed": False,
+                "cancelled": True,
+                "frames_dir": f"{item['output_base']}__frames",
+                "frames_path": f"data/recordings/{item['output_base']}__frames",
+                "frames_index_path": f"data/recordings/{item['output_base']}__frames/frames_index.json",
+                "extracted_frame_count": 1,
+            }
+
+        manager = self.make_manager(
+            processor=lambda _item, _model, _device: {},
+            frame_processor=frame_processor,
+            duration_reader=lambda _path: 1,
+            video_metadata_reader=lambda _path: {"duration_sec": 10, "fps": 30, "width": 100, "height": 50},
+        )
+        self.track_job(manager.add_files([
+            QueueFile(
+                source_path=self.make_file("frames.mp4").source_path,
+                source_filename="frames.mp4",
+                operations={"transcribe_audio": False, "extract_frames": True},
+            )
+        ]))
+
+        manager.start("small")
+        self.assertTrue(started.wait(timeout=2))
+        status = manager.status()
+        self.assertEqual("extracting_frames", status["current_stage"])
+        manager.cancel_item(1)
+        self.assertEqual("cancelling", manager.status()["current_stage"])
+        manager.wait(timeout=3)
+        item = manager.status()["items"][0]
+        self.assertEqual("cancelled", item["status"])
+        self.assertEqual("cancelled", item["stage"])
 
     def test_url_item_without_executable_operation_is_rejected(self) -> None:
         manager = self.make_manager(processor=lambda _item, _model, _device: {})

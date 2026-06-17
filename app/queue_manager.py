@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
+from urllib.parse import urlsplit, urlunsplit
 
 from . import config
 from .frame_extractor import (
@@ -26,6 +27,23 @@ logger = logging.getLogger(__name__)
 
 TERMINAL_STATUSES = {"completed", "error", "failed", "cancelled"}
 ACTIVE_STATUSES = {"downloading", "downloaded", "analyzing", "extracting_audio", "transcribing", "extracting_frames"}
+STAGE_LABEL_KEYS = {
+    "idle": "queueStageIdle",
+    "adding_file": "queueStageAddingFile",
+    "adding_url": "queueStageAddingUrl",
+    "preparing_source": "queueStagePreparingSource",
+    "downloading_media": "queueStageDownloadingMedia",
+    "downloading_video": "queueStageDownloadingVideo",
+    "transcribing_audio": "queueStageTranscribingAudio",
+    "extracting_frames": "queueStageExtractingFrames",
+    "cancelling": "queueStageCancelling",
+    "completed": "queueStageCompleted",
+    "failed": "queueStageFailed",
+    "cancelled": "queueStageCancelled",
+    "ocr_pending_future": "queueStageOcrFuture",
+    "cv_pending_future": "queueStageCvFuture",
+    "media_index_pending_future": "queueStageMediaIndexFuture",
+}
 
 
 @dataclass(frozen=True)
@@ -96,7 +114,18 @@ class QueueManager:
                 self._create_job_locked()
 
             start_index = len(self._items) + 1
-            for offset, queue_file in enumerate(files):
+            active_keys = self._active_file_duplicate_keys_locked()
+            seen_keys: set[str] = set()
+            files_to_add: list[QueueFile] = []
+            for queue_file in files:
+                duplicate_key = self._file_duplicate_key(queue_file)
+                if duplicate_key in active_keys or duplicate_key in seen_keys:
+                    logger.info("Queue duplicate file add ignored: source=%s", queue_file.source_path)
+                    continue
+                seen_keys.add(duplicate_key)
+                files_to_add.append(queue_file)
+
+            for offset, queue_file in enumerate(files_to_add):
                 item = self._new_file_item_locked(start_index + offset, queue_file)
                 self._items.append(item)
 
@@ -106,7 +135,7 @@ class QueueManager:
             logger.info(
                 "Queue files added: job_id=%s added=%s total=%s job_json=%s",
                 self._job_id,
-                len(files),
+                len(files_to_add),
                 len(self._items),
                 self._job_path,
             )
@@ -122,10 +151,21 @@ class QueueManager:
                 self._create_job_locked()
 
             start_index = len(self._items) + 1
-            for offset, queue_url in enumerate(urls):
+            active_keys = self._active_url_duplicate_keys_locked()
+            seen_keys: set[str] = set()
+            urls_to_add: list[str] = []
+            for queue_url in urls:
                 source_url = queue_url.source_url.strip()
                 if not source_url:
                     raise RuntimeError("Пустые ссылки нельзя добавить в очередь.")
+                duplicate_key = self._url_duplicate_key(source_url)
+                if duplicate_key in active_keys or duplicate_key in seen_keys:
+                    logger.info("Queue duplicate URL add ignored: source=%s", source_url)
+                    continue
+                seen_keys.add(duplicate_key)
+                urls_to_add.append(source_url)
+
+            for offset, source_url in enumerate(urls_to_add):
                 index = start_index + offset
                 item = {
                     "index": index,
@@ -140,6 +180,9 @@ class QueueManager:
                     "downloaded_media_path": None,
                     "downloaded_video_path": None,
                     "status": "pending",
+                    "stage": "idle",
+                    "stage_label_key": STAGE_LABEL_KEYS["idle"],
+                    "stage_detail": f"url_{index:03d}",
                     "operations": self._default_operations("url"),
                     "frame_extraction": None,
                     "video_metadata": None,
@@ -165,7 +208,7 @@ class QueueManager:
             self._status = "pending"
             self._finished_at = None
             self._persist_locked()
-            logger.info("Queue URLs added: job_id=%s added=%s total=%s", self._job_id, len(urls), len(self._items))
+            logger.info("Queue URLs added: job_id=%s added=%s total=%s", self._job_id, len(urls_to_add), len(self._items))
             return self._status_snapshot_locked()
 
     def start(self, model: str, device_preference: str = "auto") -> dict:
@@ -248,6 +291,7 @@ class QueueManager:
                         "technical_details": None,
                     }
                 )
+                self._set_item_stage_locked(item, "idle", status="pending")
                 if item.get("frame_extraction") is not None:
                     item["frame_extraction"]["result"] = None
             self._status = "pending"
@@ -327,6 +371,7 @@ class QueueManager:
             if cancel_event is not None:
                 cancel_event.set()
             item["cancel_requested"] = True
+            self._set_item_stage_locked(item, "cancelling", status="extracting_frames")
             self._persist_locked()
             logger.info("Queue item cancellation requested: job_id=%s index=%s", self._job_id, index)
             return self._status_snapshot_locked()
@@ -347,6 +392,9 @@ class QueueManager:
             "source_path": str(queue_file.source_path),
             "source_filename": queue_file.source_filename,
             "status": "pending",
+            "stage": "idle",
+            "stage_label_key": STAGE_LABEL_KEYS["idle"],
+            "stage_detail": queue_file.source_filename,
             "operations": self._normalize_operations(queue_file.operations, media_kind),
             "frame_extraction": None,
             "video_metadata": None,
@@ -468,6 +516,51 @@ class QueueManager:
     def _item_supports_frame_extraction(item: dict) -> bool:
         return item.get("media_kind") == "video" or item.get("source_type") == "url"
 
+    @staticmethod
+    def _file_duplicate_key(queue_file: QueueFile) -> str:
+        return str(queue_file.source_path.resolve()).casefold()
+
+    @staticmethod
+    def _url_duplicate_key(source_url: str) -> str:
+        value = source_url.strip()
+        parsed = urlsplit(value)
+        if not parsed.scheme or not parsed.netloc:
+            return value.casefold()
+        return urlunsplit(
+            (
+                parsed.scheme.lower(),
+                parsed.netloc.lower(),
+                parsed.path or "",
+                parsed.query,
+                "",
+            )
+        ).casefold()
+
+    def _active_file_duplicate_keys_locked(self) -> set[str]:
+        return {
+            str(Path(item["source_path"]).resolve()).casefold()
+            for item in self._items
+            if item.get("source_path") and item.get("source_type") != "url" and item["status"] not in TERMINAL_STATUSES
+        }
+
+    def _active_url_duplicate_keys_locked(self) -> set[str]:
+        return {
+            self._url_duplicate_key(item["source_url"])
+            for item in self._items
+            if item.get("source_type") == "url" and item.get("source_url") and item["status"] not in TERMINAL_STATUSES
+        }
+
+    @staticmethod
+    def _stage_detail_for(item: dict) -> str | None:
+        return item.get("source_title") or item.get("source_filename") or item.get("source_url") or item.get("source_path")
+
+    def _set_item_stage_locked(self, item: dict, stage: str, *, status: str | None = None, detail: str | None = None) -> None:
+        if status is not None:
+            item["status"] = status
+        item["stage"] = stage
+        item["stage_label_key"] = STAGE_LABEL_KEYS.get(stage, STAGE_LABEL_KEYS["idle"])
+        item["stage_detail"] = detail if detail is not None else self._stage_detail_for(item)
+
     def _find_item_locked(self, index: int) -> dict:
         item = next((entry for entry in self._items if entry["index"] == index), None)
         if item is None:
@@ -519,7 +612,15 @@ class QueueManager:
                     return
 
                 self._current_index = item["index"]
-                item["status"] = "downloading" if item.get("source_type") == "url" else "analyzing"
+                if item.get("source_type") == "url":
+                    operations = item.get("operations") or self._default_operations(item.get("media_kind", "url"))
+                    self._set_item_stage_locked(
+                        item,
+                        "downloading_video" if operations.get("extract_frames") else "downloading_media",
+                        status="downloading",
+                    )
+                else:
+                    self._set_item_stage_locked(item, "preparing_source", status="analyzing")
                 self._persist_locked()
                 item_snapshot = copy.deepcopy(item)
                 model = self._model or ""
@@ -545,7 +646,7 @@ class QueueManager:
                             {"rate": DEFAULT_FRAME_RATE, "jpeg_quality": DEFAULT_JPEG_QUALITY},
                         )
                     self._refresh_video_analysis_locked(item)
-                    item["status"] = "analyzing"
+                    self._set_item_stage_locked(item, "preparing_source", status="analyzing")
                     self._persist_locked()
                     item_snapshot = copy.deepcopy(item)
                 duration = self.duration_reader(source_path)
@@ -561,11 +662,11 @@ class QueueManager:
                         self.media_validator(source_path)
                         if source_path.suffix.lower() in config.SUPPORTED_VIDEO_EXTENSIONS:
                             with self._lock:
-                                item["status"] = "extracting_audio"
+                                self._set_item_stage_locked(item, "transcribing_audio", status="extracting_audio")
                                 self._persist_locked()
 
                         with self._lock:
-                            item["status"] = "transcribing"
+                            self._set_item_stage_locked(item, "transcribing_audio", status="transcribing")
                             self._persist_locked()
                             item_snapshot = copy.deepcopy(item)
 
@@ -616,7 +717,7 @@ class QueueManager:
                     if self.frame_processor is None:
                         raise RuntimeError("Frame extraction service is not configured.")
                     with self._lock:
-                        item["status"] = "extracting_frames"
+                        self._set_item_stage_locked(item, "extracting_frames", status="extracting_frames")
                         item["cancel_requested"] = False
                         if not item.get("output_base"):
                             item["output_base"] = self._frames_only_output_base(item["source_filename"])
@@ -654,6 +755,7 @@ class QueueManager:
                                     "technical_details": None,
                                 }
                             )
+                            self._set_item_stage_locked(item, "cancelled", status="cancelled")
                             self._persist_locked()
                             logger.info(
                                 "Queue task cancelled: job_id=%s index=%s frames=%s",
@@ -674,6 +776,7 @@ class QueueManager:
                                         "processing_time_sec": transcript_result.get("processing_time_sec") or item.get("processing_time_sec"),
                                     }
                                 )
+                                self._set_item_stage_locked(item, "failed", status="error")
                                 self._persist_locked()
                                 logger.error(
                                     "Queue frame extraction failed after transcription: job_id=%s index=%s frames_dir=%s",
@@ -697,6 +800,7 @@ class QueueManager:
                                     "processing_time_sec": combined_processing,
                                 }
                             )
+                            self._set_item_stage_locked(item, "failed", status="error")
                         else:
                             item.update(
                                 {
@@ -706,6 +810,7 @@ class QueueManager:
                                     "processing_time_sec": combined_processing,
                                 }
                             )
+                            self._set_item_stage_locked(item, "completed", status="completed")
                         self._persist_locked()
                         logger.info(
                             "Queue task completed: job_id=%s index=%s transcript=%s json=%s frames=%s duration=%s processing_time=%s realtime_factor=%s",
@@ -736,6 +841,7 @@ class QueueManager:
                             "technical_details": str(getattr(exc, "technical_details", "") or exc),
                         }
                     )
+                    self._set_item_stage_locked(item, "failed", status="error")
                     self._persist_locked()
                     logger.exception(
                         "Queue task failed: job_id=%s index=%s file=%s",
@@ -749,7 +855,7 @@ class QueueManager:
                 if self._stop_after_current:
                     for pending_item in self._items:
                         if pending_item["status"] == "pending":
-                            pending_item["status"] = "cancelled"
+                            self._set_item_stage_locked(pending_item, "cancelled", status="cancelled")
                     self._finish_locked("cancelled")
                     return
                 self._persist_locked()
@@ -791,6 +897,7 @@ class QueueManager:
         elapsed_sec = self._elapsed_seconds_locked()
         eta_sec, eta_message = self._eta_locked()
         current_item = next((item for item in self._items if item["index"] == self._current_index), None)
+        current_stage = current_item.get("stage") if current_item else "idle"
         return {
             **payload,
             "job_path": str(self._job_path) if self._job_path else None,
@@ -798,6 +905,9 @@ class QueueManager:
             "running_items": sum(1 for item in self._items if item["status"] in ACTIVE_STATUSES),
             "current_file": current_item["source_filename"] if current_item else None,
             "current_item": copy.deepcopy(current_item),
+            "current_stage": current_stage,
+            "current_stage_label_key": current_item.get("stage_label_key") if current_item else STAGE_LABEL_KEYS["idle"],
+            "current_stage_detail": current_item.get("stage_detail") if current_item else None,
             "elapsed_sec": elapsed_sec,
             "eta_sec": eta_sec,
             "eta_message": eta_message,
@@ -874,7 +984,11 @@ class QueueManager:
             raise RuntimeError("Сервис скачивания URL не настроен.")
 
         with self._lock:
-            item["status"] = "downloading"
+            self._set_item_stage_locked(
+                item,
+                "downloading_video" if needs_video else "downloading_media",
+                status="downloading",
+            )
             self._persist_locked()
         metadata = downloader(item_snapshot["source_url"])
         source_path = Path(metadata["source_path"])
@@ -894,9 +1008,9 @@ class QueueManager:
                     "source_filename": metadata.get("source_title") or item["source_filename"],
                     "media_kind": media_kind,
                     "audio_duration_sec": self._rounded(metadata.get("audio_duration_sec")),
-                    "status": "downloaded",
                 }
             )
+            self._set_item_stage_locked(item, "preparing_source", status="downloaded")
             self._persist_locked()
         return source_path
 

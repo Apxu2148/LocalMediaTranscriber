@@ -43,6 +43,7 @@ class UiContractTests(unittest.TestCase):
             "queueFilePickerText",
             "queueStartButton",
             "queueClearButton",
+            "queueStageStatus",
             "queueMetrics",
             "queueProgress",
             "latestResultHeading",
@@ -95,6 +96,13 @@ class UiContractTests(unittest.TestCase):
         self.assertIn("queueItemOutputLines", app_js)
         self.assertIn("displayOutputPath", app_js)
         self.assertIn('lastIndexOf("/data/")', app_js)
+        self.assertIn("queueStageLabel", app_js)
+        self.assertIn("updateQueueStageStatus", app_js)
+        self.assertIn("queue-item-stage", app_js)
+        self.assertIn("isAddingFile", app_js)
+        self.assertIn("isAddingUrl", app_js)
+        self.assertIn("pendingAddKeys", app_js)
+        self.assertIn("showAddStatus", app_js)
         self.assertIn("frameCountWarning", app_js)
         self.assertIn("removeFromQueue", app_js)
         self.assertIn("cancelCurrentItem", app_js)
@@ -139,6 +147,8 @@ class UiContractTests(unittest.TestCase):
         self.assertIn("video/quicktime", html)
         self.assertIn("queue-item-remove", app_js)
         self.assertIn("queue-item-cancel", app_js)
+        self.assertIn("queue-stage-status", css)
+        self.assertIn(".queue-item-stage", css)
         self.assertIn("queue-frame-settings", app_js)
         self.assertIn("queue-frame-result", app_js)
         self.assertIn(".queue-item-card", css)

@@ -94,6 +94,7 @@ const queueElapsed = document.querySelector("#queueElapsed");
 const queueEta = document.querySelector("#queueEta");
 const queueProgress = document.querySelector("#queueProgress");
 const queueProgressText = document.querySelector("#queueProgressText");
+const queueStageStatus = document.querySelector("#queueStageStatus");
 const queueOutput = document.querySelector("#queueOutput");
 const queueList = document.querySelector("#queueList");
 const queueUrlForm = document.querySelector("#queueUrlForm");
@@ -140,6 +141,9 @@ let previousQueueStatus = "empty";
 let latestQueueStatus = null;
 let queueControlsFocused = false;
 let queueFocusRenderTimer = null;
+let isAddingFile = false;
+let isAddingUrl = false;
+let isAddingRecording = false;
 let benchmarkActive = false;
 let benchmarkSourceId = null;
 let videoMuxInFlight = false;
@@ -161,6 +165,8 @@ let latestMicDevicesResult = null;
 let latestOutputDevicesResult = null;
 const dynamicOutputRenderers = new Map();
 const queueControlSelector = ".queue-item-card select, .queue-item-card input, .queue-item-card button";
+const terminalQueueStatuses = new Set(["completed", "error", "failed", "cancelled"]);
+const pendingAddKeys = new Set();
 
 function t(key, variables = {}) {
   return window.LATI18N?.t(key, variables) || key;
@@ -343,7 +349,7 @@ function selectHasValue(select, value) {
 
 function setRecordingUi(recording) {
   isRecording = recording;
-  startRecordButton.disabled = recording || isTranscribing || queueActive || benchmarkActive || videoMuxInFlight;
+  startRecordButton.disabled = recording || isTranscribing || queueActive || benchmarkActive || videoMuxInFlight || hasAddingInProgress();
   stopRecordButton.disabled = !recording;
   for (const checkbox of recordingSourceCheckboxes) {
     checkbox.disabled = recording;
@@ -397,7 +403,7 @@ function updateInputSourceHint() {
 }
 
 function setVideoMuxUi() {
-  const blocked = videoMuxInFlight || isRecording || isTranscribing || queueActive || benchmarkActive;
+  const blocked = videoMuxInFlight || isRecording || isTranscribing || queueActive || benchmarkActive || hasAddingInProgress();
   videoMuxVideoSelect.disabled = blocked;
   videoMuxMicSelect.disabled = blocked;
   videoMuxSystemSelect.disabled = blocked;
@@ -1203,7 +1209,7 @@ function updateRecordingTranscribeActions(recordings) {
   const micRecording = lastRecordings.find((item) => item.source_type === "mic");
   const systemRecording = lastRecordings.find((item) => item.source_type === "system");
   const audioRecordings = lastRecordings.filter((item) => item.source_type === "mic" || item.source_type === "system");
-  const blocked = isTranscribing || queueActive || benchmarkActive;
+  const blocked = isTranscribing || queueActive || benchmarkActive || hasAddingInProgress();
   recordingTranscribeActions.dataset.empty = String(lastRecordings.length === 0);
   transcribeMicRecordingButton.disabled = !micRecording || blocked;
   transcribeSystemRecordingButton.disabled = !systemRecording || blocked;
@@ -1229,6 +1235,19 @@ async function addAllRecordings() {
 }
 
 async function addRecordingsToQueue(recordings) {
+  const keys = recordings.map(recordingAddKey);
+  if (isAddingRecording || hasPendingAddKey(keys)) {
+    showAddStatus("queueRecordingAlreadyAdding", "warning");
+    return;
+  }
+  if (recordings.some(activeQueueHasRecording)) {
+    showAddStatus("queueFileAlreadyQueued", "warning");
+    return;
+  }
+  isAddingRecording = true;
+  rememberPendingAdd(keys);
+  showAddStatus("queueStageAddingFile");
+  updateLongOperationControls();
   try {
     const status = await requestJson("/api/queue/add-recordings", {
       method: "POST",
@@ -1247,6 +1266,11 @@ async function addRecordingsToQueue(recordings) {
   } catch (error) {
     setOutput(queueOutput, error.message, "error");
     showToast(error.message, "error");
+  } finally {
+    isAddingRecording = false;
+    forgetPendingAdd(keys);
+    restoreQueueStageStatus();
+    updateLongOperationControls();
   }
 }
 
@@ -1255,6 +1279,19 @@ async function addLocalFilesToQueue(files, input, pickerText, multiple = false) 
     setOutput(queueOutput, t(multiple ? "selectAtLeastOneFile" : "selectFile"), "error");
     return;
   }
+  const keys = files.map(fileAddKey);
+  if (isAddingFile || hasPendingAddKey(keys)) {
+    showAddStatus("queueFileAlreadyAdding", "warning");
+    return;
+  }
+  if (files.some(activeQueueHasFile)) {
+    showAddStatus("queueFileAlreadyQueued", "warning");
+    return;
+  }
+  isAddingFile = true;
+  rememberPendingAdd(keys);
+  showAddStatus(addingFileLabelKey(files));
+  updateLongOperationControls();
   const formData = new FormData();
   for (const file of files) {
     formData.append("files", file);
@@ -1268,6 +1305,11 @@ async function addLocalFilesToQueue(files, input, pickerText, multiple = false) 
   } catch (error) {
     setOutput(queueOutput, error.message, "error");
     showToast(error.message, "error");
+  } finally {
+    isAddingFile = false;
+    forgetPendingAdd(keys);
+    restoreQueueStageStatus();
+    updateLongOperationControls();
   }
 }
 
@@ -1867,6 +1909,195 @@ function queueStatusLabel(status) {
   }[status] || status;
 }
 
+function queueStageKey(stage) {
+  return {
+    idle: "queueStageIdle",
+    adding_file: "queueStageAddingFile",
+    adding_url: "queueStageAddingUrl",
+    preparing_source: "queueStagePreparingSource",
+    downloading_media: "queueStageDownloadingMedia",
+    downloading_video: "queueStageDownloadingVideo",
+    transcribing_audio: "queueStageTranscribingAudio",
+    extracting_frames: "queueStageExtractingFrames",
+    cancelling: "queueStageCancelling",
+    completed: "queueStageCompleted",
+    failed: "queueStageFailed",
+    cancelled: "queueStageCancelled",
+    ocr_pending_future: "queueStageOcrFuture",
+    cv_pending_future: "queueStageCvFuture",
+    media_index_pending_future: "queueStageMediaIndexFuture",
+  }[stage] || "queueStageIdle";
+}
+
+function queueStageFromStatus(status) {
+  return {
+    pending: "idle",
+    downloading: "downloading_media",
+    downloaded: "preparing_source",
+    analyzing: "preparing_source",
+    extracting_audio: "transcribing_audio",
+    transcribing: "transcribing_audio",
+    extracting_frames: "extracting_frames",
+    completed: "completed",
+    error: "failed",
+    failed: "failed",
+    cancelled: "cancelled",
+  }[status] || "idle";
+}
+
+function queueStageLabel(queueItemOrStage) {
+  if (typeof queueItemOrStage === "string") {
+    return t(queueStageKey(queueItemOrStage));
+  }
+  const item = queueItemOrStage || {};
+  const key = item.stage_label_key || queueStageKey(item.stage || queueStageFromStatus(item.status));
+  return t(key);
+}
+
+function queueItemPosition(status, currentItem) {
+  const index = currentItem?.index;
+  if (!index || !Array.isArray(status.items)) {
+    return null;
+  }
+  const position = status.items.findIndex((item) => item.index === index);
+  return position >= 0 ? position + 1 : null;
+}
+
+function hasAddingInProgress() {
+  return isAddingFile || isAddingUrl || isAddingRecording;
+}
+
+function formatQueueStageStatus(status) {
+  const total = Number(status?.total_items || 0);
+  const pending = Number(status?.pending_items || 0);
+  const completed = Number(status?.completed_items || 0);
+  const failed = Number(status?.failed_items || 0);
+  const cancelled = Number(status?.cancelled_items || 0);
+  const finished = completed + failed + cancelled;
+  if (status?.status === "running") {
+    const current = status.current_item || {};
+    const stage = queueStageLabel(current);
+    const item = status.current_file || current.stage_detail || current.source_filename || "-";
+    const currentPosition = queueItemPosition(status, current) || Math.min(total, finished + 1) || 1;
+    return t("queueStageStatusRunning", { current: currentPosition, total, stage, item });
+  }
+  if (status?.status === "pending" && total) {
+    return t("queueStageStatusPending", { pending, total, stage: queueStageLabel("idle") });
+  }
+  if (status?.status === "completed" && total) {
+    return t("queueStageStatusComplete", { stage: queueStageLabel("completed") });
+  }
+  if (status?.status === "cancelled" && total) {
+    return t("queueStageStatusComplete", { stage: queueStageLabel("cancelled") });
+  }
+  return t("queueStageStatusIdle");
+}
+
+function queueStageStatusType(status) {
+  if (status?.status === "running") {
+    return "info";
+  }
+  if (Number(status?.failed_items || 0) > 0) {
+    return "warning";
+  }
+  if (status?.status === "completed") {
+    return "success";
+  }
+  if (status?.status === "cancelled") {
+    return "warning";
+  }
+  return "info";
+}
+
+function updateQueueStageStatus(status) {
+  if (hasAddingInProgress()) {
+    return;
+  }
+  setDynamicOutput(queueStageStatus, () => formatQueueStageStatus(status), queueStageStatusType(status));
+}
+
+function activeQueueItems() {
+  return (latestQueueStatus?.items || []).filter((item) => !terminalQueueStatuses.has(item.status));
+}
+
+function normalizeQueueUrl(value) {
+  const trimmed = String(value || "").trim();
+  try {
+    const url = new URL(trimmed);
+    url.hash = "";
+    url.protocol = url.protocol.toLowerCase();
+    url.hostname = url.hostname.toLowerCase();
+    return url.toString().replace(/\/(?=($|\?))/, "").toLowerCase();
+  } catch (_error) {
+    return trimmed.replace(/#.*$/, "").toLowerCase();
+  }
+}
+
+function fileAddKey(file) {
+  return `file:${file.name}:${file.size}:${file.lastModified}`;
+}
+
+function recordingAddKey(recording) {
+  return `recording:${recording.source_type}:${recording.audio_file || ""}`;
+}
+
+function urlAddKey(url) {
+  return `url:${normalizeQueueUrl(url)}`;
+}
+
+function hasPendingAddKey(keys) {
+  return keys.some((key) => pendingAddKeys.has(key));
+}
+
+function rememberPendingAdd(keys) {
+  for (const key of keys) {
+    pendingAddKeys.add(key);
+  }
+}
+
+function forgetPendingAdd(keys) {
+  for (const key of keys) {
+    pendingAddKeys.delete(key);
+  }
+}
+
+function showAddStatus(labelKey, type = "info") {
+  setDynamicOutput(queueStageStatus, () => t(labelKey), type);
+  setDynamicOutput(queueOutput, () => t(labelKey), type);
+}
+
+function restoreQueueStageStatus() {
+  if (latestQueueStatus) {
+    updateQueueStageStatus(latestQueueStatus);
+  } else {
+    setDynamicOutput(queueStageStatus, () => t("queueStageStatusIdle"), "info");
+  }
+}
+
+function activeQueueHasFile(file) {
+  return activeQueueItems().some((item) => item.source_type !== "url" && item.source_filename === file.name);
+}
+
+function activeQueueHasRecording(recording) {
+  const sourcePath = String(recording.audio_file || "").replaceAll("\\", "/").toLowerCase();
+  return activeQueueItems().some((item) => {
+    const itemPath = String(item.source_path || "").replaceAll("\\", "/").toLowerCase();
+    return item.source_type === recording.source_type && itemPath === sourcePath;
+  });
+}
+
+function activeQueueHasUrl(url) {
+  const key = normalizeQueueUrl(url);
+  return activeQueueItems().some((item) => item.source_type === "url" && normalizeQueueUrl(item.source_url) === key);
+}
+
+function addingFileLabelKey(files) {
+  if (files.length === 1) {
+    return isQueueVideoFile(files[0].name) ? "queueStageAddingVideoFile" : "queueStageAddingAudioFile";
+  }
+  return "queueStageAddingFile";
+}
+
 function updateQueueSettingsSummary(status = null) {
   queueSettingsSummary.textContent = t("queueSnapshot", {
     model: status?.model || selectedModel(),
@@ -2147,6 +2378,16 @@ function createQueueItemElement(queueItem, status) {
   header.append(titleBlock, headerActions);
   item.append(header);
 
+  const stageBlock = document.createElement("div");
+  stageBlock.className = "queue-item-stage";
+  stageBlock.dataset.queueStatus = queueItem.status || "";
+  stageBlock.dataset.queueStage = queueItem.stage || queueStageFromStatus(queueItem.status);
+  stageBlock.append(
+    textLine(t("queueItemStatusLine", { status: queueStatusLabel(queueItem.status) })),
+    textLine(t("queueItemStageLine", { stage: queueStageLabel(queueItem) })),
+  );
+  item.append(stageBlock);
+
   const options = queueItem.operations || {};
   const controlsDisabled = queueActive || queueItem.status !== "pending";
   const optionGroup = document.createElement("div");
@@ -2210,6 +2451,7 @@ function renderQueue(status, options = {}) {
     : formatElapsed(status.eta_sec);
   queueProgress.value = progress;
   queueProgressText.textContent = t("queueProgress", { done: finished, total, value: Math.round(progress) });
+  updateQueueStageStatus(status);
 
   const preserveQueueControls = options.preserveFocusedQueueControls
     && (queueControlsFocused || queueControlHasActiveFocus());
@@ -2226,18 +2468,18 @@ function renderQueue(status, options = {}) {
     }
   }
 
-  queueAddButton.disabled = queueActive;
-  queueFileInput.disabled = queueActive;
-  queueFilePickerButton.disabled = queueActive;
-  queueUrlAddButton.disabled = queueActive;
-  queueUrlInput.disabled = queueActive;
-  queueStartButton.disabled = queueActive || pending === 0;
+  queueAddButton.disabled = queueActive || hasAddingInProgress();
+  queueFileInput.disabled = queueActive || hasAddingInProgress();
+  queueFilePickerButton.disabled = queueActive || hasAddingInProgress();
+  queueUrlAddButton.disabled = queueActive || hasAddingInProgress();
+  queueUrlInput.disabled = queueActive || hasAddingInProgress();
+  queueStartButton.disabled = queueActive || hasAddingInProgress() || pending === 0;
   queueStopButton.disabled = !queueActive || Boolean(status.stop_after_current);
   queueClearButton.disabled = queueActive || total === 0;
   queueRetryButton.disabled = queueActive || failed === 0;
   whisperModelSelect.disabled = queueActive;
   whisperDeviceSelect.disabled = queueActive;
-  transcribeButton.disabled = queueActive || isTranscribing;
+  transcribeButton.disabled = queueActive || isTranscribing || hasAddingInProgress();
   setRecordingUi(isRecording);
   updateRecordingTranscribeActions(lastRecordings);
   updateQueueSettingsSummary(queueActive ? status : null);
@@ -2256,7 +2498,7 @@ function renderQueue(status, options = {}) {
         done: finished,
         total,
         item: status.current_file || "-",
-        stage: queueStatusLabel(current.status || "pending"),
+        stage: queueStageLabel(current),
       }),
     );
   } else {
@@ -2400,17 +2642,19 @@ function validateQueueStartOptions() {
 }
 
 function updateLongOperationControls() {
-  const active = isTranscribing || queueActive || benchmarkActive || videoMuxInFlight;
+  const active = isTranscribing || queueActive || benchmarkActive || videoMuxInFlight || hasAddingInProgress();
+  const fileAddBlocked = active || isAddingFile;
+  const urlAddBlocked = active || isAddingUrl;
   whisperModelSelect.disabled = active;
   whisperDeviceSelect.disabled = active;
-  transcribeButton.disabled = active;
-  audioFileInput.disabled = active;
-  audioFilePickerButton.disabled = active;
-  queueAddButton.disabled = active;
-  queueFileInput.disabled = active;
-  queueFilePickerButton.disabled = active;
-  queueUrlAddButton.disabled = active;
-  queueUrlInput.disabled = active;
+  transcribeButton.disabled = fileAddBlocked;
+  audioFileInput.disabled = fileAddBlocked;
+  audioFilePickerButton.disabled = fileAddBlocked;
+  queueAddButton.disabled = fileAddBlocked;
+  queueFileInput.disabled = fileAddBlocked;
+  queueFilePickerButton.disabled = fileAddBlocked;
+  queueUrlAddButton.disabled = urlAddBlocked;
+  queueUrlInput.disabled = urlAddBlocked;
   queueStartButton.disabled = active || Number(latestQueueStatus?.pending_items || 0) === 0;
   queueClearButton.disabled = active || Number(latestQueueStatus?.total_items || 0) === 0;
   queueRetryButton.disabled = active || Number(latestQueueStatus?.failed_items || 0) === 0;
@@ -2645,12 +2889,30 @@ queueAddForm.addEventListener("submit", async (event) => {
 });
 queueUrlForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  const urls = queueUrlInput.value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
+  const urls = Array.from(new Map(
+    queueUrlInput.value
+      .split(/\r?\n/)
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .map((url) => [normalizeQueueUrl(url), url]),
+  ).values());
   if (!urls.length) {
     setOutput(queueOutput, t("selectAtLeastOneUrl"), "error");
     return;
   }
-  queueUrlAddButton.disabled = true;
+  const keys = urls.map(urlAddKey);
+  if (isAddingUrl || hasPendingAddKey(keys)) {
+    showAddStatus("queueUrlAlreadyAdding", "warning");
+    return;
+  }
+  if (urls.some(activeQueueHasUrl)) {
+    showAddStatus("queueUrlAlreadyQueued", "warning");
+    return;
+  }
+  isAddingUrl = true;
+  rememberPendingAdd(keys);
+  showAddStatus("queueStageAddingUrl");
+  updateLongOperationControls();
   try {
     renderQueue(await requestJson("/api/queue/add-urls", {
       method: "POST",
@@ -2665,7 +2927,10 @@ queueUrlForm.addEventListener("submit", async (event) => {
     setOutput(queueOutput, error.message, "error");
     showToast(error.message, "error");
   } finally {
-    queueUrlAddButton.disabled = queueActive;
+    isAddingUrl = false;
+    forgetPendingAdd(keys);
+    restoreQueueStageStatus();
+    updateLongOperationControls();
   }
 });
 queueStartButton.addEventListener("click", async () => {
