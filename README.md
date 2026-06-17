@@ -18,11 +18,12 @@ This project is a separate fork of `LocalAudioTranscriber`. The current version 
 - Keep the recent recordings list compact and hide service JSON metadata files from the normal user file list.
 - Show microphone and system audio levels.
 - Add latest recordings, local files, or public URLs to a global media processing queue.
-- Transcribe `.wav`, `.mp3`, `.m4a`, `.mp4`, `.webm`, `.mkv`, and `.avi` sources.
+- Transcribe `.wav`, `.mp3`, `.m4a`, `.mp4`, `.webm`, `.mkv`, `.avi`, and `.mov` sources.
 - Extract and transcribe the audio track from supported video files.
 - Choose per-video queue operations: transcribe audio, extract frames, or both.
+- Choose URL queue operations: transcribe audio, extract frames from a downloaded video-readable file, or both.
 - Extract video frames to a per-source folder with a `frames_index.json` manifest.
-- Choose JPEG quality `75`, `85`, `90`, `95`, or `100` for frame extraction; `90` is the default.
+- Choose JPEG quality `75`, `80`, `85`, `90`, `95`, or `100` for frame extraction; `90` is the default.
 - Remove pending queue items, or cancel a running frame extraction item and continue with the rest of the queue.
 - Choose Whisper models: `tiny`, `base`, `small`, `medium`, `large-v3`.
 - Manage Whisper models before transcription: check local availability, download, verify, view info, and delete selected local caches.
@@ -124,7 +125,7 @@ If Git reports `.git/index.lock` before commit, run `cleanup-dev.bat`.
 
 ## Stored Files
 
-The queue is now a media processing queue. Its main action is "Start processing". Video files can currently be transcribed, split into frames, or both. OCR and CV/VLM options are visible as disabled coming-soon placeholders and are not implemented yet.
+The queue is now a media processing queue. Its main action is "Start processing". Video files and supported video URLs can currently be transcribed, split into frames, or both. OCR and CV/VLM options are visible as disabled coming-soon placeholders and are not implemented yet.
 
 Recordings:
 
@@ -166,13 +167,17 @@ The frame index is saved at:
 C:\Python\LocalMediaTranscriber\data\recordings\<base>__frames\frames_index.json
 ```
 
-The folder contains JPEG files named like `frame_000001__t000000.000.jpg` and a `frames_index.json` file with source details, frame extraction settings, video metadata, extracted frame records, status, and cancellation/error information. The default extraction setting is one frame every 10 seconds with JPEG quality `90`. Available JPEG quality options are `75`, `85`, `90`, `95`, and `100`. Quality `100` can significantly increase file size and usually is not necessary for OCR/CV. The queue UI estimates the frame count and approximate disk usage before processing, and warns when a setting is expected to create more than 1000 images.
+The folder contains JPEG files named like `frame_000001__t000000.000.jpg` and a `frames_index.json` file with source details, frame extraction settings, video metadata, extracted frame records, status, and cancellation/error information. The default extraction setting is one frame every 10 seconds with JPEG quality `90`. Available JPEG quality options are `75`, `80`, `85`, `90`, `95`, and `100`. Quality `100` can significantly increase file size and usually is not necessary for OCR/CV. The queue UI estimates the frame count and approximate disk usage before processing, and warns when a setting is expected to create more than 1000 images.
 
 Downloads from public URLs:
 
 ```text
 C:\Python\LocalMediaTranscriber\data\downloads
 ```
+
+For URL items, direct media file links ending in `.mp4`, `.webm`, `.mkv`, `.avi`, or `.mov` are downloaded directly over HTTP(S) into `data\downloads` without `yt-dlp`; query strings are ignored for extension detection. YouTube, VK, and other webpage/video-platform URLs still use `yt-dlp`. For audio-only URL transcription, direct media URLs use the downloaded media file, while non-direct URLs keep the existing audio extraction path. If frame extraction is selected, the downloaded video-readable media file uses the same frame extraction settings as local video files: extraction rate and JPEG quality. URL media downloads are kept under `data\downloads`; transcripts are saved under `data\transcripts`; frames are saved under `data\recordings\<base>__frames`; and `frames_index.json` is saved inside that frames folder.
+
+Some sites, streams, or codecs may fail depending on `yt-dlp`, FFmpeg, OpenCV, and the locally available decoders. Direct `.mp4`, `.webm`, `.mkv`, `.avi`, or `.mov` URLs are the simplest test path. Cookies, authenticated/private videos, playlists, and video quality selection are not part of this iteration, so some YouTube/VK URLs can still fail with a readable authorization/cookies message.
 
 Logs:
 
@@ -214,6 +219,6 @@ This is a temporary blue-violet SVG icon. To replace it later, keep the same fil
 
 ## Notes
 
-For `.mp3`, `.m4a`, `.mp4`, `.webm`, `.mkv`, and `.avi`, make sure `ffmpeg` is installed and available in `PATH`. FFmpeg is also required for the "Merge video with audio" workflow. Video queue items can extract audio for transcription and/or save JPEG frames. OCR and CV/VLM analysis are still unimplemented; the UI shows them as disabled coming-soon options.
+For `.mp3`, `.m4a`, `.mp4`, `.webm`, `.mkv`, `.avi`, and `.mov`, make sure `ffmpeg` is installed and available in `PATH`. FFmpeg is also required for the "Merge video with audio" workflow. Video queue items can extract audio for transcription and/or save JPEG frames. OCR and CV/VLM analysis are still unimplemented; the UI shows them as disabled coming-soon options.
 
 Use the app only with audio, video, and files you are allowed to record, download, process, and transcribe.

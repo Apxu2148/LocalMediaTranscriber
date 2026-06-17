@@ -356,12 +356,13 @@ Sequential media processing queue.
 Key behavior:
 
 - Accepts local uploaded files, latest recordings, and URL sources.
-- Marks local `.mp4`, `.webm`, `.mkv`, and `.avi` sources as video items.
+- Marks local `.mp4`, `.webm`, `.mkv`, `.avi`, and `.mov` sources as video items.
 - Creates one job JSON under `data\jobs`.
 - Processes items sequentially in one worker thread.
 - Supports stop-after-current, clear, retry failed items, pending-item removal, running frame-extraction cancellation, status snapshots, elapsed time, ETA, and persistent job snapshots.
 - Treat the queue as a media processing queue, not only a transcription queue.
 - Current executable operations are `transcribe_audio` and `extract_frames`.
+- URL items are created as media processing items. By default they transcribe audio, keep frame extraction off, and carry default frame extraction settings for later opt-in.
 - Visible but disabled future operations are `ocr` and `cv`.
 - Stores per-video operation choices in `operations`: `transcribe_audio`, `extract_frames`, `ocr`, and `cv`.
 - Keeps OCR and CV rejected in the backend; the current UI renders them as disabled coming-soon options.
@@ -376,10 +377,10 @@ OpenCV-backed video frame extraction for queue video items.
 
 Key behavior:
 
-- Supports `.mp4`, `.webm`, `.mkv`, and `.avi` through `config.SUPPORTED_VIDEO_EXTENSIONS`.
+- Supports `.mp4`, `.webm`, `.mkv`, `.avi`, and `.mov` through `config.SUPPORTED_VIDEO_EXTENSIONS`.
 - Normalizes extraction rates to fixed interval values (`30`, `20`, `15`, `10`, `5`, `3`, `2`, `1` seconds) or FPS values (`2`, `3`, `5`, `10`, `15`, `20`, `30`).
 - Defaults to one frame every `10` seconds and JPEG quality `90`.
-- Available UI quality options include `75`, `85`, `90`, `95`, and `100`.
+- Available UI quality options include `75`, `80`, `85`, `90`, `95`, and `100`.
 - JPEG quality `100` can create much larger files and usually should not be required for OCR/CV.
 - Reads metadata with OpenCV: duration, FPS, width, height, and source frame count when available.
 - Estimates output frame count and a rough min/max disk usage range from duration, dimensions, and quality.
@@ -493,16 +494,19 @@ Benchmarks are deliberately separate from the queue.
 
 ### `app/url_downloader.py`
 
-URL audio downloader/extractor.
+URL downloader/extractor.
 
 Key behavior:
 
-- Uses `yt-dlp`.
+- Detects direct media URLs by path extension; query strings are ignored.
+- Downloads direct `.mp4`, `.webm`, `.mkv`, `.avi`, and `.mov` URLs over HTTP(S) without `yt-dlp`.
+- Uses `yt-dlp` for webpage/video-platform URLs such as YouTube or VK.
 - Accepts public HTTP(S) URLs.
-- Downloads or extracts audio to `data\downloads`.
+- Downloads direct media or extracts platform audio/video to `data\downloads`.
 - Returns source metadata to the queue and transcript store.
+- Keeps raw downloader failures in technical details while exposing readable queue errors for timeout and authorization/cookies cases.
 
-This is best-effort and depends on the installed `yt-dlp` version and platform support.
+Direct download behavior is tested with mocked HTTP responses. Platform downloads are best-effort and depend on the installed `yt-dlp` version and platform support; cookies/browser-auth support remains future work.
 
 ## Frontend Files
 
@@ -644,13 +648,15 @@ Audio files, screen videos, input event JSONL files, merged videos, and new scre
 7. Queue settings are frozen for that run.
 8. A single worker thread processes items in order.
 9. URL items are downloaded/extracted through `UrlDownloader` before processing.
-10. For audio transcription, files are validated and passed to `AudioTranscriber`; `TranscriptStore` saves TXT and JSON outputs.
-11. For frame extraction, `VideoFrameExtractor` writes JPEGs and `frames_index.json` under `data\recordings\<base>__frames`.
-12. A running item can be cancelled only while its status is `extracting_frames`; cancellation is cooperative, partial frames are kept, `frames_index.json` marks the run cancelled/incomplete, and the worker continues to the next pending item.
-13. Running audio transcription is currently not safely cancellable; the UI disables that cancel action and explains why.
-14. Queue status is polled by the UI and shows counts, current item, elapsed time, ETA, progress, operation settings, estimates, transcript output paths, frame folder paths, frame counts, and frame index paths.
-15. `stop-after-current` completes the active item and cancels pending items.
-16. `retry-errors` moves failed items back to pending for a later manual start.
+10. For URL audio-only transcription, `UrlDownloader.download()` downloads direct media URLs directly; non-direct URLs keep the stable `yt-dlp` audio-only extraction path.
+11. For URL frame extraction, `UrlDownloader.download_video()` downloads direct media URLs directly or asks `yt-dlp` for a video-readable media file under `data\downloads`; the queue reuses it for frame extraction and, when selected, transcription.
+12. For audio transcription, files are validated and passed to `AudioTranscriber`; `TranscriptStore` saves TXT and JSON outputs.
+13. For frame extraction, `VideoFrameExtractor` writes JPEGs and `frames_index.json` under `data\recordings\<base>__frames`.
+14. A running item can be cancelled only while its status is `extracting_frames`; cancellation is cooperative, partial frames are kept, `frames_index.json` marks the run cancelled/incomplete, and the worker continues to the next pending item.
+15. Running URL download and audio transcription are currently not safely cancellable; the UI disables that cancel action and explains why.
+16. Queue status is polled by the UI and shows counts, current item, elapsed time, ETA, progress, operation settings, estimates, downloaded media paths, transcript output paths, frame folder paths, frame counts, and frame index paths.
+17. `stop-after-current` completes the active item and cancels pending items.
+18. `retry-errors` moves failed items back to pending for a later manual start.
 
 The queue is intentionally sequential. Do not parallelize transcription or frame extraction without a separate design for GPU memory, disk pressure, cancellation, UI status, and job persistence.
 
@@ -664,6 +670,29 @@ source video
 ```
 
 Outputs are not physically unified into one folder yet. The queue derives a shared source/output base so transcript names, frame folders, and future derived artifacts remain visibly related. Future OCR/CV outputs and any combined media index should keep using the same source/output base naming.
+
+URL output relationship:
+
+```text
+direct media URL
+  -> direct HTTP download in data/downloads
+  -> transcript and/or frame extraction
+
+webpage/video-platform URL
+  -> yt-dlp download/extraction in data/downloads
+  -> transcript and/or frame extraction
+
+URL source
+  -> downloaded media file in data/downloads
+  -> transcript in data/transcripts
+  -> frames folder in data/recordings/<base>__frames
+  -> frames_index.json
+  -> future ocr_timeline.json
+  -> future cv_timeline.json
+  -> future combined media index
+```
+
+URL frame indexes can include `source_type`, `source_url`, source title/platform, and downloaded media paths when that metadata is available. Direct URL extension detection ignores query strings, so `video.mp4?token=abc` is treated as a direct `.mp4` file. If transcription succeeds and frame extraction fails, the transcript path remains on the queue item. If transcription fails but frame extraction was selected, the worker still attempts frame extraction and preserves frame outputs if they succeed. OCR, CV, cookies/authentication, playlists, video quality selection, and audio transcription cancellation remain non-goals.
 
 ## Development Cleanup
 

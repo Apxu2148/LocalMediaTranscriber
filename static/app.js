@@ -302,11 +302,11 @@ function fileSuffix(fileName) {
 }
 
 function isMuxVideoFile(fileName) {
-  return [".mp4", ".avi", ".mkv", ".webm"].includes(fileSuffix(fileName));
+  return [".mp4", ".avi", ".mkv", ".webm", ".mov"].includes(fileSuffix(fileName));
 }
 
 function isQueueVideoFile(fileName) {
-  return [".mp4", ".avi", ".mkv", ".webm"].includes(fileSuffix(fileName));
+  return [".mp4", ".avi", ".mkv", ".webm", ".mov"].includes(fileSuffix(fileName));
 }
 
 function isMuxAudioFile(fileName) {
@@ -1910,7 +1910,10 @@ function frameRateFromValue(value) {
 }
 
 function queueItemIsVideo(queueItem) {
-  return queueItem.media_kind === "video" || isQueueVideoFile(queueItem.source_filename || queueItem.source_path);
+  return queueItem.media_kind === "video"
+    || queueItem.media_kind === "url"
+    || queueItem.source_type === "url"
+    || isQueueVideoFile(queueItem.source_filename || queueItem.source_path);
 }
 
 function formatDurationShort(seconds) {
@@ -1927,7 +1930,7 @@ function formatQueueMediaSummary(queueItem) {
   const metadata = queueItem.video_metadata || {};
   const dimensions = metadata.width && metadata.height ? `${metadata.width}x${metadata.height}` : "";
   const duration = formatDurationShort(metadata.duration_sec ?? queueItem.audio_duration_sec);
-  return [t("video"), dimensions, duration].filter(Boolean).join(" - ");
+  return [queueItem.source_type === "url" ? t("urlMedia") : t("video"), dimensions, duration].filter(Boolean).join(" - ");
 }
 
 function formatDiskUsageEstimate(estimate) {
@@ -1996,7 +1999,7 @@ function createFrameSettings(queueItem, disabled) {
   const qualitySelect = document.createElement("select");
   qualitySelect.dataset.queueJpegQuality = "true";
   qualitySelect.disabled = disabled || !operations.extract_frames;
-  for (const value of [75, 85, 90, 95, 100]) {
+  for (const value of [75, 80, 85, 90, 95, 100]) {
     const option = document.createElement("option");
     option.value = String(value);
     option.textContent = String(value);
@@ -2008,10 +2011,14 @@ function createFrameSettings(queueItem, disabled) {
   const estimate = document.createElement("div");
   estimate.className = "queue-frame-estimate";
   const count = settings.estimated_frame_count;
-  estimate.append(
-    textLine(t("estimatedFrames", { count: count ?? t("notAvailable") })),
-    textLine(formatDiskUsageEstimate(settings.estimated_disk_usage)),
-  );
+  if (queueItem.source_type === "url" && !queueItem.source_path && !queueItem.video_metadata) {
+    estimate.append(textLine(t("frameEstimateAfterDownload")));
+  } else {
+    estimate.append(
+      textLine(t("estimatedFrames", { count: count ?? t("notAvailable") })),
+      textLine(formatDiskUsageEstimate(settings.estimated_disk_usage)),
+    );
+  }
   if (settings.estimated_frames_warning) {
     const warning = textLine(t("frameCountWarning"));
     warning.dataset.type = Number(count || 0) > 5000 ? "strong-warning" : "warning";
@@ -2042,6 +2049,11 @@ function displayOutputPath(path) {
 function queueItemOutputLines(queueItem) {
   const lines = [];
   const result = queueItem.frame_extraction_result || queueItem.frame_extraction?.result;
+  const operations = queueItem.operations || {};
+  const downloadedMediaPath = queueItem.downloaded_media_path || queueItem.downloaded_video_path;
+  if (queueItem.source_type === "url" && operations.extract_frames && downloadedMediaPath) {
+    lines.push(t("downloadedMediaResultPath", { path: displayOutputPath(downloadedMediaPath) }));
+  }
   if (queueItem.transcript_path) {
     lines.push(t("transcriptResultPath", { path: displayOutputPath(queueItem.transcript_path) }));
   }
@@ -2381,8 +2393,9 @@ function validateQueueStartOptions() {
   if (!invalid) {
     return true;
   }
-  setOutput(queueOutput, t("selectAtLeastOneVideoOperation"), "error");
-  showToast(t("selectAtLeastOneVideoOperation"), "error");
+  const message = invalid.source_type === "url" ? t("selectAtLeastOneUrlOperation") : t("selectAtLeastOneVideoOperation");
+  setOutput(queueOutput, message, "error");
+  showToast(message, "error");
   return false;
 }
 

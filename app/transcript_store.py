@@ -11,7 +11,7 @@ from .utils import timestamp_for_filename, write_json_file, write_text_file
 
 WINDOWS_INVALID_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 MAX_SOURCE_STEM_LENGTH = 96
-URL_METADATA_KEYS = ("source_url", "source_title", "source_platform", "downloaded_audio_path")
+URL_METADATA_KEYS = ("source_url", "source_title", "source_platform", "downloaded_audio_path", "downloaded_media_path", "downloaded_video_path")
 
 
 def safe_filename_part(value: str, *, max_length: int = MAX_SOURCE_STEM_LENGTH) -> str:

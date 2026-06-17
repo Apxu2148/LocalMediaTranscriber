@@ -28,9 +28,12 @@ except Exception:
 
 class FrameExtractorSettingsTests(unittest.TestCase):
     def test_jpeg_quality_100_is_allowed_and_default_stays_90(self) -> None:
+        self.assertEqual((75, 80, 85, 90, 95, 100), ALLOWED_JPEG_QUALITIES)
+        self.assertIn(80, ALLOWED_JPEG_QUALITIES)
         self.assertIn(100, ALLOWED_JPEG_QUALITIES)
         self.assertEqual(90, normalize_jpeg_quality(None))
         self.assertEqual(90, normalize_jpeg_quality(""))
+        self.assertEqual(80, normalize_jpeg_quality(80))
         self.assertEqual(100, normalize_jpeg_quality(100))
 
 

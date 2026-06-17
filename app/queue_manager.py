@@ -52,6 +52,7 @@ class QueueManager:
         duration_reader: Callable[[Path], float | None] = audio_duration_seconds,
         media_validator: Callable[[Path], None] | None = None,
         downloader: Callable[[str], dict] | None = None,
+        video_downloader: Callable[[str], dict] | None = None,
         frame_processor: Callable[[dict, threading.Event, Callable[[dict], None]], dict] | None = None,
         video_metadata_reader: Callable[[Path], dict] | None = read_video_metadata,
     ) -> None:
@@ -61,6 +62,7 @@ class QueueManager:
         self.duration_reader = duration_reader
         self.media_validator = media_validator or (lambda _path: None)
         self.downloader = downloader
+        self.video_downloader = video_downloader
         self.frame_processor = frame_processor
         self.video_metadata_reader = video_metadata_reader
 
@@ -125,31 +127,40 @@ class QueueManager:
                 if not source_url:
                     raise RuntimeError("Пустые ссылки нельзя добавить в очередь.")
                 index = start_index + offset
-                self._items.append(
-                    {
-                        "index": index,
-                        "source_type": "url",
-                        "media_kind": "audio",
-                        "source_url": source_url,
-                        "source_title": None,
-                        "source_platform": "unknown",
-                        "source_path": None,
-                        "source_filename": f"url_{index:03d}",
-                        "downloaded_audio_path": None,
-                        "status": "pending",
-                        "operations": self._default_operations("audio"),
-                        "frame_extraction": None,
-                        "video_metadata": None,
-                        "video_metadata_error": None,
-                        "audio_duration_sec": None,
-                        "processing_time_sec": None,
-                        "realtime_factor": None,
-                        "transcript_path": None,
-                        "json_path": None,
-                        "error_message": None,
-                        "technical_details": None,
-                    }
-                )
+                item = {
+                    "index": index,
+                    "source_type": "url",
+                    "media_kind": "url",
+                    "source_url": source_url,
+                    "source_title": None,
+                    "source_platform": "unknown",
+                    "source_path": None,
+                    "source_filename": f"url_{index:03d}",
+                    "downloaded_audio_path": None,
+                    "downloaded_media_path": None,
+                    "downloaded_video_path": None,
+                    "status": "pending",
+                    "operations": self._default_operations("url"),
+                    "frame_extraction": None,
+                    "video_metadata": None,
+                    "video_metadata_error": None,
+                    "audio_duration_sec": None,
+                    "processing_time_sec": None,
+                    "realtime_factor": None,
+                    "transcript_path": None,
+                    "json_path": None,
+                    "frames_dir": None,
+                    "frames_path": None,
+                    "frames_index_path": None,
+                    "extracted_frame_count": None,
+                    "frame_extraction_result": None,
+                    "output_base": None,
+                    "error_message": None,
+                    "technical_details": None,
+                }
+                item["frame_extraction"] = self._frame_extraction_payload(item, normalize_frame_extraction_settings(None))
+                self._refresh_frame_estimate_locked(item)
+                self._items.append(item)
 
             self._status = "pending"
             self._finished_at = None
@@ -382,7 +393,7 @@ class QueueManager:
             raise RuntimeError("OCR is not implemented yet.")
         if normalized.get("cv"):
             raise RuntimeError("CV is not implemented yet.")
-        if media_kind != "video":
+        if media_kind not in {"video", "url"}:
             normalized["extract_frames"] = False
             normalized["ocr"] = False
             normalized["cv"] = False
@@ -403,7 +414,13 @@ class QueueManager:
         return payload
 
     def _refresh_video_analysis_locked(self, item: dict) -> None:
-        if item.get("media_kind") != "video":
+        if not self._item_supports_frame_extraction(item):
+            return
+        if not item.get("source_path"):
+            self._refresh_frame_estimate_locked(item)
+            return
+        if item.get("source_type") == "url" and not item.get("operations", {}).get("extract_frames"):
+            self._refresh_frame_estimate_locked(item)
             return
         if self.video_metadata_reader is None:
             self._refresh_frame_estimate_locked(item)
@@ -419,7 +436,7 @@ class QueueManager:
 
     def _refresh_frame_estimate_locked(self, item: dict) -> None:
         frame_settings = item.get("frame_extraction")
-        if item.get("media_kind") != "video" or not frame_settings:
+        if not self._item_supports_frame_extraction(item) or not frame_settings:
             return
         metadata = item.get("video_metadata") or {}
         estimated_count = estimate_frame_count(metadata.get("duration_sec"), frame_settings.get("rate"))
@@ -442,8 +459,14 @@ class QueueManager:
                 raise RuntimeError("OCR is not implemented yet.")
             if operations.get("cv"):
                 raise RuntimeError("CV is not implemented yet.")
+            if item.get("source_type") == "url" and not (operations.get("transcribe_audio") or operations.get("extract_frames")):
+                raise RuntimeError("Выберите хотя бы одну операцию для этой ссылки.")
             if media_kind == "video" and not (operations.get("transcribe_audio") or operations.get("extract_frames")):
                 raise RuntimeError("Выберите хотя бы одну операцию для этого видео.")
+
+    @staticmethod
+    def _item_supports_frame_extraction(item: dict) -> bool:
+        return item.get("media_kind") == "video" or item.get("source_type") == "url"
 
     def _find_item_locked(self, index: int) -> dict:
         item = next((entry for entry in self._items if entry["index"] == index), None)
@@ -532,37 +555,61 @@ class QueueManager:
 
                 operations = item_snapshot.get("operations") or self._default_operations(item_snapshot.get("media_kind", "audio"))
                 transcript_result: dict = {}
+                transcript_error: Exception | None = None
                 if operations.get("transcribe_audio"):
-                    self.media_validator(source_path)
-                    if source_path.suffix.lower() in config.SUPPORTED_VIDEO_EXTENSIONS:
+                    try:
+                        self.media_validator(source_path)
+                        if source_path.suffix.lower() in config.SUPPORTED_VIDEO_EXTENSIONS:
+                            with self._lock:
+                                item["status"] = "extracting_audio"
+                                self._persist_locked()
+
                         with self._lock:
-                            item["status"] = "extracting_audio"
+                            item["status"] = "transcribing"
                             self._persist_locked()
+                            item_snapshot = copy.deepcopy(item)
 
-                    with self._lock:
-                        item["status"] = "transcribing"
-                        self._persist_locked()
-                        item_snapshot = copy.deepcopy(item)
-
-                    transcript_result = self.processor(item_snapshot, model, device_preference)
-                    with self._lock:
-                        output_base = self._output_base_from_transcript_path(
-                            transcript_result.get("transcript_path"),
-                            model,
-                        )
-                        item.update(
-                            {
-                                "audio_duration_sec": transcript_result.get("audio_duration_sec", item["audio_duration_sec"]),
-                                "processing_time_sec": transcript_result.get("processing_time_sec"),
-                                "realtime_factor": transcript_result.get("realtime_factor"),
-                                "transcript_path": transcript_result.get("transcript_path"),
-                                "json_path": transcript_result.get("json_path") or transcript_result.get("benchmark_path"),
-                                "output_base": output_base or item.get("output_base"),
-                                "error_message": None,
-                                "technical_details": None,
-                            }
-                        )
-                        self._persist_locked()
+                        transcript_result = self.processor(item_snapshot, model, device_preference)
+                        with self._lock:
+                            output_base = self._output_base_from_transcript_path(
+                                transcript_result.get("transcript_path"),
+                                model,
+                            )
+                            item.update(
+                                {
+                                    "audio_duration_sec": transcript_result.get("audio_duration_sec", item["audio_duration_sec"]),
+                                    "processing_time_sec": transcript_result.get("processing_time_sec"),
+                                    "realtime_factor": transcript_result.get("realtime_factor"),
+                                    "transcript_path": transcript_result.get("transcript_path"),
+                                    "json_path": transcript_result.get("json_path") or transcript_result.get("benchmark_path"),
+                                    "output_base": output_base or item.get("output_base"),
+                                    "error_message": None,
+                                    "technical_details": None,
+                                }
+                            )
+                            self._persist_locked()
+                    except Exception as exc:
+                        if not operations.get("extract_frames"):
+                            raise
+                        transcript_error = exc
+                        error_metadata: dict = {}
+                        if self.error_recorder is not None:
+                            try:
+                                error_metadata = self.error_recorder(item_snapshot, model, device_preference, exc)
+                            except Exception:
+                                logger.exception("Failed to save queue transcription error JSON")
+                        with self._lock:
+                            item.update(
+                                {
+                                    "json_path": error_metadata.get("json_path")
+                                    or error_metadata.get("benchmark_path")
+                                    or item.get("json_path"),
+                                    "error_message": str(exc),
+                                    "technical_details": str(getattr(exc, "technical_details", "") or exc),
+                                }
+                            )
+                            self._persist_locked()
+                            item_snapshot = copy.deepcopy(item)
 
                 frame_result: dict = {}
                 if operations.get("extract_frames"):
@@ -616,7 +663,7 @@ class QueueManager:
                             )
                         task_cancelled = True
                     elif frame_result.get("status") == "failed":
-                        if transcript_result.get("transcript_path") or item.get("transcript_path"):
+                        if transcript_result.get("transcript_path") or item.get("transcript_path") or transcript_error:
                             error_message = frame_result.get("error_message") or "Frame extraction failed."
                             with self._lock:
                                 item.update(
@@ -624,7 +671,7 @@ class QueueManager:
                                         "status": "error",
                                         "error_message": error_message,
                                         "technical_details": error_message,
-                                        "processing_time_sec": transcript_result.get("processing_time_sec"),
+                                        "processing_time_sec": transcript_result.get("processing_time_sec") or item.get("processing_time_sec"),
                                     }
                                 )
                                 self._persist_locked()
@@ -641,14 +688,24 @@ class QueueManager:
                 if not task_cancelled and not task_failed:
                     with self._lock:
                         combined_processing = transcript_result.get("processing_time_sec")
-                        item.update(
-                            {
-                                "status": "completed",
-                                "error_message": None,
-                                "technical_details": None,
-                                "processing_time_sec": combined_processing,
-                            }
-                        )
+                        if transcript_error:
+                            item.update(
+                                {
+                                    "status": "error",
+                                    "error_message": str(transcript_error),
+                                    "technical_details": str(getattr(transcript_error, "technical_details", "") or transcript_error),
+                                    "processing_time_sec": combined_processing,
+                                }
+                            )
+                        else:
+                            item.update(
+                                {
+                                    "status": "completed",
+                                    "error_message": None,
+                                    "technical_details": None,
+                                    "processing_time_sec": combined_processing,
+                                }
+                            )
                         self._persist_locked()
                         logger.info(
                             "Queue task completed: job_id=%s index=%s transcript=%s json=%s frames=%s duration=%s processing_time=%s realtime_factor=%s",
@@ -673,8 +730,8 @@ class QueueManager:
                     item.update(
                         {
                             "status": "error",
-                            "transcript_path": error_metadata.get("transcript_path"),
-                            "json_path": error_metadata.get("json_path") or error_metadata.get("benchmark_path"),
+                            "transcript_path": error_metadata.get("transcript_path") or item.get("transcript_path"),
+                            "json_path": error_metadata.get("json_path") or error_metadata.get("benchmark_path") or item.get("json_path"),
                             "error_message": str(exc),
                             "technical_details": str(getattr(exc, "technical_details", "") or exc),
                         }
@@ -804,28 +861,38 @@ class QueueManager:
         if item_snapshot.get("source_type") != "url":
             return Path(item_snapshot["source_path"])
 
-        downloaded_path = item_snapshot.get("downloaded_audio_path")
+        operations = item_snapshot.get("operations") or self._default_operations(item_snapshot.get("media_kind", "url"))
+        needs_video = bool(operations.get("extract_frames"))
+        if needs_video:
+            downloaded_path = item_snapshot.get("downloaded_video_path") or item_snapshot.get("downloaded_media_path")
+        else:
+            downloaded_path = item_snapshot.get("downloaded_audio_path")
         if downloaded_path and Path(downloaded_path).exists():
             return Path(downloaded_path)
-        if self.downloader is None:
+        downloader = self.video_downloader if needs_video else self.downloader
+        if downloader is None:
             raise RuntimeError("Сервис скачивания URL не настроен.")
 
         with self._lock:
             item["status"] = "downloading"
             self._persist_locked()
-        metadata = self.downloader(item_snapshot["source_url"])
+        metadata = downloader(item_snapshot["source_url"])
         source_path = Path(metadata["source_path"])
         if not source_path.exists():
             raise RuntimeError("Скачанный аудиофайл не найден.")
 
         with self._lock:
+            media_kind = "url" if needs_video else self._media_kind_for(source_path)
             item.update(
                 {
                     "source_path": str(source_path),
                     "downloaded_audio_path": str(source_path),
+                    "downloaded_media_path": metadata.get("downloaded_media_path") or str(source_path),
+                    "downloaded_video_path": metadata.get("downloaded_video_path") if needs_video else item.get("downloaded_video_path"),
                     "source_title": metadata.get("source_title"),
                     "source_platform": metadata.get("source_platform") or "unknown",
                     "source_filename": metadata.get("source_title") or item["source_filename"],
+                    "media_kind": media_kind,
                     "audio_duration_sec": self._rounded(metadata.get("audio_duration_sec")),
                     "status": "downloaded",
                 }

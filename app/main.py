@@ -186,6 +186,11 @@ def process_queue_item(item: dict, model_name: str, device_preference: str) -> d
 def process_queue_frame_extraction(item: dict, cancel_event: threading.Event, progress_callback) -> dict:
     source_path = Path(item["source_path"])
     frame_settings = item.get("frame_extraction") or {}
+    source_metadata = {
+        key: item.get(key)
+        for key in ("source_type", "source_url", "source_title", "source_platform", "downloaded_media_path", "downloaded_video_path")
+        if item.get(key)
+    }
     return frame_extractor.extract_frames(
         source_path=source_path,
         source_filename=item.get("source_filename") or source_path.name,
@@ -194,6 +199,7 @@ def process_queue_frame_extraction(item: dict, cancel_event: threading.Event, pr
         jpeg_quality=frame_settings.get("jpeg_quality"),
         cancel_event=cancel_event,
         progress_callback=progress_callback,
+        source_metadata=source_metadata,
     )
 
 
@@ -217,6 +223,7 @@ queue_manager = QueueManager(
     error_recorder=save_queue_item_error,
     media_validator=validate_media_for_transcription,
     downloader=url_downloader.download,
+    video_downloader=url_downloader.download_video,
     frame_processor=process_queue_frame_extraction,
 )
 benchmark_service = BenchmarkService(

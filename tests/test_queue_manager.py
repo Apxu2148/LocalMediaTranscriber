@@ -1,15 +1,39 @@
 import json
 import shutil
+import sys
 import threading
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
 
 from app.queue_manager import QueueFile, QueueManager, QueueUrl
+from app.url_downloader import UrlDownloader
 
 
 PROJECT_TMP = Path(__file__).resolve().parents[1] / "tmp"
+
+
+class FakeHttpResponse:
+    def __init__(self, chunks: list[bytes]) -> None:
+        self.chunks = list(chunks)
+        self.status = 200
+        self.headers = {}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args) -> None:
+        return None
+
+    def getcode(self) -> int:
+        return self.status
+
+    def read(self, _size: int) -> bytes:
+        if not self.chunks:
+            return b""
+        return self.chunks.pop(0)
 
 
 class QueueManagerTests(unittest.TestCase):
@@ -191,6 +215,265 @@ class QueueManagerTests(unittest.TestCase):
         self.assertEqual([("local_file", "base", "cuda"), ("url", "base", "cuda")], calls)
         self.assertEqual("youtube", status["items"][1]["source_platform"])
         self.assertEqual(str(downloaded.source_path), status["items"][1]["downloaded_audio_path"])
+
+    def test_url_item_defaults_to_media_processing_options(self) -> None:
+        manager = self.make_manager(processor=lambda _item, _model, _device: {})
+
+        status = self.track_job(manager.add_urls([QueueUrl("https://example.test/video")]))
+        item = status["items"][0]
+
+        self.assertEqual("url", item["source_type"])
+        self.assertEqual("url", item["media_kind"])
+        self.assertTrue(item["operations"]["transcribe_audio"])
+        self.assertFalse(item["operations"]["extract_frames"])
+        self.assertFalse(item["operations"]["ocr"])
+        self.assertFalse(item["operations"]["cv"])
+        self.assertEqual({"mode": "interval", "seconds": 10}, item["frame_extraction"]["rate"])
+        self.assertEqual(90, item["frame_extraction"]["jpeg_quality"])
+
+    def test_url_item_without_executable_operation_is_rejected(self) -> None:
+        manager = self.make_manager(processor=lambda _item, _model, _device: {})
+        status = self.track_job(manager.add_urls([QueueUrl("https://example.test/video")]))
+        manager.update_item(
+            status["items"][0]["index"],
+            operations={"transcribe_audio": False, "extract_frames": False},
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "ссылки"):
+            manager.start("small")
+
+    def test_url_extract_frames_uses_video_download_and_frame_processor(self) -> None:
+        video = self.make_file("downloaded_video.mkv")
+        audio_downloads: list[str] = []
+        video_downloads: list[str] = []
+        frame_sources: list[str] = []
+
+        def frame_processor(item: dict, _cancel_event: threading.Event, _progress) -> dict:
+            frame_sources.append(item["source_path"])
+            return {
+                "status": "completed",
+                "completed": True,
+                "frames_dir": f"{item['output_base']}__frames",
+                "frames_path": f"data/recordings/{item['output_base']}__frames",
+                "frames_index_path": f"data/recordings/{item['output_base']}__frames/frames_index.json",
+                "extracted_frame_count": 2,
+            }
+
+        manager = self.make_manager(
+            processor=lambda _item, _model, _device: {},
+            downloader=lambda url: audio_downloads.append(url) or {},
+            video_downloader=lambda url: video_downloads.append(url) or {
+                "source_path": str(video.source_path),
+                "source_title": "Downloaded URL Video",
+                "source_platform": "youtube",
+                "audio_duration_sec": 10,
+                "downloaded_media_path": str(video.source_path),
+                "downloaded_video_path": str(video.source_path),
+            },
+            frame_processor=frame_processor,
+            duration_reader=lambda _path: 10,
+            video_metadata_reader=lambda _path: {"duration_sec": 10, "fps": 30, "width": 100, "height": 50},
+        )
+        status = self.track_job(manager.add_urls([QueueUrl("https://example.test/video")]))
+        manager.update_item(
+            status["items"][0]["index"],
+            operations={"transcribe_audio": False, "extract_frames": True},
+        )
+        manager.start("small")
+        manager.wait(timeout=3)
+
+        item = manager.status()["items"][0]
+        self.assertEqual([], audio_downloads)
+        self.assertEqual(["https://example.test/video"], video_downloads)
+        self.assertEqual([str(video.source_path)], frame_sources)
+        self.assertEqual(str(video.source_path), item["downloaded_media_path"])
+        self.assertTrue(item["frames_index_path"].endswith("frames_index.json"))
+
+    def test_direct_mp4_url_extract_frames_downloads_directly_without_ytdlp(self) -> None:
+        url_downloader = UrlDownloader(self.root / "downloads")
+        frame_sources: list[str] = []
+
+        def frame_processor(item: dict, _cancel_event: threading.Event, _progress) -> dict:
+            frame_sources.append(item["source_path"])
+            return {
+                "status": "completed",
+                "completed": True,
+                "frames_dir": f"{item['output_base']}__frames",
+                "frames_path": f"data/recordings/{item['output_base']}__frames",
+                "frames_index_path": f"data/recordings/{item['output_base']}__frames/frames_index.json",
+                "extracted_frame_count": 2,
+            }
+
+        manager = self.make_manager(
+            processor=lambda _item, _model, _device: {},
+            video_downloader=url_downloader.download_video,
+            frame_processor=frame_processor,
+            duration_reader=lambda _path: 10,
+            video_metadata_reader=lambda _path: {"duration_sec": 10, "fps": 30, "width": 100, "height": 50},
+        )
+        status = self.track_job(manager.add_urls([QueueUrl("https://example.test/media/direct.mp4?token=abc")]))
+        manager.update_item(
+            status["items"][0]["index"],
+            operations={"transcribe_audio": False, "extract_frames": True},
+        )
+        fake_module = types.SimpleNamespace(YoutubeDL=lambda _options: self.fail("yt-dlp should not be used"))
+        with patch.dict(sys.modules, {"yt_dlp": fake_module}):
+            with patch("app.url_downloader.urlopen", return_value=FakeHttpResponse([b"video"])):
+                manager.start("small")
+                manager.wait(timeout=3)
+
+        item = manager.status()["items"][0]
+        self.assertEqual("completed", item["status"])
+        self.assertEqual("direct", item["source_platform"])
+        self.assertTrue(Path(item["downloaded_media_path"]).exists())
+        self.assertEqual([item["downloaded_media_path"]], frame_sources)
+
+    def test_url_item_with_both_operations_preserves_transcript_and_frames(self) -> None:
+        video = self.make_file("both_url.mkv")
+
+        def processor(item: dict, _model: str, _device: str) -> dict:
+            return {
+                "audio_duration_sec": 5,
+                "processing_time_sec": 2,
+                "realtime_factor": 2.5,
+                "transcript_path": f"{item['source_path']}.txt",
+                "json_path": f"{item['source_path']}.json",
+            }
+
+        def frame_processor(item: dict, _cancel_event: threading.Event, _progress) -> dict:
+            return {
+                "status": "completed",
+                "completed": True,
+                "frames_dir": f"{item['output_base']}__frames",
+                "frames_path": f"data/recordings/{item['output_base']}__frames",
+                "frames_index_path": f"data/recordings/{item['output_base']}__frames/frames_index.json",
+                "extracted_frame_count": 3,
+            }
+
+        manager = self.make_manager(
+            processor=processor,
+            video_downloader=lambda _url: {
+                "source_path": str(video.source_path),
+                "source_title": "Both URL",
+                "source_platform": "youtube",
+                "audio_duration_sec": 5,
+                "downloaded_media_path": str(video.source_path),
+                "downloaded_video_path": str(video.source_path),
+            },
+            frame_processor=frame_processor,
+            duration_reader=lambda _path: 5,
+            video_metadata_reader=lambda _path: {"duration_sec": 5, "fps": 30, "width": 100, "height": 50},
+        )
+        status = self.track_job(manager.add_urls([QueueUrl("https://example.test/video")]))
+        manager.update_item(
+            status["items"][0]["index"],
+            operations={"transcribe_audio": True, "extract_frames": True},
+        )
+        manager.start("small")
+        manager.wait(timeout=3)
+
+        item = manager.status()["items"][0]
+        self.assertEqual("completed", item["status"])
+        self.assertTrue(item["transcript_path"].endswith(".txt"))
+        self.assertTrue(item["frames_index_path"].endswith("frames_index.json"))
+        self.assertEqual(str(video.source_path), item["downloaded_media_path"])
+
+    def test_url_transcription_failure_still_runs_selected_frame_extraction(self) -> None:
+        video = self.make_file("frames_after_transcript_error.mkv")
+        frame_calls: list[str] = []
+
+        def processor(_item: dict, _model: str, _device: str) -> dict:
+            raise RuntimeError("transcript failed")
+
+        def frame_processor(item: dict, _cancel_event: threading.Event, _progress) -> dict:
+            frame_calls.append(item["source_path"])
+            return {
+                "status": "completed",
+                "completed": True,
+                "frames_dir": f"{item['output_base']}__frames",
+                "frames_path": f"data/recordings/{item['output_base']}__frames",
+                "frames_index_path": f"data/recordings/{item['output_base']}__frames/frames_index.json",
+                "extracted_frame_count": 4,
+            }
+
+        manager = self.make_manager(
+            processor=processor,
+            error_recorder=lambda _item, _model, _device, _exc: {"json_path": str(self.root / "transcript_error.json")},
+            video_downloader=lambda _url: {
+                "source_path": str(video.source_path),
+                "source_title": "Frames After Error",
+                "source_platform": "youtube",
+                "downloaded_media_path": str(video.source_path),
+                "downloaded_video_path": str(video.source_path),
+            },
+            frame_processor=frame_processor,
+            duration_reader=lambda _path: 5,
+            video_metadata_reader=lambda _path: {"duration_sec": 5, "fps": 30, "width": 100, "height": 50},
+        )
+        status = self.track_job(manager.add_urls([QueueUrl("https://example.test/video")]))
+        manager.update_item(
+            status["items"][0]["index"],
+            operations={"transcribe_audio": True, "extract_frames": True},
+        )
+        manager.start("small")
+        manager.wait(timeout=3)
+
+        item = manager.status()["items"][0]
+        self.assertEqual("error", item["status"])
+        self.assertEqual([str(video.source_path)], frame_calls)
+        self.assertTrue(item["frames_index_path"].endswith("frames_index.json"))
+        self.assertIn("transcript failed", item["error_message"])
+
+    def test_url_frame_failure_after_transcription_preserves_transcript(self) -> None:
+        video = self.make_file("url_frame_error.mkv")
+
+        def processor(item: dict, _model: str, _device: str) -> dict:
+            return {
+                "audio_duration_sec": 5,
+                "processing_time_sec": 2,
+                "realtime_factor": 2.5,
+                "transcript_path": f"{item['source_path']}.txt",
+                "json_path": f"{item['source_path']}.json",
+            }
+
+        def frame_processor(item: dict, _cancel_event: threading.Event, _progress) -> dict:
+            return {
+                "status": "failed",
+                "completed": False,
+                "error_message": "Could not write JPEG frame: frame_000001__t000000.000.jpg",
+                "error_code": "frame_write_failed",
+                "error_filename": "frame_000001__t000000.000.jpg",
+                "frames_dir": f"{item['output_base']}__frames",
+                "frames_path": f"data/recordings/{item['output_base']}__frames",
+                "frames_index_path": f"data/recordings/{item['output_base']}__frames/frames_index.json",
+                "extracted_frame_count": 0,
+            }
+
+        manager = self.make_manager(
+            processor=processor,
+            video_downloader=lambda _url: {
+                "source_path": str(video.source_path),
+                "source_title": "URL Frame Error",
+                "source_platform": "youtube",
+                "downloaded_media_path": str(video.source_path),
+                "downloaded_video_path": str(video.source_path),
+            },
+            frame_processor=frame_processor,
+            duration_reader=lambda _path: 5,
+            video_metadata_reader=lambda _path: {"duration_sec": 5, "fps": 30, "width": 100, "height": 50},
+        )
+        status = self.track_job(manager.add_urls([QueueUrl("https://example.test/video")]))
+        manager.update_item(
+            status["items"][0]["index"],
+            operations={"transcribe_audio": True, "extract_frames": True},
+        )
+        manager.start("small")
+        manager.wait(timeout=3)
+
+        item = manager.status()["items"][0]
+        self.assertEqual("error", item["status"])
+        self.assertTrue(item["transcript_path"].endswith(".txt"))
+        self.assertEqual("frame_write_failed", item["frame_extraction_result"]["error_code"])
 
     def test_preserves_recording_source_type(self) -> None:
         manager = self.make_manager(processor=lambda _item, _model, _device: {})

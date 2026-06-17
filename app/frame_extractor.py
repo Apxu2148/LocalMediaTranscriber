@@ -17,7 +17,7 @@ DEFAULT_FRAME_RATE = {"mode": "interval", "seconds": 10}
 DEFAULT_JPEG_QUALITY = 90
 ALLOWED_INTERVAL_SECONDS = (30, 20, 15, 10, 5, 3, 2, 1)
 ALLOWED_EXTRACTION_FPS = (2, 3, 5, 10, 15, 20, 30)
-ALLOWED_JPEG_QUALITIES = (75, 85, 90, 95, 100)
+ALLOWED_JPEG_QUALITIES = (75, 80, 85, 90, 95, 100)
 
 
 class FrameExtractionError(RuntimeError):
@@ -221,6 +221,7 @@ class VideoFrameExtractor:
         jpeg_quality: int | str | None = None,
         cancel_event: threading.Event | None = None,
         progress_callback: Callable[[dict], None] | None = None,
+        source_metadata: dict | None = None,
     ) -> dict:
         settings = normalize_frame_extraction_settings({"rate": rate, "jpeg_quality": jpeg_quality})
         source_name = source_filename or source_path.name
@@ -236,6 +237,7 @@ class VideoFrameExtractor:
             frames_dir=frames_dir,
             settings=settings,
             started_at=started_at,
+            source_metadata=source_metadata,
         )
         write_json_file_atomic(frames_dir / "frames_index.json", index_payload)
 
@@ -347,6 +349,7 @@ class VideoFrameExtractor:
         frames_dir: Path,
         settings: dict,
         started_at: str,
+        source_metadata: dict | None = None,
     ) -> dict:
         rate = settings["rate"]
         extraction = {
@@ -355,7 +358,7 @@ class VideoFrameExtractor:
             "requested_fps": rate.get("fps"),
             "jpeg_quality": settings["jpeg_quality"],
         }
-        return {
+        payload = {
             "schema_version": 1,
             "status": "running",
             "completed": False,
@@ -374,6 +377,10 @@ class VideoFrameExtractor:
             "requested_fps_exceeds_source_fps": False,
             "frames": [],
         }
+        for key in ("source_type", "source_url", "source_title", "source_platform", "downloaded_media_path", "downloaded_video_path"):
+            if source_metadata and source_metadata.get(key):
+                payload[key] = source_metadata[key]
+        return payload
 
     @staticmethod
     def _requested_fps_exceeds_source(rate: dict, source_fps: float | None) -> bool:
