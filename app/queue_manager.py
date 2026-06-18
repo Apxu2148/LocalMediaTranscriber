@@ -73,6 +73,7 @@ class QueueManager:
         video_downloader: Callable[[str], dict] | None = None,
         frame_processor: Callable[[dict, threading.Event, Callable[[dict], None]], dict] | None = None,
         video_metadata_reader: Callable[[Path], dict] | None = read_video_metadata,
+        retention_cleaner: Callable[[dict], dict] | None = None,
     ) -> None:
         self.jobs_dir = jobs_dir
         self.processor = processor
@@ -83,6 +84,7 @@ class QueueManager:
         self.video_downloader = video_downloader
         self.frame_processor = frame_processor
         self.video_metadata_reader = video_metadata_reader
+        self.retention_cleaner = retention_cleaner
 
         self._lock = threading.RLock()
         self._items: list[dict] = []
@@ -200,6 +202,7 @@ class QueueManager:
                     "output_base": None,
                     "error_message": None,
                     "technical_details": None,
+                    "outputs": {},
                 }
                 item["frame_extraction"] = self._frame_extraction_payload(item, normalize_frame_extraction_settings(None))
                 self._refresh_frame_estimate_locked(item)
@@ -289,6 +292,7 @@ class QueueManager:
                         "frame_extraction_result": None,
                         "error_message": None,
                         "technical_details": None,
+                        "outputs": {},
                     }
                 )
                 self._set_item_stage_locked(item, "idle", status="pending")
@@ -412,6 +416,7 @@ class QueueManager:
             "output_base": None,
             "error_message": None,
             "technical_details": None,
+            "outputs": {},
         }
         if media_kind == "video":
             item["frame_extraction"] = self._frame_extraction_payload(item, settings)
@@ -560,6 +565,86 @@ class QueueManager:
         item["stage"] = stage
         item["stage_label_key"] = STAGE_LABEL_KEYS.get(stage, STAGE_LABEL_KEYS["idle"])
         item["stage_detail"] = detail if detail is not None else self._stage_detail_for(item)
+
+    @staticmethod
+    def _path_exists(path_value: str | None) -> bool:
+        if not path_value:
+            return False
+        try:
+            return Path(path_value).exists()
+        except OSError:
+            return False
+
+    @staticmethod
+    def _absolute_artifact_path(path_value: str | None, *, base_dir: Path | None = None) -> str | None:
+        if not path_value:
+            return None
+        path = Path(path_value)
+        if path.is_absolute():
+            return str(path)
+        normalized = str(path_value).replace("\\", "/")
+        if normalized.startswith("data/"):
+            return str((config.BASE_DIR / path).resolve())
+        if base_dir is not None:
+            return str((base_dir / path).resolve())
+        return str(path)
+
+    def _output_artifacts_locked(self, item: dict, cleanup_result: dict | None = None) -> dict:
+        cleanup = cleanup_result or {}
+        frame_result = item.get("frame_extraction_result") or (item.get("frame_extraction") or {}).get("result") or {}
+        frames_dir = self._absolute_artifact_path(
+            frame_result.get("frames_path") or item.get("frames_path") or frame_result.get("frames_dir") or item.get("frames_dir"),
+            base_dir=config.RECORDINGS_DIR,
+        )
+        frames_index_path = self._absolute_artifact_path(
+            frame_result.get("frames_index_path") or item.get("frames_index_path"),
+            base_dir=config.RECORDINGS_DIR,
+        )
+        downloaded_media_path = self._absolute_artifact_path(
+            item.get("downloaded_video_path") or item.get("downloaded_media_path") or item.get("downloaded_audio_path")
+        )
+        uploaded_temp_path = None
+        if item.get("source_type") == "local_file" and item.get("source_path"):
+            source_path = Path(item["source_path"])
+            try:
+                resolved_source_path = source_path.resolve()
+                if resolved_source_path.is_relative_to(config.UPLOADS_DIR.resolve()):
+                    uploaded_temp_path = str(resolved_source_path)
+            except OSError:
+                uploaded_temp_path = None
+
+        outputs = {
+            "transcript_path": self._absolute_artifact_path(item.get("transcript_path")),
+            "transcript_exists": self._path_exists(item.get("transcript_path")),
+            "json_path": self._absolute_artifact_path(item.get("json_path")),
+            "json_exists": self._path_exists(item.get("json_path")),
+            "frames_dir": frames_dir,
+            "frames_dir_exists": self._path_exists(frames_dir),
+            "frames_index_path": frames_index_path,
+            "frames_index_exists": self._path_exists(frames_index_path),
+            "downloaded_media_path": downloaded_media_path,
+            "downloaded_media_exists": self._path_exists(downloaded_media_path),
+            "downloaded_media_deleted": bool(cleanup.get("downloaded_media_deleted")),
+            "downloaded_media_delete_error": cleanup.get("downloaded_media_delete_error"),
+            "uploaded_temp_path": uploaded_temp_path,
+            "uploaded_temp_exists": self._path_exists(uploaded_temp_path),
+            "uploaded_temp_deleted": bool(cleanup.get("uploaded_temp_deleted")),
+            "uploaded_temp_delete_error": cleanup.get("uploaded_temp_delete_error"),
+            "retention_cleanup_error": cleanup.get("retention_cleanup_error"),
+        }
+        return outputs
+
+    def _refresh_outputs_locked(self, item: dict, cleanup_result: dict | None = None) -> None:
+        item["outputs"] = self._output_artifacts_locked(item, cleanup_result)
+
+    def _apply_success_retention_locked(self, item: dict) -> dict:
+        if self.retention_cleaner is None:
+            return {}
+        try:
+            return self.retention_cleaner(copy.deepcopy(item))
+        except Exception as exc:
+            logger.exception("Queue retention cleanup failed: job_id=%s index=%s", self._job_id, item.get("index"))
+            return {"retention_cleanup_error": str(exc)}
 
     def _find_item_locked(self, index: int) -> dict:
         item = next((entry for entry in self._items if entry["index"] == index), None)
@@ -756,6 +841,7 @@ class QueueManager:
                                 }
                             )
                             self._set_item_stage_locked(item, "cancelled", status="cancelled")
+                            self._refresh_outputs_locked(item)
                             self._persist_locked()
                             logger.info(
                                 "Queue task cancelled: job_id=%s index=%s frames=%s",
@@ -777,6 +863,7 @@ class QueueManager:
                                     }
                                 )
                                 self._set_item_stage_locked(item, "failed", status="error")
+                                self._refresh_outputs_locked(item)
                                 self._persist_locked()
                                 logger.error(
                                     "Queue frame extraction failed after transcription: job_id=%s index=%s frames_dir=%s",
@@ -801,6 +888,7 @@ class QueueManager:
                                 }
                             )
                             self._set_item_stage_locked(item, "failed", status="error")
+                            self._refresh_outputs_locked(item)
                         else:
                             item.update(
                                 {
@@ -811,6 +899,8 @@ class QueueManager:
                                 }
                             )
                             self._set_item_stage_locked(item, "completed", status="completed")
+                            cleanup_result = self._apply_success_retention_locked(item)
+                            self._refresh_outputs_locked(item, cleanup_result)
                         self._persist_locked()
                         logger.info(
                             "Queue task completed: job_id=%s index=%s transcript=%s json=%s frames=%s duration=%s processing_time=%s realtime_factor=%s",
@@ -842,6 +932,7 @@ class QueueManager:
                         }
                     )
                     self._set_item_stage_locked(item, "failed", status="error")
+                    self._refresh_outputs_locked(item)
                     self._persist_locked()
                     logger.exception(
                         "Queue task failed: job_id=%s index=%s file=%s",
@@ -856,6 +947,7 @@ class QueueManager:
                     for pending_item in self._items:
                         if pending_item["status"] == "pending":
                             self._set_item_stage_locked(pending_item, "cancelled", status="cancelled")
+                            self._refresh_outputs_locked(pending_item)
                     self._finish_locked("cancelled")
                     return
                 self._persist_locked()

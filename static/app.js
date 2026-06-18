@@ -72,6 +72,14 @@ const recordingsFileList = document.querySelector("#recordingsFileList");
 const transcriptsFileList = document.querySelector("#transcriptsFileList");
 const openRecordingsButton = document.querySelector("#openRecordingsButton");
 const openTranscriptsButton = document.querySelector("#openTranscriptsButton");
+const storageSummaryGrid = document.querySelector("#storageSummaryGrid");
+const refreshStorageSummaryButton = document.querySelector("#refreshStorageSummaryButton");
+const openDataFolderButton = document.querySelector("#openDataFolderButton");
+const keepDownloadedMediaCheckbox = document.querySelector("#keepDownloadedMediaCheckbox");
+const keepUploadedTempCheckbox = document.querySelector("#keepUploadedTempCheckbox");
+const clearDownloadsButton = document.querySelector("#clearDownloadsButton");
+const clearUploadsButton = document.querySelector("#clearUploadsButton");
+const storageCleanupOutput = document.querySelector("#storageCleanupOutput");
 const toastRegion = document.querySelector("#toastRegion");
 const appVersion = document.querySelector("#appVersion");
 const recordingTimer = document.querySelector("#recordingTimer");
@@ -208,6 +216,10 @@ function setDynamicOutput(element, renderMessage, type = "info") {
   dynamicOutputRenderers.set(element, { renderMessage, type });
   element.textContent = translateUiText(renderMessage());
   element.dataset.type = type;
+}
+
+function setLocalizedOutput(element, key, variables = {}, type = "info") {
+  setDynamicOutput(element, () => t(key, variables), type);
 }
 
 function rerenderDynamicOutputs() {
@@ -420,8 +432,8 @@ async function requestJson(url, options = {}) {
   const payload = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    const message = payload?.detail?.message || payload?.message || t("requestError");
-    const technicalDetails = payload?.detail?.technical_details || payload?.technical_details || "";
+    const message = translateUiText(payload?.detail?.message || payload?.message || t("requestError"));
+    const technicalDetails = translateUiText(payload?.detail?.technical_details || payload?.technical_details || "");
     throw new ApiError(message, technicalDetails);
   }
 
@@ -1356,6 +1368,125 @@ function hideTechnicalDetails() {
   transcribeTechnicalDetails.open = false;
 }
 
+function storageFolderLabel(key) {
+  return t({
+    downloads: "storageDownloads",
+    uploads: "storageUploads",
+    recordings: "storageRecordings",
+    transcripts: "storageTranscripts",
+    logs: "storageLogs",
+    jobs: "storageJobs",
+  }[key] || "storageFolder");
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes || 0);
+  const units = ["B", "KB", "MB", "GB"];
+  let size = Math.max(0, value);
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+  const precision = unitIndex === 0 ? 0 : size >= 10 ? 1 : 2;
+  return `${size.toFixed(precision)} ${units[unitIndex]}`;
+}
+
+function renderStorageSummary(summary) {
+  storageSummaryGrid.innerHTML = "";
+  const total = document.createElement("div");
+  total.className = "storage-summary-card";
+  total.append(
+    textLine(t("storageTotalSize")),
+    textLine(formatBytes(summary.total_size_bytes)),
+  );
+  storageSummaryGrid.append(total);
+  for (const folder of summary.folders || []) {
+    const card = document.createElement("div");
+    card.className = "storage-summary-card";
+    card.dataset.storageFolder = folder.key;
+    card.append(
+      textLine(storageFolderLabel(folder.key)),
+      textLine(formatBytes(folder.size_bytes)),
+    );
+    const path = document.createElement("code");
+    path.textContent = folder.path;
+    card.append(path);
+    storageSummaryGrid.append(card);
+  }
+}
+
+async function refreshStorageSummary() {
+  refreshStorageSummaryButton.disabled = true;
+  try {
+    const summary = await requestJson("/api/storage/summary");
+    renderStorageSummary(summary);
+  } catch (error) {
+    setOutput(storageCleanupOutput, error.message, "error");
+  } finally {
+    refreshStorageSummaryButton.disabled = false;
+  }
+}
+
+async function refreshStorageSettings() {
+  try {
+    const settings = await requestJson("/api/storage/settings");
+    keepDownloadedMediaCheckbox.checked = Boolean(settings.keep_downloaded_url_media);
+    keepUploadedTempCheckbox.checked = Boolean(settings.keep_uploaded_temp_files);
+  } catch (error) {
+    setOutput(storageCleanupOutput, error.message, "error");
+  }
+}
+
+async function saveStorageSettings() {
+  keepDownloadedMediaCheckbox.disabled = true;
+  keepUploadedTempCheckbox.disabled = true;
+  try {
+    await requestJson("/api/storage/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        keep_downloaded_url_media: keepDownloadedMediaCheckbox.checked,
+        keep_uploaded_temp_files: keepUploadedTempCheckbox.checked,
+      }),
+    });
+    setLocalizedOutput(storageCleanupOutput, "storageSettingsSaved", {}, "success");
+  } catch (error) {
+    setOutput(storageCleanupOutput, error.message, "error");
+    await refreshStorageSettings();
+  } finally {
+    keepDownloadedMediaCheckbox.disabled = false;
+    keepUploadedTempCheckbox.disabled = false;
+  }
+}
+
+async function cleanupStorageFolder(folder) {
+  const messageKey = folder === "downloads" ? "confirmClearDownloads" : "confirmClearUploads";
+  if (!window.confirm(t(messageKey))) {
+    return;
+  }
+  clearDownloadsButton.disabled = true;
+  clearUploadsButton.disabled = true;
+  try {
+    const result = await requestJson("/api/storage/cleanup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ folder }),
+    });
+    if (result.errors?.length) {
+      setOutput(storageCleanupOutput, t("cleanupPartial", { reason: result.errors.join("\n") }), "warning");
+    } else {
+      setOutput(storageCleanupOutput, t("cleanupCompleted"), "success");
+    }
+    await refreshStorage();
+  } catch (error) {
+    setOutput(storageCleanupOutput, t("cleanupFailed", { reason: error.message }), "error");
+  } finally {
+    clearDownloadsButton.disabled = false;
+    clearUploadsButton.disabled = false;
+  }
+}
+
 async function refreshStorage() {
   try {
     const storage = await requestJson("/api/storage");
@@ -1372,6 +1503,7 @@ async function refreshStorage() {
     latestRecordingFiles = [];
     fillVideoMuxOptions([]);
   }
+  await refreshStorageSummary();
 }
 
 function fillVideoMuxOptions(files) {
@@ -2281,7 +2413,7 @@ function queueItemOutputLines(queueItem) {
   const lines = [];
   const result = queueItem.frame_extraction_result || queueItem.frame_extraction?.result;
   const operations = queueItem.operations || {};
-  const downloadedMediaPath = queueItem.downloaded_media_path || queueItem.downloaded_video_path;
+  const downloadedMediaPath = queueItem.downloaded_media_path || queueItem.downloaded_video_path || queueItem.downloaded_audio_path;
   if (queueItem.source_type === "url" && operations.extract_frames && downloadedMediaPath) {
     lines.push(t("downloadedMediaResultPath", { path: displayOutputPath(downloadedMediaPath) }));
   }
@@ -2295,6 +2427,57 @@ function queueItemOutputLines(queueItem) {
     lines.push(t("framesResultIndex", {
       path: displayOutputPath(result?.frames_index_path || queueItem.frames_index_path || `${framesPath}/frames_index.json`),
     }));
+  }
+  return lines;
+}
+
+function artifactPathLine(labelKey, path, exists) {
+  if (!path) {
+    return null;
+  }
+  const displayPath = exists === false ? t("artifactPathMissing", { path }) : path;
+  return t(labelKey, { path: displayPath });
+}
+
+function queueItemArtifactLines(queueItem) {
+  const outputs = queueItem.outputs || {};
+  const lines = [];
+  const addLine = (line) => {
+    if (line) {
+      lines.push(line);
+    }
+  };
+
+  addLine(artifactPathLine("transcriptArtifactPath", outputs.transcript_path, outputs.transcript_exists));
+  addLine(artifactPathLine("diagnosticJsonArtifactPath", outputs.json_path, outputs.json_exists));
+  addLine(artifactPathLine("framesArtifactPath", outputs.frames_dir, outputs.frames_dir_exists));
+  addLine(artifactPathLine("framesIndexArtifactPath", outputs.frames_index_path, outputs.frames_index_exists));
+
+  if (outputs.downloaded_media_deleted) {
+    lines.push(t("downloadedMediaDeleted"));
+  } else {
+    addLine(artifactPathLine("downloadedMediaArtifactPath", outputs.downloaded_media_path, outputs.downloaded_media_exists));
+  }
+  if (outputs.uploaded_temp_deleted) {
+    lines.push(t("uploadedTempDeleted"));
+  } else {
+    addLine(artifactPathLine("uploadedTempArtifactPath", outputs.uploaded_temp_path, outputs.uploaded_temp_exists));
+  }
+  if (outputs.downloaded_media_delete_error) {
+    lines.push(t("artifactCleanupError", { reason: outputs.downloaded_media_delete_error }));
+  }
+  if (outputs.uploaded_temp_delete_error) {
+    lines.push(t("artifactCleanupError", { reason: outputs.uploaded_temp_delete_error }));
+  }
+  if (outputs.retention_cleanup_error) {
+    lines.push(t("artifactCleanupError", { reason: outputs.retention_cleanup_error }));
+  }
+
+  if (!lines.length) {
+    lines.push(...queueItemOutputLines(queueItem));
+  }
+  if (!lines.length && terminalQueueStatuses.has(queueItem.status)) {
+    lines.push(t("noFilesCreated"));
   }
   return lines;
 }
@@ -2409,10 +2592,13 @@ function createQueueItemElement(queueItem, status) {
   }
   item.append(optionGroup);
 
-  const outputLines = queueItemOutputLines(queueItem);
-  if (outputLines.length) {
+  const outputLines = queueItemArtifactLines(queueItem);
+  if (outputLines.length && terminalQueueStatuses.has(queueItem.status)) {
     const resultBlock = document.createElement("div");
-    resultBlock.className = "queue-frame-result";
+    resultBlock.className = "queue-frame-result queue-output-artifacts";
+    const heading = document.createElement("h4");
+    heading.textContent = t("outputArtifactsTitle");
+    resultBlock.append(heading);
     resultBlock.append(...outputLines.map((line) => textLine(line)));
     item.append(resultBlock);
   }
@@ -2422,6 +2608,17 @@ function createQueueItemElement(queueItem, status) {
     error.className = "queue-item-error";
     error.textContent = formatQueueItemError(queueItem);
     item.append(error);
+  }
+
+  if (queueItem.technical_details) {
+    const details = document.createElement("details");
+    details.className = "queue-item-technical";
+    const summary = document.createElement("summary");
+    summary.textContent = t("technicalDetails");
+    const pre = document.createElement("pre");
+    pre.textContent = translateUiText(queueItem.technical_details);
+    details.append(summary, pre);
+    item.append(details);
   }
 
   item.title = formatQueueItemError(queueItem) || translateUiText(queueItem.source_url || queueItem.source_path || "");
@@ -2839,6 +3036,12 @@ transcribeSystemRecordingButton.addEventListener("click", () => addRecordingByTy
 transcribeAllRecordingsButton.addEventListener("click", addAllRecordings);
 openRecordingsButton.addEventListener("click", () => openFolder("recordings"));
 openTranscriptsButton.addEventListener("click", () => openFolder("transcripts"));
+openDataFolderButton.addEventListener("click", () => openFolder("data"));
+refreshStorageSummaryButton.addEventListener("click", refreshStorageSummary);
+keepDownloadedMediaCheckbox.addEventListener("change", saveStorageSettings);
+keepUploadedTempCheckbox.addEventListener("change", saveStorageSettings);
+clearDownloadsButton.addEventListener("click", () => cleanupStorageFolder("downloads"));
+clearUploadsButton.addEventListener("click", () => cleanupStorageFolder("uploads"));
 videoMuxForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   await mergeVideoWithAudio();
@@ -3009,6 +3212,7 @@ async function boot() {
   await refreshModelStatuses();
   await refreshModelDownloadStatus(true);
   await refreshStorage();
+  await refreshStorageSettings();
   await refreshQueueStatus();
   await refreshBenchmarkStatus();
   await refreshMicLevel();

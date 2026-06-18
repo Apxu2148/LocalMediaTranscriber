@@ -46,6 +46,15 @@ class UiContractTests(unittest.TestCase):
             "queueStageStatus",
             "queueMetrics",
             "queueProgress",
+            "storagePanel",
+            "storageSummaryGrid",
+            "refreshStorageSummaryButton",
+            "openDataFolderButton",
+            "keepDownloadedMediaCheckbox",
+            "keepUploadedTempCheckbox",
+            "clearDownloadsButton",
+            "clearUploadsButton",
+            "storageCleanupOutput",
             "latestResultHeading",
             "transcriptText",
         ):
@@ -62,6 +71,9 @@ class UiContractTests(unittest.TestCase):
         self.assertIn('"/api/queue/update-item"', app_js)
         self.assertIn('"/api/queue/remove-item"', app_js)
         self.assertIn('"/api/queue/cancel-item"', app_js)
+        self.assertIn('"/api/storage/summary"', app_js)
+        self.assertIn('"/api/storage/settings"', app_js)
+        self.assertIn('"/api/storage/cleanup"', app_js)
         self.assertIn('"/api/video-mux/merge"', app_js)
         self.assertIn('"/api/displays"', app_js)
         self.assertIn('"/api/displays/preview"', app_js)
@@ -94,6 +106,16 @@ class UiContractTests(unittest.TestCase):
         self.assertIn('t("selectAtLeastOneUrlOperation"', app_js)
         self.assertIn('queueItem.source_type === "url"', app_js)
         self.assertIn("queueItemOutputLines", app_js)
+        self.assertIn("queueItemArtifactLines", app_js)
+        self.assertIn("outputArtifactsTitle", app_js)
+        self.assertIn("downloaded_media_deleted", app_js)
+        self.assertIn("uploaded_temp_deleted", app_js)
+        self.assertIn("cleanupStorageFolder", app_js)
+        self.assertIn("refreshStorageSummary", app_js)
+        self.assertIn("function setLocalizedOutput", app_js)
+        self.assertIn('setLocalizedOutput(storageCleanupOutput, "storageSettingsSaved", {}, "success")', app_js)
+        self.assertNotIn('"Storage settings saved."', app_js)
+        self.assertNotIn('"Настройки хранения сохранены."', app_js)
         self.assertIn("displayOutputPath", app_js)
         self.assertIn('lastIndexOf("/data/")', app_js)
         self.assertIn("queueStageLabel", app_js)

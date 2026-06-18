@@ -593,6 +593,154 @@ class QueueManagerTests(unittest.TestCase):
         self.assertTrue(item["transcript_path"].endswith(".txt"))
         self.assertEqual("frame_write_failed", item["frame_extraction_result"]["error_code"])
 
+    def test_output_artifacts_include_transcript_frames_index_and_downloaded_media(self) -> None:
+        video = self.make_file("artifact_video.mkv")
+        frames_dir = self.root / "artifact_frames"
+        frames_index = frames_dir / "frames_index.json"
+
+        def processor(item: dict, _model: str, _device: str) -> dict:
+            transcript_path = Path(f"{item['source_path']}.txt")
+            json_path = Path(f"{item['source_path']}.json")
+            transcript_path.write_text("hello", encoding="utf-8")
+            json_path.write_text("{}", encoding="utf-8")
+            return {
+                "audio_duration_sec": 5,
+                "processing_time_sec": 2,
+                "realtime_factor": 2.5,
+                "transcript_path": str(transcript_path),
+                "json_path": str(json_path),
+            }
+
+        def frame_processor(_item: dict, _cancel_event: threading.Event, _progress) -> dict:
+            frames_dir.mkdir(parents=True, exist_ok=True)
+            frames_index.write_text("{}", encoding="utf-8")
+            return {
+                "status": "completed",
+                "completed": True,
+                "frames_dir": frames_dir.name,
+                "frames_path": str(frames_dir),
+                "frames_index_path": str(frames_index),
+                "extracted_frame_count": 2,
+            }
+
+        manager = self.make_manager(
+            processor=processor,
+            video_downloader=lambda _url: {
+                "source_path": str(video.source_path),
+                "source_title": "Artifact URL",
+                "source_platform": "direct",
+                "downloaded_media_path": str(video.source_path),
+                "downloaded_video_path": str(video.source_path),
+            },
+            frame_processor=frame_processor,
+            duration_reader=lambda _path: 5,
+            video_metadata_reader=lambda _path: {"duration_sec": 5, "fps": 30, "width": 100, "height": 50},
+        )
+        status = self.track_job(manager.add_urls([QueueUrl("https://example.test/video")]))
+        manager.update_item(
+            status["items"][0]["index"],
+            operations={"transcribe_audio": True, "extract_frames": True},
+        )
+
+        manager.start("small", "cpu")
+        manager.wait(timeout=3)
+
+        outputs = manager.status()["items"][0]["outputs"]
+        self.assertTrue(outputs["transcript_path"].endswith(".txt"))
+        self.assertTrue(outputs["transcript_exists"])
+        self.assertTrue(outputs["json_path"].endswith(".json"))
+        self.assertTrue(outputs["json_exists"])
+        self.assertEqual(str(frames_dir.resolve()), outputs["frames_dir"])
+        self.assertTrue(outputs["frames_dir_exists"])
+        self.assertEqual(str(frames_index.resolve()), outputs["frames_index_path"])
+        self.assertTrue(outputs["frames_index_exists"])
+        self.assertEqual(str(video.source_path), outputs["downloaded_media_path"])
+        self.assertTrue(outputs["downloaded_media_exists"])
+        self.assertFalse(outputs["downloaded_media_deleted"])
+
+    def test_success_retention_cleanup_can_mark_downloaded_media_deleted(self) -> None:
+        video = self.make_file("delete_after_success.mp4")
+
+        def processor(item: dict, _model: str, _device: str) -> dict:
+            transcript_path = Path(f"{item['source_path']}.txt")
+            transcript_path.write_text("hello", encoding="utf-8")
+            return {"processing_time_sec": 1, "transcript_path": str(transcript_path)}
+
+        def retention_cleaner(item: dict) -> dict:
+            Path(item["downloaded_media_path"]).unlink()
+            return {"downloaded_media_deleted": True}
+
+        manager = self.make_manager(
+            processor=processor,
+            downloader=lambda _url: {
+                "source_path": str(video.source_path),
+                "source_title": "Delete After Success",
+                "source_platform": "direct",
+                "downloaded_media_path": str(video.source_path),
+                "downloaded_audio_path": str(video.source_path),
+            },
+            duration_reader=lambda _path: 5,
+            retention_cleaner=retention_cleaner,
+        )
+        self.track_job(manager.add_urls([QueueUrl("https://example.test/audio.mp4")]))
+
+        manager.start("small", "cpu")
+        manager.wait(timeout=3)
+
+        outputs = manager.status()["items"][0]["outputs"]
+        self.assertEqual("completed", manager.status()["items"][0]["status"])
+        self.assertFalse(video.source_path.exists())
+        self.assertTrue(outputs["downloaded_media_deleted"])
+        self.assertFalse(outputs["downloaded_media_exists"])
+
+    def test_failed_and_cancelled_jobs_do_not_run_retention_cleanup(self) -> None:
+        cleanup_calls: list[str] = []
+
+        def retention_cleaner(item: dict) -> dict:
+            cleanup_calls.append(item["source_filename"])
+            return {}
+
+        failed_manager = self.make_manager(
+            processor=lambda _item, _model, _device: (_ for _ in ()).throw(RuntimeError("boom")),
+            duration_reader=lambda _path: 1,
+            retention_cleaner=retention_cleaner,
+        )
+        self.track_job(failed_manager.add_files([self.make_file("fails.wav")]))
+        failed_manager.start("small")
+        failed_manager.wait(timeout=3)
+
+        def frame_processor(item: dict, _cancel_event: threading.Event, _progress) -> dict:
+            return {
+                "status": "cancelled",
+                "completed": False,
+                "cancelled": True,
+                "frames_dir": f"{item['output_base']}__frames",
+                "frames_path": f"data/recordings/{item['output_base']}__frames",
+                "frames_index_path": f"data/recordings/{item['output_base']}__frames/frames_index.json",
+                "extracted_frame_count": 0,
+            }
+
+        cancelled_manager = self.make_manager(
+            processor=lambda _item, _model, _device: {},
+            frame_processor=frame_processor,
+            duration_reader=lambda _path: 1,
+            video_metadata_reader=lambda _path: {"duration_sec": 5, "fps": 30, "width": 100, "height": 50},
+            retention_cleaner=retention_cleaner,
+        )
+        self.track_job(cancelled_manager.add_files([
+            QueueFile(
+                source_path=self.make_file("cancelled.mp4").source_path,
+                source_filename="cancelled.mp4",
+                operations={"transcribe_audio": False, "extract_frames": True},
+            )
+        ]))
+        cancelled_manager.start("small")
+        cancelled_manager.wait(timeout=3)
+
+        self.assertEqual("error", failed_manager.status()["items"][0]["status"])
+        self.assertEqual("cancelled", cancelled_manager.status()["items"][0]["status"])
+        self.assertEqual([], cleanup_calls)
+
     def test_preserves_recording_source_type(self) -> None:
         manager = self.make_manager(processor=lambda _item, _model, _device: {})
         status = self.track_job(manager.add_files([

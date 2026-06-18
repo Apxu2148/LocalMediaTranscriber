@@ -31,6 +31,10 @@ This project is a separate fork of `LocalAudioTranscriber`. The current version 
 - Manage Whisper models before transcription: check local availability, download, verify, view info, and delete selected local caches.
 - Use CPU by default, or CUDA/GPU when GPU dependencies are installed.
 - Save transcripts and JSON diagnostics in `data\transcripts`.
+- See a storage overview for `data\downloads`, `data\uploads`, `data\recordings`, `data\transcripts`, logs, jobs, and total app data size.
+- Keep intermediate URL downloads and uploaded temp files by default, with explicit opt-out retention settings.
+- Clear `data\downloads` or `data\uploads` from the UI with confirmation; primary recordings, frames, and transcripts are not part of this cleanup.
+- See created output artifacts and paths directly on terminal queue item cards.
 - Switch the UI between RU and EN.
 - Run simple CPU/GPU transcription benchmarks.
 - Use a temporary LocalMediaTranscriber browser tab icon from `static\icons`.
@@ -135,7 +139,18 @@ Queue usability:
 - Add buttons are disabled while a file, latest recording, or link is being added. If the laptop is slow, wait for the visible "Adding..." or stage message instead of clicking repeatedly.
 - Fast repeated clicks and active duplicate file/link adds are ignored before they can create duplicate queue items.
 - Queue stages include preparing source, downloading media/video, transcribing audio, extracting frames, completed, failed, and cancelled.
+- After an item completes, fails, or is cancelled, its card shows a "Created files" section with known artifacts: transcript TXT, diagnostic JSON, frame folder, `frames_index.json`, downloaded URL media, and uploaded temporary file when available. If retention removed a file, the item says so instead of showing it as still present.
 - OCR/CV/media-index stage labels are reserved for future work, but OCR/CV processing is not implemented yet.
+
+Storage panel:
+
+- The Files section includes a Storage panel with folder sizes for `data\downloads`, `data\uploads`, `data\recordings`, `data\transcripts`, `data\logs`, `data\jobs`, and the total data size.
+- The refresh button recalculates sizes. Missing folders show size `0`.
+- Storage settings are conservative by default: downloaded URL media and uploaded temp files are kept after successful processing unless you explicitly disable the matching keep checkbox.
+- Retention cleanup runs only after successful processing. It does not run for failed, cancelled, partial-success, or running items.
+- Retention cleanup never deletes `data\recordings`, `data\transcripts`, extracted frames, screen recordings, or `frames_index.json`.
+- The manual cleanup buttons clear only `data\downloads` or `data\uploads` after confirmation. They do not delete transcripts, recordings, frames, or original user files outside the project `data` folder.
+- Storage settings are persisted in `data\settings.json`.
 
 Recordings:
 
@@ -188,6 +203,14 @@ C:\Python\LocalMediaTranscriber\data\downloads
 For URL items, direct media file links ending in `.mp4`, `.webm`, `.mkv`, `.avi`, or `.mov` are downloaded directly over HTTP(S) into `data\downloads` without `yt-dlp`; query strings are ignored for extension detection. YouTube, VK, and other webpage/video-platform URLs still use `yt-dlp`. For audio-only URL transcription, direct media URLs use the downloaded media file, while non-direct URLs keep the existing audio extraction path. If frame extraction is selected, the downloaded video-readable media file uses the same frame extraction settings as local video files: extraction rate and JPEG quality. URL media downloads are kept under `data\downloads`; transcripts are saved under `data\transcripts`; frames are saved under `data\recordings\<base>__frames`; and `frames_index.json` is saved inside that frames folder.
 
 Some sites, streams, or codecs may fail depending on `yt-dlp`, FFmpeg, OpenCV, and the locally available decoders. Direct `.mp4`, `.webm`, `.mkv`, `.avi`, or `.mov` URLs are the simplest test path. Cookies, authenticated/private videos, playlists, and video quality selection are not part of this iteration, so some YouTube/VK URLs can still fail with a readable authorization/cookies message.
+
+Uploaded temporary files:
+
+```text
+C:\Python\LocalMediaTranscriber\data\uploads
+```
+
+Files selected through browser upload flows are copied into `data\uploads` before processing. The cleanup button for uploads deletes only this project temp folder, never the original file you selected elsewhere on disk.
 
 Logs:
 

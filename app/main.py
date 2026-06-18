@@ -28,6 +28,7 @@ from .screen_recorder import (
     ScreenRecorderValidationError,
     recent_media_sessions,
 )
+from .storage_manager import StorageManager
 from .system_audio_recorder import SystemAudioRecorder
 from .transcript_store import TranscriptStore, safe_filename_part, technical_details_for_exception
 from .transcriber import AudioTranscriber, ModelLoadError
@@ -66,6 +67,7 @@ frame_extractor = VideoFrameExtractor()
 transcriber = AudioTranscriber()
 model_manager = WhisperModelManager()
 transcript_store = TranscriptStore()
+storage_manager = StorageManager()
 recording_lock = threading.Lock()
 active_recording_mode: str | None = None
 active_recording_started_at: float | None = None
@@ -142,6 +144,15 @@ class QueueRecordingRequest(BaseModel):
 
 class QueueRecordingsRequest(BaseModel):
     files: list[QueueRecordingRequest]
+
+
+class StorageSettingsRequest(BaseModel):
+    keep_downloaded_url_media: bool | None = None
+    keep_uploaded_temp_files: bool | None = None
+
+
+class StorageCleanupRequest(BaseModel):
+    folder: str
 
 
 class BenchmarkRunRequest(BaseModel):
@@ -225,6 +236,7 @@ queue_manager = QueueManager(
     downloader=url_downloader.download,
     video_downloader=url_downloader.download_video,
     frame_processor=process_queue_frame_extraction,
+    retention_cleaner=storage_manager.apply_retention_cleanup,
 )
 benchmark_service = BenchmarkService(
     transcriber=transcriber,
@@ -398,6 +410,29 @@ def storage() -> dict:
     }
 
 
+@app.get("/api/storage/summary")
+def storage_summary() -> dict:
+    return storage_manager.summary()
+
+
+@app.get("/api/storage/settings")
+def storage_settings() -> dict:
+    return storage_manager.settings()
+
+
+@app.post("/api/storage/settings")
+def storage_settings_update(payload: StorageSettingsRequest) -> dict:
+    return storage_manager.update_settings(payload.model_dump(exclude_none=True))
+
+
+@app.post("/api/storage/cleanup")
+def storage_cleanup(payload: StorageCleanupRequest) -> dict:
+    try:
+        return storage_manager.cleanup_folder(payload.folder)
+    except RuntimeError as exc:
+        raise_api_error(str(exc))
+
+
 @app.get("/api/transcripts/read")
 def read_transcript(file_path: str) -> dict:
     transcript_path = validate_transcript_txt_path(file_path)
@@ -411,13 +446,16 @@ def read_transcript(file_path: str) -> dict:
 def open_folder(payload: OpenFolderRequest) -> dict:
     folder_key = (payload.folder or "").strip().lower()
     folders = {
+        "data": config.DATA_DIR,
         "recordings": config.RECORDINGS_DIR,
+        "downloads": config.DOWNLOADS_DIR,
+        "uploads": config.UPLOADS_DIR,
         "media_sessions": config.MEDIA_SESSIONS_DIR,
         "transcripts": config.TRANSCRIPTS_DIR,
     }
     folder_path = folders.get(folder_key)
     if folder_path is None:
-        raise_api_error("Неизвестная папка. Доступны: recordings, transcripts.")
+        raise_api_error("Неизвестная папка. Доступны: data, downloads, uploads, recordings, transcripts.")
 
     folder_path.mkdir(parents=True, exist_ok=True)
     abs_path = folder_path.resolve()

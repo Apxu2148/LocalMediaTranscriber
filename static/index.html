@@ -365,9 +365,40 @@
               <span data-expanded data-i18n="hide"></span>
             </span>
           </summary>
+          <section id="storagePanel" class="storage-panel">
+            <div class="subsection-heading">
+              <h3 data-i18n="storageTitle"></h3>
+              <p data-i18n="storageNote"></p>
+            </div>
+            <div id="storageSummaryGrid" class="storage-summary-grid"></div>
+            <div class="actions storage-actions">
+              <button id="refreshStorageSummaryButton" type="button" data-i18n="refreshStorageSizes"></button>
+              <button id="openDataFolderButton" type="button" data-i18n="openDataFolder"></button>
+            </div>
+            <div class="storage-settings">
+              <h4 data-i18n="storageSettingsTitle"></h4>
+              <label class="queue-option">
+                <input id="keepDownloadedMediaCheckbox" type="checkbox" checked />
+                <span data-i18n="keepDownloadedUrlMedia"></span>
+              </label>
+              <label class="queue-option">
+                <input id="keepUploadedTempCheckbox" type="checkbox" checked />
+                <span data-i18n="keepUploadedTempFiles"></span>
+              </label>
+              <p class="section-note" data-i18n="storageConservativeNote"></p>
+            </div>
+            <div class="storage-cleanup">
+              <h4 data-i18n="storageCleanupTitle"></h4>
+              <div class="actions storage-actions">
+                <button id="clearDownloadsButton" type="button" data-i18n="clearDownloads"></button>
+                <button id="clearUploadsButton" type="button" data-i18n="clearUploads"></button>
+              </div>
+              <output id="storageCleanupOutput" class="output compact"></output>
+            </div>
+          </section>
           <div class="storage-grid">
             <div class="storage-block">
-              <h3>recordings</h3>
+              <h3 data-i18n="storageRecordings"></h3>
               <p data-i18n="recordingsSavedIn"></p>
               <code id="recordingsPath">C:\Python\LocalMediaTranscriber\data\recordings</code>
               <button id="openRecordingsButton" type="button" data-i18n="openRecordings"></button>
@@ -375,7 +406,7 @@
               <ul id="recordingsFileList" class="file-list compact-file-list"></ul>
             </div>
             <div class="storage-block">
-              <h3>transcripts</h3>
+              <h3 data-i18n="storageTranscripts"></h3>
               <p data-i18n="transcriptsSavedIn"></p>
               <code id="transcriptsPath">C:\Python\LocalMediaTranscriber\data\transcripts</code>
               <button id="openTranscriptsButton" type="button" data-i18n="openTranscripts"></button>

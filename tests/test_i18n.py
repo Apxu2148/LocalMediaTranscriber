@@ -14,6 +14,17 @@ def dictionary_keys(content: str, language: str) -> set[str]:
     return set(re.findall(r"^\s{6}([A-Za-z][A-Za-z0-9_]*):", block, flags=re.MULTILINE))
 
 
+def dictionary_value(content: str, language: str, key: str) -> str:
+    if language == "ru":
+        block = content.split("ru: {", 1)[1].split("    en: {", 1)[0]
+    else:
+        block = content.split("    en: {", 1)[1].split("  };", 1)[0]
+    match = re.search(rf"^\s{{6}}{re.escape(key)}:\s*\"([^\"]*)\",", block, flags=re.MULTILINE)
+    if not match:
+        raise AssertionError(f"{key} missing from {language} dictionary")
+    return match.group(1)
+
+
 class I18nTests(unittest.TestCase):
     def test_ru_en_dictionary_keys_match_and_default_language_is_preserved(self) -> None:
         content = (STATIC_DIR / "i18n.js").read_text(encoding="utf-8")
@@ -168,6 +179,43 @@ class I18nTests(unittest.TestCase):
             "queueStageOcrFuture",
             "queueStageCvFuture",
             "queueStageMediaIndexFuture",
+            "storageTitle",
+            "storageNote",
+            "storageTotalSize",
+            "storageDownloads",
+            "storageUploads",
+            "storageRecordings",
+            "storageTranscripts",
+            "storageLogs",
+            "storageJobs",
+            "storageFolder",
+            "refreshStorageSizes",
+            "openDataFolder",
+            "storageSettingsTitle",
+            "keepDownloadedUrlMedia",
+            "keepUploadedTempFiles",
+            "storageConservativeNote",
+            "storageSettingsSaved",
+            "storageCleanupTitle",
+            "clearDownloads",
+            "clearUploads",
+            "confirmClearDownloads",
+            "confirmClearUploads",
+            "cleanupCompleted",
+            "cleanupFailed",
+            "cleanupPartial",
+            "outputArtifactsTitle",
+            "transcriptArtifactPath",
+            "diagnosticJsonArtifactPath",
+            "framesArtifactPath",
+            "framesIndexArtifactPath",
+            "downloadedMediaArtifactPath",
+            "downloadedMediaDeleted",
+            "uploadedTempArtifactPath",
+            "uploadedTempDeleted",
+            "artifactPathMissing",
+            "artifactCleanupError",
+            "noFilesCreated",
         ):
             self.assertIn(key, en_keys)
 
@@ -179,6 +227,13 @@ class I18nTests(unittest.TestCase):
         html_keys = set(re.findall(r'data-i18n(?:-title|-aria-label|-placeholder)?="([A-Za-z][A-Za-z0-9_]*)"', html))
         app_keys = set(re.findall(r'(?<![A-Za-z0-9_$])t\("([A-Za-z][A-Za-z0-9_]*)"', app_js))
         self.assertFalse((html_keys | app_keys) - keys)
+
+    def test_storage_settings_saved_message_is_localized(self) -> None:
+        i18n = (STATIC_DIR / "i18n.js").read_text(encoding="utf-8")
+
+        self.assertEqual("Настройки хранения сохранены.", dictionary_value(i18n, "ru", "storageSettingsSaved"))
+        self.assertEqual("Storage settings saved.", dictionary_value(i18n, "en", "storageSettingsSaved"))
+        self.assertIn('"Настройки хранения сохранены.": "Storage settings saved."', i18n)
 
     def test_queue_start_action_uses_processing_label(self) -> None:
         i18n = (STATIC_DIR / "i18n.js").read_text(encoding="utf-8")

@@ -56,6 +56,22 @@ class HttpSmokeTests(unittest.TestCase):
             patch.object(main_module.queue_manager, "start", return_value={"status": "running"}) as start_queue,
             patch.object(main_module.benchmark_service, "status", return_value={"status": "idle", "running": False}),
             patch.object(main_module.benchmark_service, "start", return_value={"status": "running"}) as start_benchmark,
+            patch.object(main_module.storage_manager, "summary", return_value={"total_size_bytes": 0, "folders": []}),
+            patch.object(
+                main_module.storage_manager,
+                "settings",
+                return_value={"keep_downloaded_url_media": True, "keep_uploaded_temp_files": True},
+            ),
+            patch.object(
+                main_module.storage_manager,
+                "update_settings",
+                return_value={"keep_downloaded_url_media": False, "keep_uploaded_temp_files": True},
+            ) as update_storage_settings,
+            patch.object(
+                main_module.storage_manager,
+                "cleanup_folder",
+                return_value={"folder": "downloads", "deleted_entries": 0, "deleted_bytes": 0, "errors": []},
+            ) as cleanup_folder,
             patch.object(main_module.transcriber, "status", return_value=fake_transcriber_status),
             TestClient(main_module.app) as client,
         ):
@@ -77,6 +93,19 @@ class HttpSmokeTests(unittest.TestCase):
             self.assertEqual(200, client.get("/api/benchmark/status").status_code)
             storage_payload = client.get("/api/storage").json()
             self.assertIn("free_gb", storage_payload["disk"])
+            self.assertEqual(200, client.get("/api/storage/summary").status_code)
+            settings_response = client.get("/api/storage/settings")
+            self.assertEqual(200, settings_response.status_code)
+            self.assertTrue(settings_response.json()["keep_downloaded_url_media"])
+            updated_settings_response = client.post(
+                "/api/storage/settings",
+                json={"keep_downloaded_url_media": False},
+            )
+            self.assertEqual(200, updated_settings_response.status_code)
+            update_storage_settings.assert_called_once_with({"keep_downloaded_url_media": False})
+            cleanup_response = client.post("/api/storage/cleanup", json={"folder": "downloads"})
+            self.assertEqual(200, cleanup_response.status_code)
+            cleanup_folder.assert_called_once_with("downloads")
 
     def test_recording_queue_and_transcript_reader_are_path_constrained(self) -> None:
         with TemporaryDirectory(dir=PROJECT_TMP) as temp_dir:

@@ -29,6 +29,7 @@ frame_extractor = VideoFrameExtractor()
 transcriber = AudioTranscriber()
 model_manager = WhisperModelManager()
 transcript_store = TranscriptStore()
+storage_manager = StorageManager()
 ```
 
 Queue and benchmark services use these shared objects. This keeps model caching and recording state centralized, but it also means future changes should be careful with threading, locks, and shared mutable state.
@@ -83,6 +84,10 @@ Important endpoints include:
 - `POST /api/models/delete`
 - `GET /api/models/info`
 - `GET /api/storage`
+- `GET /api/storage/summary`
+- `GET /api/storage/settings`
+- `POST /api/storage/settings`
+- `POST /api/storage/cleanup`
 - `GET /api/audio/devices`
 - `GET /api/audio/output-devices`
 - `GET /api/audio/level`
@@ -114,6 +119,27 @@ Important endpoints include:
 - `GET /api/benchmark/status`
 
 The older direct transcription endpoints still exist in the backend, but the current UI uses the queue endpoints for normal transcription work.
+
+### `app/storage_manager.py`
+
+Storage visibility and conservative cleanup service.
+
+Key behavior:
+
+- `summary()` returns sizes for known data folders: `downloads`, `uploads`, `recordings`, `transcripts`, `logs`, and `jobs`, plus total data size. Missing folders report `0` bytes.
+- `settings()` and `update_settings()` persist retention flags in `data\settings.json`.
+- Default retention is conservative: `keep_downloaded_url_media=true` and `keep_uploaded_temp_files=true`.
+- `cleanup_folder()` accepts only `downloads` and `uploads`. It deletes entries inside the known folder, ignores missing folders, catches per-entry deletion failures, and returns clear error strings instead of crashing the app.
+- `apply_retention_cleanup()` is called by `QueueManager` only after successful processing. It may delete downloaded URL media under `data\downloads` or uploaded temp files under `data\uploads` when the matching keep flag is disabled.
+
+Safe deletion rules:
+
+- Never delete paths outside `config.DATA_DIR`.
+- Never delete `data\recordings`, `data\transcripts`, extracted frame folders, screen recordings, or `frames_index.json` from retention cleanup.
+- Never delete the user's original local file outside the project data folder.
+- If a path is ambiguous, outside the expected known folder, missing, locked, or otherwise unsafe, do not delete it; return an error marker where appropriate.
+
+Future OCR/CV cleanup should extend the same model with explicit artifact keys and dedicated cleanup controls. Expected future artifacts include `ocr_timeline.json` and `ocr_text.txt`, but OCR is not implemented yet.
 
 ### `app/audio_recorder.py`
 
@@ -370,6 +396,8 @@ Key behavior:
 - Stores per-video operation choices in `operations`: `transcribe_audio`, `extract_frames`, `ocr`, and `cv`.
 - Keeps OCR and CV rejected in the backend; the current UI renders them as disabled coming-soon options.
 - Stores per-video frame settings in `frame_extraction`: extraction rate, JPEG quality, estimates, warning flag, and latest extraction result.
+- Stores terminal output metadata in `outputs`: transcript path/existence, diagnostic JSON path/existence, frame folder path/existence, frame index path/existence, downloaded URL media path/existence/deleted marker, uploaded temp path/existence/deleted marker, and retention cleanup error markers.
+- Calls the optional `retention_cleaner` callback only after a fully successful item. Failed, cancelled, and partial-success items keep intermediate files for debugging.
 - Uses callbacks supplied by `app/main.py` to download URLs, transcribe files, extract frames, and record errors.
 
 The queue intentionally processes one item at a time. This lowers CUDA memory pressure and keeps the UI progress model simple.
@@ -377,6 +405,8 @@ The queue intentionally processes one item at a time. This lowers CUDA memory pr
 Stage labels are frontend-localized through `static/i18n.js`. Backend snapshots should send stable stage IDs and label keys, not hardcoded UI copy. Persistent stage messages belong in normal page content such as `#queueStageStatus` and `.queue-item-stage`; they must not be implemented only as auto-hiding toasts because the user needs to see the current long-running stage at any time.
 
 Add-button safety lives primarily in `static/app.js`. The UI keeps `isAddingFile`, `isAddingUrl`, `isAddingRecording`, and `pendingAddKeys` guards so repeated clicks during a slow backend response do not enqueue duplicates. Browser file keys use file name, size, and `lastModified`; URL keys use normalized URL text; latest-recording keys use source type plus saved audio path. The backend also ignores active duplicate source paths and normalized URL adds as a secondary guard. Controls must be re-enabled in `finally` paths after success or failure.
+
+Output artifacts are a compatibility layer, not a replacement for existing top-level result fields. Keep `transcript_path`, `json_path`, `frames_path`, `frames_index_path`, and downloaded media fields on the item for older code. Use `outputs` for user-facing artifact display and future artifact extensions. Future OCR should add keys such as `ocr_timeline_path`, `ocr_text_path`, and matching existence/deleted markers without changing existing transcript/frame keys.
 
 ### `app/frame_extractor.py`
 
@@ -532,7 +562,7 @@ Important areas:
 - Queue/source forms.
 - Manual video/audio merge form.
 - Runtime metrics and queue progress.
-- Collapsible file storage section with compact scrollable recordings/transcripts lists.
+- Collapsible file storage section with a storage overview panel, retention settings, safe downloads/uploads cleanup, and compact scrollable recordings/transcripts lists.
 - Collapsible benchmark section.
 
 The contract tests look for specific IDs, order, and structural elements. Keep ID changes deliberate and update tests only when the product contract truly changes.
@@ -545,7 +575,7 @@ Responsibilities:
 
 - Bind DOM elements.
 - Call backend APIs.
-- Manage recording, device refresh/switching, level polling, Whisper model manager actions, queue actions, storage display, video/audio merge actions, benchmark actions, toasts, operation overlay, and transcript loading.
+- Manage recording, device refresh/switching, level polling, Whisper model manager actions, queue actions, storage size/settings/cleanup display, video/audio merge actions, benchmark actions, toasts, operation overlay, and transcript loading.
 - Use `window.LATI18N` for UI strings and backend text translation.
 - Start the product tour through `window.LocalMediaTranscriberTour`.
 
@@ -662,9 +692,11 @@ Audio files, screen videos, input event JSONL files, merged videos, and new scre
 14. For frame extraction, `VideoFrameExtractor` writes JPEGs and `frames_index.json` under `data\recordings\<base>__frames`.
 15. A running item can be cancelled only while its status is `extracting_frames`; cancellation is cooperative, partial frames are kept, `frames_index.json` marks the run cancelled/incomplete, and the worker continues to the next pending item.
 16. Running URL download and audio transcription are currently not safely cancellable; the UI disables that cancel action and explains why.
-17. Queue status shows counts, current item, current stage, elapsed time, ETA, progress, operation settings, estimates, downloaded media paths, transcript output paths, frame folder paths, frame counts, and frame index paths.
-18. `stop-after-current` completes the active item and cancels pending items.
-19. `retry-errors` moves failed items back to pending for a later manual start.
+17. On full success only, `StorageManager.apply_retention_cleanup()` may delete downloaded URL media or uploaded temp files when the user disabled the matching keep setting. It never deletes primary outputs.
+18. Terminal queue items refresh `outputs` so the UI can show created artifacts, missing/deleted markers, and cleanup errors directly on the item card.
+19. Queue status shows counts, current item, current stage, elapsed time, ETA, progress, operation settings, estimates, downloaded media paths, transcript output paths, frame folder paths, frame counts, frame index paths, and output artifacts.
+20. `stop-after-current` completes the active item and cancels pending items.
+21. `retry-errors` moves failed items back to pending for a later manual start.
 
 Stage transitions are intentionally coarse and persistent:
 
@@ -712,6 +744,8 @@ URL source
 ```
 
 URL frame indexes can include `source_type`, `source_url`, source title/platform, and downloaded media paths when that metadata is available. Direct URL extension detection ignores query strings, so `video.mp4?token=abc` is treated as a direct `.mp4` file. If transcription succeeds and frame extraction fails, the transcript path remains on the queue item. If transcription fails but frame extraction was selected, the worker still attempts frame extraction and preserves frame outputs if they succeed. OCR, CV, cookies/authentication, playlists, video quality selection, and audio transcription cancellation remain non-goals.
+
+Manual cleanup for `data\downloads` and `data\uploads` is separate from queue retention. It is user-triggered, confirmed in the UI, and returns deleted counts plus per-entry errors. Do not add destructive cleanup for `data\recordings` or `data\transcripts` without a separate product requirement.
 
 ## Development Cleanup
 
