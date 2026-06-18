@@ -2069,6 +2069,7 @@ function queueStageKey(stage) {
     downloading_video: "queueStageDownloadingVideo",
     transcribing_audio: "queueStageTranscribingAudio",
     extracting_frames: "queueStageExtractingFrames",
+    cancelling_transcription: "queueStageCancellingTranscription",
     cancelling: "queueStageCancelling",
     completed: "queueStageCompleted",
     failed: "queueStageFailed",
@@ -2466,7 +2467,11 @@ function queueItemArtifactLines(queueItem) {
     }
   };
 
-  addLine(artifactPathLine("transcriptArtifactPath", outputs.transcript_path, outputs.transcript_exists));
+  addLine(artifactPathLine(
+    outputs.transcript_partial ? "partialTranscriptArtifactPath" : "transcriptArtifactPath",
+    outputs.transcript_path,
+    outputs.transcript_exists,
+  ));
   addLine(artifactPathLine("diagnosticJsonArtifactPath", outputs.json_path, outputs.json_exists));
   addLine(artifactPathLine("framesArtifactPath", outputs.frames_dir, outputs.frames_dir_exists));
   addLine(artifactPathLine("framesIndexArtifactPath", outputs.frames_index_path, outputs.frames_index_exists));
@@ -2556,7 +2561,9 @@ function createQueueItemElement(queueItem, status) {
 
   const isCurrent = status.current_item?.index === queueItem.index;
   const canRemove = queueItem.status === "pending";
-  const canCancel = isCurrent && queueItem.status === "extracting_frames";
+  const canCancelTranscription = isCurrent && ["extracting_audio", "transcribing"].includes(queueItem.status);
+  const canCancelFrameExtraction = isCurrent && queueItem.status === "extracting_frames";
+  const canCancel = canCancelTranscription || canCancelFrameExtraction;
   const currentButCannotCancel = isCurrent && !canCancel && status.status === "running";
   if (canRemove || canCancel || currentButCannotCancel) {
     const actionButton = document.createElement("button");
@@ -2564,13 +2571,19 @@ function createQueueItemElement(queueItem, status) {
     actionButton.className = canCancel || currentButCannotCancel
       ? "queue-item-remove queue-item-cancel"
       : "queue-item-remove";
-    actionButton.textContent = canRemove ? "\u00d7" : t("cancelCurrentShort");
+    actionButton.textContent = canRemove
+      ? "\u00d7"
+      : canCancelTranscription
+        ? t("cancelTranscription")
+        : t("cancelCurrentShort");
     actionButton.dataset.queueAction = canCancel ? "cancel" : "remove";
     actionButton.disabled = currentButCannotCancel;
-    actionButton.title = canCancel
-      ? t("cancelCurrentItem")
+    actionButton.title = canCancelTranscription
+      ? t("transcriptionCancelAfterSegment")
+      : canCancelFrameExtraction
+        ? t("cancelCurrentItem")
       : currentButCannotCancel
-        ? t("runningAudioCannotCancel")
+        ? t("runningItemCannotCancel")
         : t("removeFromQueue");
     actionButton.setAttribute("aria-label", actionButton.title);
     headerActions.append(actionButton);

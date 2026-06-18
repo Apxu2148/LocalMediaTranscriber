@@ -182,9 +182,23 @@ class VideoMuxMergeRequest(BaseModel):
     system_audio_file: str | None = None
 
 
-def process_queue_item(item: dict, model_name: str, device_preference: str) -> dict:
+def process_queue_item(
+    item: dict,
+    model_name: str,
+    device_preference: str,
+    cancel_event: threading.Event | None = None,
+) -> dict:
     source_path = Path(item["source_path"])
-    result = transcriber.transcribe(source_path, model_name, device_preference)
+    should_cancel = cancel_event.is_set if cancel_event is not None else None
+    result = transcriber.transcribe(source_path, model_name, device_preference, should_cancel=should_cancel)
+    if result.cancelled:
+        return transcript_store.save_cancelled(
+            source_path=source_path,
+            source_filename=item["source_filename"],
+            source_type=item.get("source_type") or "local_file",
+            result=result,
+            extra_metadata=item,
+        )
     return transcript_store.save_success(
         source_path=source_path,
         source_filename=item["source_filename"],

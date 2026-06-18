@@ -385,13 +385,13 @@ Key behavior:
 - Marks local `.mp4`, `.webm`, `.mkv`, `.avi`, and `.mov` sources as video items.
 - Creates one job JSON under `data\jobs`.
 - Processes items sequentially in one worker thread.
-- Supports stop-after-current, clear, retry failed items, pending-item removal, running frame-extraction cancellation, status snapshots, elapsed time, ETA, and persistent job snapshots.
+- Supports stop-after-current, clear, retry failed items, pending-item removal, running transcription/frame-extraction cancellation, status snapshots, elapsed time, ETA, and persistent job snapshots.
 - Treat the queue as a media processing queue, not only a transcription queue.
 - Current executable operations are `transcribe_audio` and `extract_frames`.
 - URL items are created as media processing items. By default they transcribe audio, keep frame extraction off, and carry default frame extraction settings for later opt-in.
 - Visible but disabled future operations are `ocr` and `cv`.
 - Queue item status remains the behavior switch for existing logic. Stage fields are a small UI/status model layered on top: `stage`, `stage_label_key`, and `stage_detail`.
-- Current stage IDs are `idle`, `preparing_source`, `downloading_media`, `downloading_video`, `transcribing_audio`, `extracting_frames`, `cancelling`, `completed`, `failed`, and `cancelled`.
+- Current stage IDs are `idle`, `preparing_source`, `downloading_media`, `downloading_video`, `transcribing_audio`, `cancelling_transcription`, `extracting_frames`, `cancelling`, `completed`, `failed`, and `cancelled`.
 - Future reserved stage IDs are `ocr_pending_future`, `cv_pending_future`, and `media_index_pending_future`; they are labels only and must not imply OCR/CV/media-index implementation.
 - Stores per-video operation choices in `operations`: `transcribe_audio`, `extract_frames`, `ocr`, and `cv`.
 - Keeps OCR and CV rejected in the backend; the current UI renders them as disabled coming-soon options.
@@ -482,8 +482,20 @@ Key behavior:
 - Stores model caches under `models\faster-whisper`.
 - Checks `ffmpeg` before transcribing media formats that need decoding.
 - Returns text, segments, timings, realtime factor, model, device, and compute metadata.
+- Accepts an optional cancellation callback from the queue. The callback is checked before segment iteration and between yielded segments; cancellation returns a `cancelled` / `partial` result instead of raising or killing the worker thread.
 
 Use the existing normalization and model-loading helpers when adding new transcription paths.
+
+Transcription cancellation lifecycle:
+
+- `QueueManager.cancel_item()` accepts the active item while its status is `extracting_audio`, `transcribing`, or `extracting_frames`.
+- For transcription, the queue stores a per-item `threading.Event`, sets `cancel_requested`, and moves the visible stage to `cancelling_transcription`.
+- `app/main.py` passes `cancel_event.is_set` into `AudioTranscriber.transcribe()` as `should_cancel`.
+- `AudioTranscriber` checks the callback before invoking segment iteration and between segments. It must not use unsafe Python thread termination.
+- A cancelled transcription returns partial segment data with `cancelled=True`, `partial=True`, and a cancellation reason.
+- `TranscriptStore.save_cancelled()` writes any recognized text to a transcript whose name contains `__partial_cancelled__`, and writes JSON with `status: "cancelled"`, `partial: true`, and `cancelled: true`.
+- The queue marks the item `cancelled`, refreshes `outputs.transcript_partial`, skips frame extraction for that item, and continues with the next pending item.
+- Frame extraction keeps its existing cancellation lifecycle: the frame processor receives a cancellation event, preserves partial JPEGs, marks `frames_index.json` as cancelled/incomplete, and the queue continues.
 
 ### `app/model_manager.py`
 
@@ -700,13 +712,14 @@ Audio files, screen videos, input event JSONL files, merged videos, and new scre
 12. For URL frame extraction, `UrlDownloader.download_video()` downloads direct media URLs directly or asks `yt-dlp` for a video-readable media file under `data\downloads`; the queue reuses it for frame extraction and, when selected, transcription.
 13. For audio transcription, files are validated and passed to `AudioTranscriber`; `TranscriptStore` saves TXT and JSON outputs.
 14. For frame extraction, `VideoFrameExtractor` writes JPEGs and `frames_index.json` under `data\recordings\<base>__frames`.
-15. A running item can be cancelled only while its status is `extracting_frames`; cancellation is cooperative, partial frames are kept, `frames_index.json` marks the run cancelled/incomplete, and the worker continues to the next pending item.
-16. Running URL download and audio transcription are currently not safely cancellable; the UI disables that cancel action and explains why.
-17. On full success only, `StorageManager.apply_retention_cleanup()` may delete downloaded URL media or uploaded temp files when the user disabled the matching keep setting. It never deletes primary outputs.
-18. Terminal queue items refresh `outputs` so the UI can show created artifacts, missing/deleted markers, and cleanup errors directly on the item card.
-19. Queue status shows counts, current item, current stage, elapsed time, ETA, progress, operation settings, estimates, downloaded media paths, transcript output paths, frame folder paths, frame counts, frame index paths, and output artifacts.
-20. `stop-after-current` completes the active item and cancels pending items.
-21. `retry-errors` moves failed items back to pending for a later manual start.
+15. A running item can be cancelled while its status is `extracting_audio`, `transcribing`, or `extracting_frames`; cancellation is cooperative and the worker continues to the next pending item.
+16. Transcription cancellation may wait for the current model-loading step or Whisper segment to finish. Partial transcripts are saved with a `__partial_cancelled__` marker and cancelled/partial JSON metadata. Frame extraction cancellation keeps partial frames and marks `frames_index.json` cancelled/incomplete.
+17. Running URL download is currently not cancellable. Cancellation becomes available after the URL item reaches transcription or frame extraction.
+18. On full success only, `StorageManager.apply_retention_cleanup()` may delete downloaded URL media or uploaded temp files when the user disabled the matching keep setting. It never deletes primary outputs.
+19. Terminal queue items refresh `outputs` so the UI can show created artifacts, missing/deleted markers, and cleanup errors directly on the item card.
+20. Queue status shows counts, current item, current stage, elapsed time, ETA, progress, operation settings, estimates, downloaded media paths, transcript output paths, frame folder paths, frame counts, frame index paths, and output artifacts.
+21. `stop-after-current` completes the active item and cancels pending items.
+22. `retry-errors` moves failed items back to pending for a later manual start.
 
 Stage transitions are intentionally coarse and persistent:
 
@@ -715,6 +728,7 @@ Stage transitions are intentionally coarse and persistent:
 - URL audio/media download: `downloading_media`;
 - URL video-readable download for frame extraction: `downloading_video`;
 - audio extraction/transcription: `transcribing_audio`;
+- requested transcription cancellation: `cancelling_transcription`;
 - frame extraction: `extracting_frames`;
 - requested frame extraction cancellation: `cancelling`;
 - terminal item states: `completed`, `failed`, or `cancelled`.
@@ -753,7 +767,15 @@ URL source
   -> future combined media index
 ```
 
-URL frame indexes can include `source_type`, `source_url`, source title/platform, and downloaded media paths when that metadata is available. Direct URL extension detection ignores query strings, so `video.mp4?token=abc` is treated as a direct `.mp4` file. If transcription succeeds and frame extraction fails, the transcript path remains on the queue item. If transcription fails but frame extraction was selected, the worker still attempts frame extraction and preserves frame outputs if they succeed. OCR, CV, cookies/authentication, playlists, video quality selection, and audio transcription cancellation remain non-goals.
+URL frame indexes can include `source_type`, `source_url`, source title/platform, and downloaded media paths when that metadata is available. Direct URL extension detection ignores query strings, so `video.mp4?token=abc` is treated as a direct `.mp4` file. If transcription succeeds and frame extraction fails, the transcript path remains on the queue item. If transcription fails but frame extraction was selected, the worker still attempts frame extraction and preserves frame outputs if they succeed. OCR, CV, cookies/authentication, playlists, video quality selection, and URL download cancellation remain non-goals.
+
+Manual cancellation checklist:
+
+- Normal local audio/video transcription still completes and shows transcript + JSON artifacts.
+- Cancelling a long transcription shows `cancelling_transcription`, then a cancelled item with a partial transcript marker when text was recognized.
+- After cancelling the first of two queued items, the second pending item runs normally.
+- Frame extraction cancellation still preserves partial frames and cancelled index metadata.
+- URL transcription can be cancelled after download when the item is in transcription.
 
 Manual cleanup for `data\downloads` and `data\uploads` is separate from queue retention. It is user-triggered, confirmed in the UI, and returns deleted counts plus per-entry errors. Do not add destructive cleanup for `data\recordings` or `data\transcripts` without a separate product requirement.
 

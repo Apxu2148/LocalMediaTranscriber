@@ -98,6 +98,35 @@ class TranscriptStoreTests(unittest.TestCase):
         payload = json.loads(Path(first["json_path"]).read_text(encoding="utf-8"))
         self.assertEqual("error", payload["status"])
 
+    def test_cancelled_transcription_uses_partial_marker_and_metadata(self) -> None:
+        source_path = self.create_source_file("long.wav")
+        result = SimpleNamespace(
+            text="partial text",
+            segments=[{"start": 0, "end": 1, "text": "partial text"}],
+            model="small",
+            device="cpu",
+            compute_type="int8",
+            audio_duration_sec=10,
+            transcribe_time_sec=2,
+            realtime_factor=5,
+            load_errors=[],
+            cancellation_reason="Транскрибация отменена пользователем.",
+        )
+
+        saved = self.track_result(self.store.save_cancelled(
+            source_path=source_path,
+            source_filename=f"{self.prefix}__long.wav",
+            source_type="local_file",
+            result=result,
+        ))
+
+        self.assertIn("__partial_cancelled__", Path(saved["transcript_path"]).name)
+        self.assertTrue(saved["partial"])
+        payload = json.loads(Path(saved["json_path"]).read_text(encoding="utf-8"))
+        self.assertEqual("cancelled", payload["status"])
+        self.assertTrue(payload["partial"])
+        self.assertEqual("Транскрибация отменена пользователем.", payload["cancellation_reason"])
+
     def test_long_stem_is_shortened_readably(self) -> None:
         value = "lesson_" + "a" * 160
         cleaned = safe_filename_part(value)

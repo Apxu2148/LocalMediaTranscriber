@@ -138,8 +138,8 @@ Queue usability:
 - The app shows persistent queue stage status near the queue controls and inside running item cards.
 - Add buttons are disabled while a file, latest recording, or link is being added. If the laptop is slow, wait for the visible "Adding..." or stage message instead of clicking repeatedly.
 - Fast repeated clicks and active duplicate file/link adds are ignored before they can create duplicate queue items.
-- Queue stages include preparing source, downloading media/video, transcribing audio, extracting frames, completed, failed, and cancelled.
-- After an item completes, fails, or is cancelled, its card shows a "Created files" section with known artifacts: transcript TXT, diagnostic JSON, frame folder, `frames_index.json`, downloaded URL media, and uploaded temporary file when available. If retention removed a file, the item says so instead of showing it as still present.
+- Queue stages include preparing source, downloading media/video, transcribing audio, cancelling transcription/frame extraction, extracting frames, completed, failed, and cancelled.
+- After an item completes, fails, or is cancelled, its card shows a "Created files" section with known artifacts: transcript TXT, diagnostic JSON, frame folder, `frames_index.json`, downloaded URL media, and uploaded temporary file when available. Cancelled transcription outputs are labelled as partial transcripts. If retention removed a file, the item says so instead of showing it as still present.
 - OCR/CV/media-index stage labels are reserved for future work, but OCR/CV processing is not implemented yet.
 
 Storage panel:
@@ -220,7 +220,7 @@ C:\Python\LocalMediaTranscriber\data\logs\app.log
 
 Runtime output under `data\recordings`, `data\transcripts`, `data\uploads`, `data\downloads`, `data\jobs`, and `data\logs` is ignored by Git.
 
-Current cancellation behavior: pending or waiting queue items can be removed; running frame extraction can be cancelled cooperatively and the queue continues; running audio transcription is not safely cancellable yet, and the UI marks that action as unavailable.
+Current cancellation behavior: pending or waiting queue items can be removed; running audio transcription and running frame extraction can be cancelled cooperatively, and the queue continues with the next pending item. Audio transcription cancellation is safe but not an unsafe thread kill, so it may finish after the current Whisper segment or model-loading step. Cancelled transcription saves any recognized text as a clearly marked partial transcript with `__partial_cancelled__` in the filename and `status: "cancelled"` / `partial: true` in the diagnostic JSON; the queue does not present that file as a successful final transcript.
 
 Microphone privacy behavior: microphone access is requested only when the user starts a recording that includes the microphone source. Queue processing, URL downloads, local file transcription, frame extraction, storage views, and normal UI browsing do not use the microphone. The level meters stay idle until a matching recording source is active, and the recording stop flow releases the microphone stream.
 

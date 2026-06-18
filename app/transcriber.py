@@ -6,6 +6,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 import ctranslate2
 from faster_whisper import WhisperModel
@@ -48,6 +49,9 @@ class TranscriptionResult:
     model_load_time_sec: float = 0
     transcription_time_sec: float = 0
     load_errors: list[str] = field(default_factory=list)
+    cancelled: bool = False
+    partial: bool = False
+    cancellation_reason: str | None = None
 
 
 class AudioTranscriber:
@@ -100,6 +104,7 @@ class AudioTranscriber:
         audio_path: Path,
         model_name: str | None = None,
         device_preference: str | None = None,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> TranscriptionResult:
         selected_model = self._normalize_model_name(model_name)
         selected_device = self._normalize_device_preference(device_preference)
@@ -143,8 +148,15 @@ class AudioTranscriber:
                 if config.WHISPER_LANGUAGE:
                     kwargs["language"] = config.WHISPER_LANGUAGE
 
-                segments_iter, _info = model.transcribe(str(audio_path), **kwargs)
-                segments = list(segments_iter)
+                segments = []
+                cancelled = should_cancel is not None and should_cancel()
+                if not cancelled:
+                    segments_iter, _info = model.transcribe(str(audio_path), **kwargs)
+                    for segment in segments_iter:
+                        segments.append(segment)
+                        if should_cancel is not None and should_cancel():
+                            cancelled = True
+                            break
                 transcription_time = time.perf_counter() - transcription_started_at
             except MemoryError as exc:
                 message = self._memory_error_message(selected_model)
@@ -190,8 +202,10 @@ class AudioTranscriber:
                 }
             )
 
+        log_message = "Transcription cancelled" if cancelled else "Transcription finished"
         logger.info(
-            "Transcription finished: file=%s model=%s duration=%s time=%.3fs realtime_factor=%s device=%s compute_type=%s",
+            "%s: file=%s model=%s duration=%s time=%.3fs realtime_factor=%s device=%s compute_type=%s segments=%s",
+            log_message,
             audio_path,
             selected_model,
             audio_duration,
@@ -199,6 +213,7 @@ class AudioTranscriber:
             realtime_factor,
             self._runtime_device,
             self._runtime_compute_type,
+            len(structured_segments),
         )
 
         return TranscriptionResult(
@@ -213,6 +228,9 @@ class AudioTranscriber:
             model_load_time_sec=model_load_time,
             transcription_time_sec=transcription_time,
             load_errors=list(self._load_errors),
+            cancelled=cancelled,
+            partial=cancelled,
+            cancellation_reason="Транскрибация отменена пользователем." if cancelled else None,
         )
 
     def clear_model(self) -> None:

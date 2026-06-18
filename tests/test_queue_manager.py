@@ -2,6 +2,7 @@ import json
 import shutil
 import sys
 import threading
+import time
 import types
 import unittest
 from pathlib import Path
@@ -170,6 +171,70 @@ class QueueManagerTests(unittest.TestCase):
         status = manager.status()
         self.assertEqual("cancelled", status["status"])
         self.assertEqual(["completed", "cancelled"], [item["status"] for item in status["items"]])
+
+    def test_running_audio_transcription_can_be_cancelled_and_queue_continues(self) -> None:
+        started = threading.Event()
+        cancel_seen = threading.Event()
+        allow_cancelled_result = threading.Event()
+        processed: list[str] = []
+
+        def processor(item: dict, _model: str, _device: str, cancel_event: threading.Event) -> dict:
+            processed.append(item["source_filename"])
+            if item["source_filename"] == "long.wav":
+                started.set()
+                while not cancel_event.is_set():
+                    time.sleep(0.01)
+                cancel_seen.set()
+                allow_cancelled_result.wait(timeout=3)
+                partial_txt = self.root / "long__partial_cancelled.txt"
+                partial_json = self.root / "long__partial_cancelled.json"
+                partial_txt.write_text("partial", encoding="utf-8")
+                partial_json.write_text("{}", encoding="utf-8")
+                return {
+                    "status": "cancelled",
+                    "partial": True,
+                    "audio_duration_sec": 10,
+                    "processing_time_sec": 1,
+                    "transcript_path": str(partial_txt),
+                    "json_path": str(partial_json),
+                    "cancellation_reason": "Транскрибация отменена пользователем.",
+                }
+            return {
+                "audio_duration_sec": 1,
+                "processing_time_sec": 1,
+                "realtime_factor": 1,
+                "transcript_path": f"{item['source_path']}.txt",
+                "json_path": f"{item['source_path']}.json",
+            }
+
+        manager = self.make_manager(
+            processor=processor,
+            duration_reader=lambda _path: 1,
+        )
+        self.track_job(manager.add_files([self.make_file("long.wav"), self.make_file("next.wav")]))
+        manager.start("small", "cpu")
+        self.assertTrue(started.wait(timeout=2))
+
+        snapshot = manager.status()
+        self.assertEqual("transcribing_audio", snapshot["current_stage"])
+        cancelled_snapshot = manager.cancel_item(1)
+        self.assertEqual("cancelling_transcription", cancelled_snapshot["current_stage"])
+        self.assertTrue(cancel_seen.wait(timeout=2))
+        allow_cancelled_result.set()
+        manager.wait(timeout=3)
+
+        status = manager.status()
+        self.assertFalse(manager.is_running)
+        self.assertEqual("completed", status["status"])
+        self.assertEqual(["long.wav", "next.wav"], processed)
+        self.assertEqual(["cancelled", "completed"], [item["status"] for item in status["items"]])
+        self.assertEqual(1, status["cancelled_items"])
+        self.assertEqual(1, status["completed_items"])
+        first = status["items"][0]
+        self.assertEqual("cancelled", first["stage"])
+        self.assertTrue(first["partial_transcript"])
+        self.assertIn("partial_cancelled", first["transcript_path"])
+        self.assertTrue(first["outputs"]["transcript_partial"])
 
     def test_clear_removes_in_memory_queue_but_keeps_job_json(self) -> None:
         manager = self.make_manager(processor=lambda _item, _model, _device: {})

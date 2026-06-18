@@ -108,6 +108,67 @@ class TranscriptStore:
             "compute_type": result.compute_type,
         }
 
+    def save_cancelled(
+        self,
+        *,
+        source_path: Path,
+        source_filename: str,
+        source_type: str,
+        result: Any,
+        extra_metadata: dict | None = None,
+    ) -> dict:
+        transcript_path, json_path = self._reserve_paths(
+            source_filename,
+            result.model,
+            marker="partial_cancelled",
+            strip_extension=source_type != "url",
+        )
+        transcript_text = result.text or "Транскрибация отменена до завершения."
+        transcript_path.write_text(transcript_text, encoding="utf-8")
+
+        payload = self._base_payload(
+            source_path=source_path,
+            source_filename=source_filename,
+            source_type=source_type,
+            transcript_path=transcript_path,
+            model=result.model,
+        )
+        payload.update(
+            {
+                "device": result.device,
+                "compute_type": result.compute_type,
+                "audio_duration_sec": self._rounded(result.audio_duration_sec),
+                "processing_time_sec": self._rounded(result.transcribe_time_sec),
+                "transcribe_time_sec": self._rounded(result.transcribe_time_sec),
+                "realtime_factor": self._rounded(result.realtime_factor),
+                "segments_count": len(result.segments),
+                "load_errors": result.load_errors,
+                "status": "cancelled",
+                "partial": True,
+                "cancelled": True,
+                "cancellation_reason": result.cancellation_reason or "Транскрибация отменена пользователем.",
+            }
+        )
+        self._apply_extra_metadata(payload, extra_metadata)
+        write_json_file(json_path, payload)
+
+        return {
+            "status": "cancelled",
+            "partial": True,
+            "cancelled": True,
+            "text": transcript_text,
+            "segments": result.segments,
+            "transcript_path": str(transcript_path),
+            "json_path": str(json_path),
+            "benchmark_path": str(json_path),
+            "audio_duration_sec": payload["audio_duration_sec"],
+            "processing_time_sec": payload["processing_time_sec"],
+            "realtime_factor": payload["realtime_factor"],
+            "device": result.device,
+            "compute_type": result.compute_type,
+            "cancellation_reason": payload["cancellation_reason"],
+        }
+
     def save_error(
         self,
         *,

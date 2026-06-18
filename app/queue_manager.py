@@ -1,4 +1,5 @@
 import copy
+import inspect
 import logging
 import threading
 from dataclasses import dataclass
@@ -36,6 +37,7 @@ STAGE_LABEL_KEYS = {
     "downloading_video": "queueStageDownloadingVideo",
     "transcribing_audio": "queueStageTranscribingAudio",
     "extracting_frames": "queueStageExtractingFrames",
+    "cancelling_transcription": "queueStageCancellingTranscription",
     "cancelling": "queueStageCancelling",
     "completed": "queueStageCompleted",
     "failed": "queueStageFailed",
@@ -85,6 +87,7 @@ class QueueManager:
         self.frame_processor = frame_processor
         self.video_metadata_reader = video_metadata_reader
         self.retention_cleaner = retention_cleaner
+        self._processor_accepts_cancel_event = self._callable_accepts_cancel_event(processor)
 
         self._lock = threading.RLock()
         self._items: list[dict] = []
@@ -100,6 +103,27 @@ class QueueManager:
         self._stop_after_current = False
         self._worker: threading.Thread | None = None
         self._cancel_events: dict[int, threading.Event] = {}
+
+    @staticmethod
+    def _callable_accepts_cancel_event(callback: Callable) -> bool:
+        try:
+            signature = inspect.signature(callback)
+        except (TypeError, ValueError):
+            return False
+        parameters = list(signature.parameters.values())
+        if any(parameter.kind == inspect.Parameter.VAR_POSITIONAL for parameter in parameters):
+            return True
+        positional = [
+            parameter
+            for parameter in parameters
+            if parameter.kind in {inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD}
+        ]
+        return len(positional) >= 4 or "cancel_event" in signature.parameters
+
+    def _process_transcription(self, item: dict, model: str, device_preference: str, cancel_event: threading.Event) -> dict:
+        if self._processor_accepts_cancel_event:
+            return self.processor(item, model, device_preference, cancel_event)
+        return self.processor(item, model, device_preference)
 
     @property
     def is_running(self) -> bool:
@@ -202,6 +226,7 @@ class QueueManager:
                     "output_base": None,
                     "error_message": None,
                     "technical_details": None,
+                    "partial_transcript": False,
                     "outputs": {},
                 }
                 item["frame_extraction"] = self._frame_extraction_payload(item, normalize_frame_extraction_settings(None))
@@ -292,6 +317,7 @@ class QueueManager:
                         "frame_extraction_result": None,
                         "error_message": None,
                         "technical_details": None,
+                        "partial_transcript": False,
                         "outputs": {},
                     }
                 )
@@ -368,14 +394,17 @@ class QueueManager:
                     return self._status_snapshot_locked()
                 raise RuntimeError("Эта задача сейчас не выполняется.")
 
-            if item["status"] != "extracting_frames":
-                raise RuntimeError("Текущую аудио-транскрибацию нельзя безопасно отменить на этом этапе.")
+            if item["status"] not in {"extracting_audio", "transcribing", "extracting_frames"}:
+                raise RuntimeError("Эту задачу нельзя отменить на текущем этапе.")
 
             cancel_event = self._cancel_events.get(index)
             if cancel_event is not None:
                 cancel_event.set()
             item["cancel_requested"] = True
-            self._set_item_stage_locked(item, "cancelling", status="extracting_frames")
+            if item["status"] == "extracting_frames":
+                self._set_item_stage_locked(item, "cancelling", status="extracting_frames")
+            else:
+                self._set_item_stage_locked(item, "cancelling_transcription", status="transcribing")
             self._persist_locked()
             logger.info("Queue item cancellation requested: job_id=%s index=%s", self._job_id, index)
             return self._status_snapshot_locked()
@@ -416,6 +445,7 @@ class QueueManager:
             "output_base": None,
             "error_message": None,
             "technical_details": None,
+            "partial_transcript": False,
             "outputs": {},
         }
         if media_kind == "video":
@@ -616,6 +646,7 @@ class QueueManager:
         outputs = {
             "transcript_path": self._absolute_artifact_path(item.get("transcript_path")),
             "transcript_exists": self._path_exists(item.get("transcript_path")),
+            "transcript_partial": bool(item.get("partial_transcript")),
             "json_path": self._absolute_artifact_path(item.get("json_path")),
             "json_exists": self._path_exists(item.get("json_path")),
             "frames_dir": frames_dir,
@@ -743,6 +774,10 @@ class QueueManager:
                 transcript_result: dict = {}
                 transcript_error: Exception | None = None
                 if operations.get("transcribe_audio"):
+                    cancel_event = threading.Event()
+                    with self._lock:
+                        item["cancel_requested"] = False
+                        self._cancel_events[item["index"]] = cancel_event
                     try:
                         self.media_validator(source_path)
                         if source_path.suffix.lower() in config.SUPPORTED_VIDEO_EXTENSIONS:
@@ -751,11 +786,12 @@ class QueueManager:
                                 self._persist_locked()
 
                         with self._lock:
-                            self._set_item_stage_locked(item, "transcribing_audio", status="transcribing")
+                            next_stage = "cancelling_transcription" if item.get("cancel_requested") else "transcribing_audio"
+                            self._set_item_stage_locked(item, next_stage, status="transcribing")
                             self._persist_locked()
                             item_snapshot = copy.deepcopy(item)
 
-                        transcript_result = self.processor(item_snapshot, model, device_preference)
+                        transcript_result = self._process_transcription(item_snapshot, model, device_preference, cancel_event)
                         with self._lock:
                             output_base = self._output_base_from_transcript_path(
                                 transcript_result.get("transcript_path"),
@@ -771,9 +807,30 @@ class QueueManager:
                                     "output_base": output_base or item.get("output_base"),
                                     "error_message": None,
                                     "technical_details": None,
+                                    "partial_transcript": bool(transcript_result.get("partial")),
                                 }
                             )
                             self._persist_locked()
+                        if transcript_result.get("status") == "cancelled":
+                            with self._lock:
+                                item.update(
+                                    {
+                                        "status": "cancelled",
+                                        "error_message": transcript_result.get("cancellation_reason"),
+                                        "technical_details": transcript_result.get("cancellation_reason"),
+                                        "partial_transcript": bool(transcript_result.get("partial")),
+                                    }
+                                )
+                                self._set_item_stage_locked(item, "cancelled", status="cancelled")
+                                self._refresh_outputs_locked(item)
+                                self._persist_locked()
+                                logger.info(
+                                    "Queue transcription cancelled: job_id=%s index=%s transcript=%s",
+                                    self._job_id,
+                                    item["index"],
+                                    item.get("transcript_path"),
+                                )
+                            task_cancelled = True
                     except Exception as exc:
                         if not operations.get("extract_frames"):
                             raise
@@ -796,9 +853,12 @@ class QueueManager:
                             )
                             self._persist_locked()
                             item_snapshot = copy.deepcopy(item)
+                    finally:
+                        with self._lock:
+                            self._cancel_events.pop(item["index"], None)
 
                 frame_result: dict = {}
-                if operations.get("extract_frames"):
+                if operations.get("extract_frames") and not task_cancelled:
                     if self.frame_processor is None:
                         raise RuntimeError("Frame extraction service is not configured.")
                     with self._lock:
