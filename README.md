@@ -16,7 +16,7 @@ This project is a separate fork of `LocalAudioTranscriber`. The current version 
 - Log mouse and keyboard input events for screen recording sessions.
 - Merge one screen video with microphone and/or system audio into a video with sound through FFmpeg.
 - Keep the recent recordings list compact and hide service JSON metadata files from the normal user file list.
-- Show microphone and system audio levels.
+- Show microphone and system audio levels during active recordings without opening audio devices while idle.
 - Add latest recordings, local files, or public URLs to a global media processing queue.
 - See persistent queue stage status while long operations run.
 - Add controls are disabled while a file, recording, or link is being added to prevent accidental duplicate queue items.
@@ -221,6 +221,8 @@ C:\Python\LocalMediaTranscriber\data\logs\app.log
 Runtime output under `data\recordings`, `data\transcripts`, `data\uploads`, `data\downloads`, `data\jobs`, and `data\logs` is ignored by Git.
 
 Current cancellation behavior: pending or waiting queue items can be removed; running frame extraction can be cancelled cooperatively and the queue continues; running audio transcription is not safely cancellable yet, and the UI marks that action as unavailable.
+
+Microphone privacy behavior: microphone access is requested only when the user starts a recording that includes the microphone source. Queue processing, URL downloads, local file transcription, frame extraction, storage views, and normal UI browsing do not use the microphone. The level meters stay idle until a matching recording source is active, and the recording stop flow releases the microphone stream.
 
 ## Whisper Models
 

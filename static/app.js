@@ -517,6 +517,14 @@ function systemLevelTarget() {
   };
 }
 
+function recordingUsesMicInput() {
+  return isRecording && modeUsesMic();
+}
+
+function recordingUsesSystemAudio() {
+  return isRecording && modeUsesSystem();
+}
+
 async function loadDevices() {
   await Promise.all([
     refreshMicDevices(false),
@@ -1019,6 +1027,11 @@ async function refreshMicLevel() {
     return;
   }
 
+  if (!recordingUsesMicInput()) {
+    resetLevel(micLevelTarget(), t("micLevelInactive"), "info");
+    return;
+  }
+
   if (!hasSelectableDevice(micDeviceSelect)) {
     resetLevel(micLevelTarget(), t("micDeviceNotSelected"));
     return;
@@ -1043,6 +1056,11 @@ async function refreshMicLevel() {
 
 async function refreshSystemLevel() {
   if (systemLevelPollInFlight) {
+    return;
+  }
+
+  if (!recordingUsesSystemAudio()) {
+    resetLevel(systemLevelTarget(), t("systemLevelInactive"), "info");
     return;
   }
 

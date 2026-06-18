@@ -47,6 +47,8 @@ class I18nTests(unittest.TestCase):
             "outputDevicesUpdated",
             "refreshMicDevicesFailed",
             "refreshOutputDevicesFailed",
+            "micLevelInactive",
+            "systemLevelInactive",
             "microphoneSwitched",
             "outputDeviceSwitched",
             "microphoneSwitchFailed",
@@ -234,6 +236,20 @@ class I18nTests(unittest.TestCase):
         self.assertEqual("Настройки хранения сохранены.", dictionary_value(i18n, "ru", "storageSettingsSaved"))
         self.assertEqual("Storage settings saved.", dictionary_value(i18n, "en", "storageSettingsSaved"))
         self.assertIn('"Настройки хранения сохранены.": "Storage settings saved."', i18n)
+
+    def test_idle_level_messages_are_localized(self) -> None:
+        i18n = (STATIC_DIR / "i18n.js").read_text(encoding="utf-8")
+
+        self.assertEqual("Микрофон активен только во время записи.", dictionary_value(i18n, "ru", "micLevelInactive"))
+        self.assertEqual("The microphone is active only during recording.", dictionary_value(i18n, "en", "micLevelInactive"))
+        self.assertEqual(
+            "Индикатор системного звука активен только во время записи.",
+            dictionary_value(i18n, "ru", "systemLevelInactive"),
+        )
+        self.assertEqual(
+            "System audio level is active only during recording.",
+            dictionary_value(i18n, "en", "systemLevelInactive"),
+        )
 
     def test_queue_start_action_uses_processing_label(self) -> None:
         i18n = (STATIC_DIR / "i18n.js").read_text(encoding="utf-8")

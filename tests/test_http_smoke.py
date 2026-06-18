@@ -1,12 +1,17 @@
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import PropertyMock, patch
 
 from fastapi.testclient import TestClient
 
 from app import config
+from app import audio_recorder as audio_recorder_module
+from app import system_audio_recorder as system_audio_recorder_module
 from app import utils as utils_module
+from app.audio_recorder import AudioRecorder
+from app.system_audio_recorder import SystemAudioRecorder
 
 
 PROJECT_TMP = Path(__file__).resolve().parents[1] / "tmp"
@@ -218,6 +223,34 @@ class HttpSmokeTests(unittest.TestCase):
             response = client.post("/api/record/switch-microphone", json={"device_id": 2})
             self.assertEqual(500, response.status_code)
             self.assertIn("device busy", response.json()["detail"]["message"])
+
+    def test_idle_audio_level_snapshots_do_not_open_capture_streams(self) -> None:
+        recorder = AudioRecorder()
+        fake_device = {"name": "Mic 1", "default_samplerate": 48000, "max_input_channels": 1}
+        with (
+            patch.object(recorder, "_resolve_input_device", return_value=(2, fake_device)),
+            patch.object(audio_recorder_module.sd, "rec") as record_probe,
+        ):
+            mic_level = recorder.measure_input_level(2)
+
+        record_probe.assert_not_called()
+        self.assertFalse(mic_level["recording"])
+        self.assertEqual(0, mic_level["level"])
+        self.assertEqual(2, mic_level["device_id"])
+
+        system_recorder = SystemAudioRecorder()
+        fake_speaker = SimpleNamespace(id="speaker-1", name="Speaker 1")
+        with (
+            patch.object(system_audio_recorder_module, "ensure_com_initialized"),
+            patch.object(system_recorder, "_resolve_speaker", return_value=fake_speaker),
+            patch.object(system_audio_recorder_module.sc, "get_microphone") as loopback_probe,
+        ):
+            system_level = system_recorder.measure_output_level("speaker-1")
+
+        loopback_probe.assert_not_called()
+        self.assertFalse(system_level["recording"])
+        self.assertEqual(0, system_level["level"])
+        self.assertEqual("speaker-1", system_level["output_device_id"])
 
     def test_direct_transcription_routes_remain_available(self) -> None:
         paths = {route.path for route in main_module.app.routes}

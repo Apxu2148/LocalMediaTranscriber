@@ -152,7 +152,7 @@ Key behavior:
 - Writes WAV chunks through a writer queue.
 - Tracks RMS/peak level, silence warnings, duration, dropped chunks, and stream status.
 - Supports microphone switching during recording.
-- Provides level probes before and during recording.
+- Reports levels from the active recording stream. When idle, level calls return a zero snapshot and must not open a microphone probe.
 
 Do not change this module casually. Recording correctness depends on stream lifecycle, writer thread shutdown, queue limits, and locking.
 
@@ -166,7 +166,7 @@ Key behavior:
 - Starts system audio recording into `data\recordings`.
 - Records in a worker thread.
 - Supports output device switching while recording.
-- Measures output level and reports silence warnings.
+- Reports output level and silence warnings from the active recording stream. When idle, level calls return a zero snapshot and must not open a loopback probe.
 - Initializes COM for loopback recording where needed.
 
 This module is Windows-specific. Future screen recording work should not be mixed into this module; keep system audio capture and screen capture separate unless a later design explicitly merges them through a media session coordinator.
@@ -641,7 +641,7 @@ Browser tab/app icon assets.
 1. The frontend loads storage, devices, model status, and initial state.
 2. The user selects recording sources: `mic`, `system`, `screen`, optional mouse actions, optional keyboard actions, or a supported combination.
 3. If Screen is enabled, the UI shows coordinate-ordered physical display cards, optional manual preview controls, the screen FPS selector, and mouse/keyboard action logging controls.
-4. The frontend polls microphone and/or system levels according to the selected audio sources.
+4. Before recording starts, the frontend must not poll microphone or system capture endpoints. Idle level meters show localized inactive messages.
 5. `POST /api/record/start` validates the selected sources and checks for conflicting benchmark work.
 6. If screen is enabled, the backend validates display selection and FPS before opening audio streams.
 7. For `mic`, `AudioRecorder.start()` creates `mic_<timestamp>.wav`.
@@ -653,11 +653,21 @@ Browser tab/app icon assets.
 13. If audio and screen are recorded together, the screen session JSON references the actual audio filenames.
 14. Screen videos use the selected FPS as the `VideoWriter` FPS. When capture falls behind, the latest captured frame is duplicated into missing output frame slots so playback duration remains real time.
 15. A simple cursor marker is drawn into the display video that currently contains the cursor.
-16. While recording, the UI shows level meters, screen selection state, input logging state when available, and a timer.
+16. While recording, the UI polls level endpoints only for active audio sources and shows level meters, screen selection state, input logging state when available, and a timer.
 17. Device switch endpoints can update microphone or output device during recording.
 18. `POST /api/record/stop` stops the active recorder(s), gathers diagnostics, updates the latest recording references, and refreshes storage.
 
 Audio files, screen videos, input event JSONL files, merged videos, and new screen session JSON all live in `data\recordings` as a flat list. `data\media_sessions` is legacy-only for earlier MVP runs.
+
+### Microphone stream lifecycle
+
+- Idle UI, queue polling, storage polling, model polling, and device list refresh must not open microphone streams.
+- `static/app.js` gates microphone level polling with `recordingUsesMicInput()` and system loopback level polling with `recordingUsesSystemAudio()`.
+- `getUserMedia({ audio: ... })`, browser `AudioContext` mic analysis, `sd.rec`, or loopback probes must not run on page load or queue polling.
+- The microphone stream is opened only by `POST /api/record/start` when the selected recording mode includes `mic` or `both`.
+- `POST /api/record/stop`, failed start cleanup, and runtime device switching must stop and close replaced streams before discarding references.
+- If a future explicit microphone test/preview is added, it must have clear start/stop controls and stop every media track or backend stream when stopped.
+- Manual Windows verification: open the app and wait 1-2 minutes without recording, then process local/URL queue items. The Windows microphone tray icon should not appear or blink. Start mic recording to verify the icon appears, then stop and verify it disappears shortly after the recorder stops.
 
 `GET /api/storage` exposes only user-facing recordings in the normal recordings file list: `.wav`, `.mp3`, `.m4a`, `.mp4`, `.avi`, `.mkv`, `.webm`, `.flac`, and `.ogg`. Service metadata such as `session_*.json`, `.log`, `.tmp`, and `.pyc` remains on disk but is hidden from the regular UI list.
 

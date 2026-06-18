@@ -398,45 +398,22 @@ class AudioRecorder:
         if self.is_recording:
             return self.get_level()
 
+        return self.idle_level(device_id)
+
+    def idle_level(self, device_id: int | str | None = None) -> dict:
         resolved_device_id, device_info = self._resolve_input_device(device_id)
-        sample_rate = int(device_info.get("default_samplerate") or config.DEFAULT_SAMPLE_RATE)
-        channels = min(config.DEFAULT_CHANNELS, int(device_info.get("max_input_channels", 1)))
-        channels = max(1, channels)
-        frames = max(1, int(sample_rate * config.LEVEL_PROBE_SECONDS))
-
-        try:
-            audio = sd.rec(
-                frames,
-                samplerate=sample_rate,
-                channels=channels,
-                dtype="float32",
-                device=resolved_device_id,
-                blocking=True,
-            )
-        except Exception as exc:
-            logger.exception("Failed to measure input level")
-            raise RuntimeError(
-                f"Не удалось проверить уровень микрофона. Проверьте разрешения Windows, антивирус и выбранное устройство: {exc}"
-            ) from exc
-
-        rms, peak = compute_audio_levels(audio)
-        has_signal = not self._is_silence(rms, peak)
-        warning = ""
-        if not has_signal:
-            warning = "Сигнал микрофона очень низкий или отсутствует."
-
         return {
             "recording": False,
             "available": True,
             "source_type": "mic",
-            "rms": round(rms, 6),
-            "peak": round(peak, 6),
-            "level": self._level_percent(rms, peak),
-            "has_signal": has_signal,
+            "rms": 0.0,
+            "peak": 0.0,
+            "level": 0,
+            "has_signal": False,
             "elapsed_sec": 0,
             "device_id": resolved_device_id,
             "device_name": str(device_info.get("name", "Default input")),
-            "warning": warning,
+            "warning": "",
         }
 
     def _audio_callback(self, indata, frames, callback_time, status) -> None:

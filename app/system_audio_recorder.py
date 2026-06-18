@@ -317,43 +317,23 @@ class SystemAudioRecorder:
         if self.is_recording:
             return self.get_level()
 
+        return self.idle_level(output_device_id)
+
+    def idle_level(self, output_device_id: str | None = None) -> dict:
         ensure_com_initialized()
         speaker = self._resolve_speaker(output_device_id)
-        channels = max(1, min(config.SYSTEM_CHANNELS, int(speaker.channels or config.SYSTEM_CHANNELS)))
-        frames = max(1, int(config.SYSTEM_SAMPLE_RATE * config.LEVEL_PROBE_SECONDS))
-
-        try:
-            loopback = sc.get_microphone(id=speaker.id, include_loopback=True)
-            with loopback.recorder(
-                samplerate=config.SYSTEM_SAMPLE_RATE,
-                channels=channels,
-                blocksize=config.SYSTEM_RECORDING_BLOCKSIZE,
-            ) as recorder:
-                audio = recorder.record(numframes=frames)
-        except Exception as exc:
-            logger.exception("Failed to measure system audio level")
-            raise RuntimeError(
-                f"Не удалось проверить уровень системного звука. WASAPI loopback недоступен или устройство занято: {exc}"
-            ) from exc
-
-        rms, peak = compute_audio_levels(audio)
-        has_signal = not self._is_silence(rms, peak)
-        warning = ""
-        if not has_signal:
-            warning = "Системный звук очень низкий или отсутствует. Проверьте воспроизведение и output-устройство."
-
         return {
             "recording": False,
             "available": True,
             "source_type": "system",
-            "rms": round(rms, 6),
-            "peak": round(peak, 6),
-            "level": self._level_percent(rms, peak),
-            "has_signal": has_signal,
+            "rms": 0.0,
+            "peak": 0.0,
+            "level": 0,
+            "has_signal": False,
             "elapsed_sec": 0,
             "output_device_id": speaker.id,
             "output_device_name": speaker.name,
-            "warning": warning,
+            "warning": "",
         }
 
     def _record_loop(self, speaker_id: str, output_path, sample_rate: int, channels: int) -> None:
