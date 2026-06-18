@@ -159,6 +159,32 @@ class UiContractTests(unittest.TestCase):
         self.assertNotIn('"/api/transcribe"', app_js)
         self.assertNotIn('"/api/transcribe/file"', app_js)
 
+    def test_model_status_copy_is_localized_and_progress_can_clear(self) -> None:
+        app_js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+
+        self.assertIsNone(re.search(r"[А-Яа-яЁё]", app_js))
+        self.assertIsNone(re.search(r"[А-Яа-яЁё]", html))
+        for key in (
+            "modelStatusReady",
+            "modelStatusDownloading",
+            "modelStatusVerifying",
+            "modelStatusFailed",
+            "modelProgressPercent",
+            "modelProgressUnavailable",
+            "modelDownloadInProgress",
+            "modelDownloadCompleted",
+            "modelVerifySuccess",
+            "modelVerifyFailed",
+        ):
+            self.assertIn(f't("{key}"', app_js)
+
+        self.assertIn("function clearModelDownloadProgressUi()", app_js)
+        self.assertIn("function clearModelDownloadProgressForModel(model)", app_js)
+        self.assertIn('modelDownloadProgress.removeAttribute("value")', app_js)
+        self.assertNotIn("Downloading model", app_js)
+        self.assertNotIn("Progress:", app_js)
+
     def test_queue_start_button_uses_processing_copy(self) -> None:
         html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
         i18n = (STATIC_DIR / "i18n.js").read_text(encoding="utf-8")

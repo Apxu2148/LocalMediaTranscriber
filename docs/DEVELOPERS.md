@@ -507,6 +507,7 @@ Key behavior:
 - Detects local faster-whisper snapshots under `models\faster-whisper` without loading every model.
 - Starts one background model download at a time through faster-whisper's Hugging Face download helper.
 - Reports download status with an indeterminate progress fallback when exact percent is unavailable.
+- Keeps model setup states non-conflicting: not downloaded, downloading, verifying, ready, or failed. Ready and failed terminal states are inactive and do not carry stale download progress.
 - Returns static model metadata for the Info button.
 - Deletes only exact cache paths for the selected supported model, including the matching `.locks` entry when present.
 - Refuses invalid model names and confirmation-less deletes.

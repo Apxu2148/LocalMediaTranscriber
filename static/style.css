@@ -394,12 +394,14 @@ h4 {
   font-weight: 700;
 }
 
-.model-manager-table td[data-status="available"] {
+.model-manager-table td[data-status="available"],
+.model-manager-table td[data-status="ready"] {
   color: var(--success);
 }
 
 .model-manager-table td[data-status="download_error"],
-.model-manager-table td[data-status="verification_error"] {
+.model-manager-table td[data-status="verification_error"],
+.model-manager-table td[data-status="failed"] {
   color: var(--danger);
 }
 

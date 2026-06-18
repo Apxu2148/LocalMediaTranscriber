@@ -356,10 +356,16 @@ def model_verify(payload: ModelVerifyRequest) -> dict:
         result = transcriber.verify_model(selected_model, selected_device)
         result["status"] = "available"
         result["message"] = "Model verified successfully."
+        model_manager.mark_model_ready(
+            selected_model,
+            local_path=local_status.get("local_path"),
+            message=f"Model {selected_model} verified successfully.",
+        )
         logger.info("Model verification completed: model=%s result=%s", selected_model, result)
         return result
     except Exception as exc:
         logger.exception("Model verification failed: model=%s device=%s", selected_model, selected_device)
+        model_manager.mark_model_verification_failed(selected_model, error_message=str(exc))
         return {
             "success": False,
             "model": selected_model,

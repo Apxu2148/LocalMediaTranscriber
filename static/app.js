@@ -1746,7 +1746,25 @@ function modelInfoFieldKey(model, field) {
 }
 
 function isModelDownloaded(status) {
-  return Boolean(status?.local || status?.is_downloaded || status?.status === "available");
+  return Boolean(status?.local || status?.is_downloaded || isModelReadyStatus(status?.status));
+}
+
+function isModelReadyStatus(statusCode) {
+  return statusCode === "available" || statusCode === "ready";
+}
+
+function isModelFailedStatus(statusCode) {
+  return statusCode === "download_error" || statusCode === "verification_error" || statusCode === "failed";
+}
+
+function normalizeModelStatus(statusCode) {
+  if (isModelReadyStatus(statusCode)) {
+    return "ready";
+  }
+  if (isModelFailedStatus(statusCode)) {
+    return "failed";
+  }
+  return statusCode || "not_downloaded";
 }
 
 function displayedModelStatus(status) {
@@ -1759,7 +1777,7 @@ function displayedModelStatus(status) {
   }
   const overrideStatus = modelOperationStatusByName.get(name);
   if (overrideStatus) {
-    return overrideStatus;
+    return normalizeModelStatus(overrideStatus);
   }
   if (status?.status === "starting" || (modelDownloadStatus?.status === "starting" && modelDownloadStatus.model === name)) {
     return "starting";
@@ -1767,19 +1785,21 @@ function displayedModelStatus(status) {
   if (status?.status === "downloading" || (modelDownloadStatus?.active && modelDownloadStatus.model === name)) {
     return "downloading";
   }
-  if (status?.status === "download_error") {
-    return "download_error";
+  if (isModelFailedStatus(status?.status)) {
+    return "failed";
   }
-  return isModelDownloaded(status) ? "available" : "not_downloaded";
+  return isModelDownloaded(status) ? "ready" : "not_downloaded";
 }
 
 function modelStatusLabel(statusCode) {
   return {
+    ready: t("modelStatusReady"),
     available: t("modelStatusAvailable"),
     starting: t("modelStatusStarting"),
     not_downloaded: t("modelStatusNotDownloaded"),
     downloading: t("modelStatusDownloading"),
     verifying: t("modelStatusVerifying"),
+    failed: t("modelStatusFailed"),
     download_error: t("modelStatusDownloadError"),
     verification_error: t("modelStatusVerificationError"),
     deleting: t("modelStatusDeleting"),
@@ -1851,6 +1871,38 @@ function renderModelManager() {
   }
 }
 
+function clearModelDownloadProgressUi() {
+  modelDownloadProgressBlock.hidden = true;
+  modelDownloadProgress.removeAttribute("value");
+  modelDownloadProgressText.textContent = t("modelManagerIdle");
+  modelDownloadProgressNote.textContent = "";
+}
+
+function clearModelDownloadProgressForModel(model) {
+  if (modelDownloadStatus?.active && modelDownloadStatus.model && modelDownloadStatus.model !== model) {
+    return;
+  }
+  modelDownloadStatus = null;
+  modelDownloadSeenActive = false;
+  clearModelDownloadProgressUi();
+}
+
+function markModelReadyInUi(model) {
+  const currentStatus = modelStatusByName.get(model);
+  if (currentStatus) {
+    modelStatusByName.set(model, {
+      ...currentStatus,
+      status: "available",
+      local: true,
+      is_downloaded: true,
+    });
+  }
+  modelOperationStatusByName.delete(model);
+  clearModelDownloadProgressForModel(model);
+  updateModelAvailabilityUi();
+  renderModelManager();
+}
+
 function renderModelDownloadStatus(status) {
   modelDownloadStatus = status || null;
   const active = Boolean(status?.active);
@@ -1872,14 +1924,19 @@ function renderModelDownloadStatus(status) {
       "info",
     );
   } else if (status?.status === "download_error") {
-    modelDownloadProgressBlock.hidden = true;
-    modelDownloadProgress.removeAttribute("value");
+    modelDownloadSeenActive = false;
+    clearModelDownloadProgressUi();
     setModelManagerStatus(t("modelDownloadFailed"), "error");
-  } else if (status?.status === "available" && status.model) {
-    modelDownloadProgressBlock.hidden = true;
-    modelDownloadProgress.value = 100;
+  } else if (isModelReadyStatus(status?.status) && status.model) {
+    modelDownloadSeenActive = false;
+    clearModelDownloadProgressUi();
     setModelManagerStatus(t("modelDownloadCompleted", { model: status.model }), "success");
+  } else if (status?.status === "verification_error") {
+    modelDownloadSeenActive = false;
+    clearModelDownloadProgressUi();
+    setModelManagerStatus(t("modelVerifyFailed"), "error");
   } else if (!modelManagerStatus.textContent) {
+    clearModelDownloadProgressUi();
     setModelManagerStatus(t("modelManagerReady"), "success");
   }
   renderModelManager();
@@ -1934,7 +1991,15 @@ async function downloadModel(model) {
     await refreshModelStatuses();
   } catch (error) {
     modelOperationStatusByName.set(model, "download_error");
-    setModelManagerStatus(t("modelDownloadFailed"), "error");
+    renderModelDownloadStatus({
+      active: false,
+      model,
+      status: "download_error",
+      progress_percent: null,
+      progress_available: false,
+      message: t("modelDownloadFailed"),
+      error_message: error.message,
+    });
     showToast(t("modelDownloadFailed"), "error");
     renderModelManager();
   }
@@ -1942,6 +2007,7 @@ async function downloadModel(model) {
 
 async function verifyModel(model) {
   verifyingModels.add(model);
+  clearModelDownloadProgressForModel(model);
   modelOperationStatusByName.delete(model);
   setModelManagerStatus(t("modelVerifyInProgress", { model }), "info");
   renderModelManager();
@@ -1960,13 +2026,16 @@ async function verifyModel(model) {
       });
       setModelManagerStatus(message, "success");
       showToast(message, "success");
+      markModelReadyInUi(model);
     } else {
+      clearModelDownloadProgressForModel(model);
       modelOperationStatusByName.set(model, result.status === "not_downloaded" ? "not_downloaded" : "verification_error");
       const message = result.status === "not_downloaded" ? t("modelVerifyNeedsDownload") : t("modelVerifyFailed");
       setModelManagerStatus(message, "error");
       showToast(message, "error");
     }
   } catch (error) {
+    clearModelDownloadProgressForModel(model);
     modelOperationStatusByName.set(model, "verification_error");
     setModelManagerStatus(t("modelVerifyFailed"), "error");
     showToast(t("modelVerifyFailed"), "error");

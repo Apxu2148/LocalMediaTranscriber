@@ -242,6 +242,8 @@ C:\Python\LocalMediaTranscriber\models\faster-whisper
 
 Interrupted downloads should show a clear error and can usually be retried. Delete only removes cache paths that match the selected supported model; it does not wipe the whole Hugging Face cache.
 
+The model manager UI treats model setup as a small lifecycle: not downloaded, downloading, verifying, ready, or failed. After a download or verification succeeds, active download progress is cleared and the table/status area shows the model as locally ready; tests mock model download and verification and must not fetch real model files.
+
 ## App Icon
 
 The browser tab icon lives in:

@@ -125,6 +125,8 @@ class WhisperModelManager:
                 status = download_state["status"]
             elif download_state["status"] == "download_error" and not local:
                 status = "download_error"
+            elif download_state["status"] == "verification_error" and local:
+                status = "verification_error"
 
         return {
             "name": selected_model,
@@ -184,6 +186,53 @@ class WhisperModelManager:
 
     def download_status(self) -> dict:
         with self._lock:
+            return self._download_state.as_dict()
+
+    def mark_model_ready(self, model_name: str, *, local_path: str | Path | None = None, message: str | None = None) -> dict:
+        selected_model = self.validate_model(model_name)
+        snapshots = self.complete_snapshots(selected_model)
+        resolved_local_path = Path(local_path) if local_path else (snapshots[-1] if snapshots else None)
+
+        with self._lock:
+            previous_state = self._download_state
+            self._download_state = DownloadState(
+                active=False,
+                model=selected_model,
+                status="available",
+                progress_percent=None,
+                progress_available=False,
+                message=message or f"Model {selected_model} is available locally.",
+                local_path=str(resolved_local_path) if resolved_local_path else None,
+                started_at=previous_state.started_at if previous_state.model == selected_model else None,
+                finished_at=self._timestamp(),
+            )
+            return self._download_state.as_dict()
+
+    def mark_model_verification_failed(
+        self,
+        model_name: str,
+        *,
+        error_message: str | None = None,
+        message: str | None = None,
+    ) -> dict:
+        selected_model = self.validate_model(model_name)
+        snapshots = self.complete_snapshots(selected_model)
+        local_path = snapshots[-1] if snapshots else None
+
+        with self._lock:
+            previous_state = self._download_state
+            self._download_state = DownloadState(
+                active=False,
+                model=selected_model,
+                status="verification_error",
+                progress_percent=None,
+                progress_available=False,
+                message=message or f"Model {selected_model} verification failed.",
+                error_message=error_message,
+                local_path=str(local_path) if local_path else None,
+                started_at=previous_state.started_at if previous_state.model == selected_model else None,
+                finished_at=self._timestamp(),
+            )
             return self._download_state.as_dict()
 
     def delete_model(self, model_name: str, *, confirm: bool) -> dict:
@@ -276,18 +325,7 @@ class WhisperModelManager:
             status = self.model_status(model_name)
             if not status["is_downloaded"]:
                 raise RuntimeError("The model download finished, but required model files were not found.")
-            with self._lock:
-                self._download_state = DownloadState(
-                    active=False,
-                    model=model_name,
-                    status="available",
-                    progress_percent=100,
-                    progress_available=True,
-                    message=f"Model {model_name} is available locally.",
-                    local_path=str(local_path),
-                    started_at=self._download_state.started_at,
-                    finished_at=self._timestamp(),
-                )
+            self.mark_model_ready(model_name, local_path=local_path)
             logger.info("Whisper model download completed: model=%s path=%s", model_name, local_path)
         except Exception as exc:
             logger.exception("Whisper model download failed: model=%s", model_name)

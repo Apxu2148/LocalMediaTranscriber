@@ -120,9 +120,67 @@ class ModelManagerTests(unittest.TestCase):
         self.assertIsNone(status["error_message"])
         self.assertNotIn("old", status["message"])
 
+    def test_successful_download_clears_progress_after_ready_state(self) -> None:
+        manager = self.make_manager(self.temp_root("download_success"))
+
+        def fake_download_model(_model_name: str, cache_dir: str) -> Path:
+            self.assertEqual(str(manager.cache_dir), cache_dir)
+            return self.write_complete_snapshot(manager, "small")
+
+        manager._download_state = DownloadState(
+            active=True,
+            model="small",
+            status="downloading",
+            progress_percent=0,
+            progress_available=True,
+        )
+
+        with patch("app.model_manager.download_model", side_effect=fake_download_model):
+            manager._download_worker("small")
+
+        status = manager.download_status()
+        self.assertFalse(status["active"])
+        self.assertEqual("available", status["status"])
+        self.assertIsNone(status["progress_percent"])
+        self.assertFalse(status["progress_available"])
+        self.assertEqual("available", manager.model_status("small")["status"])
+
+    def test_ready_state_does_not_conflict_with_active_download(self) -> None:
+        manager = self.make_manager(self.temp_root("ready"))
+        snapshot = self.write_complete_snapshot(manager)
+        manager._download_state = DownloadState(
+            active=True,
+            model="small",
+            status="downloading",
+            progress_percent=0,
+            progress_available=True,
+        )
+
+        status = manager.mark_model_ready("small", local_path=snapshot)
+
+        self.assertFalse(status["active"])
+        self.assertEqual("available", status["status"])
+        self.assertIsNone(status["progress_percent"])
+        self.assertFalse(status["progress_available"])
+        self.assertEqual("available", manager.model_status("small")["status"])
+
+    def test_failed_verification_sets_failed_state_without_progress(self) -> None:
+        manager = self.make_manager(self.temp_root("verify_failed"))
+        self.write_complete_snapshot(manager)
+
+        status = manager.mark_model_verification_failed("small", error_message="CUDA failed")
+        model_status = manager.model_status("small")
+
+        self.assertFalse(status["active"])
+        self.assertEqual("verification_error", status["status"])
+        self.assertIsNone(status["progress_percent"])
+        self.assertFalse(status["progress_available"])
+        self.assertEqual("verification_error", model_status["status"])
+        self.assertTrue(model_status["is_downloaded"])
+
     def test_verify_endpoint_uses_mocked_transcriber_without_downloading(self) -> None:
         with (
-            patch.object(main_module.model_manager, "model_status", return_value={"is_downloaded": True}),
+            patch.object(main_module.model_manager, "model_status", return_value={"is_downloaded": True, "local_path": "C:\\model"}),
             patch.object(
                 main_module.transcriber,
                 "verify_model",
@@ -134,6 +192,7 @@ class ModelManagerTests(unittest.TestCase):
                     "compute_type": "int8",
                 },
             ) as verify_model,
+            patch.object(main_module.model_manager, "mark_model_ready") as mark_model_ready,
             TestClient(main_module.app) as client,
         ):
             response = client.post("/api/models/verify", json={"model": "small", "device": "cpu"})
@@ -141,6 +200,24 @@ class ModelManagerTests(unittest.TestCase):
             self.assertEqual(200, response.status_code)
             self.assertTrue(response.json()["success"])
             verify_model.assert_called_once_with("small", "cpu")
+            mark_model_ready.assert_called_once()
+            self.assertEqual("small", mark_model_ready.call_args.args[0])
+            self.assertEqual("C:\\model", mark_model_ready.call_args.kwargs["local_path"])
+
+    def test_verify_endpoint_records_failed_verification(self) -> None:
+        with (
+            patch.object(main_module.model_manager, "model_status", return_value={"is_downloaded": True, "local_path": "C:\\model"}),
+            patch.object(main_module.transcriber, "verify_model", side_effect=RuntimeError("CUDA failed")),
+            patch.object(main_module.model_manager, "mark_model_verification_failed") as mark_model_verification_failed,
+            TestClient(main_module.app) as client,
+        ):
+            response = client.post("/api/models/verify", json={"model": "small", "device": "cpu"})
+
+            self.assertEqual(200, response.status_code)
+            payload = response.json()
+            self.assertFalse(payload["success"])
+            self.assertEqual("verification_error", payload["status"])
+            mark_model_verification_failed.assert_called_once_with("small", error_message="CUDA failed")
 
     def test_invalid_model_endpoint_is_rejected(self) -> None:
         with TestClient(main_module.app) as client:
