@@ -2237,9 +2237,13 @@ function queueStageKey(stage) {
     idle: "queueStageIdle",
     adding_file: "queueStageAddingFile",
     adding_url: "queueStageAddingUrl",
+    waiting_download: "queueStageWaitingDownload",
     preparing_source: "queueStagePreparingSource",
     downloading_media: "queueStageDownloadingMedia",
     downloading_video: "queueStageDownloadingVideo",
+    cancelling_download: "queueStageCancellingDownload",
+    download_cancelled: "queueStageDownloadCancelled",
+    download_failed: "queueStageDownloadFailed",
     transcribing_audio: "queueStageTranscribingAudio",
     extracting_frames: "queueStageExtractingFrames",
     cancelling_transcription: "queueStageCancellingTranscription",
@@ -2303,6 +2307,16 @@ function formatQueueStageStatus(status) {
     const stage = queueStageLabel(current);
     const item = status.current_file || current.stage_detail || current.source_filename || "-";
     const currentPosition = queueItemPosition(status, current) || Math.min(total, finished + 1) || 1;
+    const percent = Number(current.stage_progress?.percent);
+    if (current.stage_progress?.mode === "determinate" && Number.isFinite(percent)) {
+      return t("queueStageStatusRunningProgress", {
+        current: currentPosition,
+        total,
+        stage,
+        item,
+        value: Math.round(percent),
+      });
+    }
     return t("queueStageStatusRunning", { current: currentPosition, total, stage, item });
   }
   if (status?.status === "pending" && total) {
@@ -2315,6 +2329,60 @@ function formatQueueStageStatus(status) {
     return t("queueStageStatusComplete", { stage: queueStageLabel("cancelled") });
   }
   return t("queueStageStatusIdle");
+}
+
+function createQueueStageProgress(queueItem) {
+  const progress = queueItem.stage_progress || {};
+  if (!["determinate", "indeterminate"].includes(progress.mode)) {
+    return null;
+  }
+
+  const isDownload = ["downloading_media", "downloading_video", "cancelling_download"].includes(queueItem.stage);
+  const wrapper = document.createElement("div");
+  wrapper.className = "queue-item-stage-progress";
+  wrapper.dataset.progressMode = progress.mode;
+
+  const label = document.createElement("div");
+  label.className = "queue-item-stage-progress-label";
+  label.textContent = t(isDownload ? "downloadProgress" : "stageProgress");
+  const bar = document.createElement("progress");
+  bar.max = 100;
+  bar.setAttribute("aria-label", label.textContent);
+  const percent = Number(progress.percent);
+  if (progress.mode === "determinate" && Number.isFinite(percent)) {
+    bar.value = Math.max(0, Math.min(100, percent));
+  } else {
+    bar.removeAttribute("value");
+  }
+  wrapper.append(label, bar);
+
+  const details = document.createElement("div");
+  details.className = "queue-item-stage-progress-details";
+  if (progress.mode === "determinate" && Number.isFinite(percent)) {
+    details.append(textLine(t("stageProgressPercent", { value: Math.round(percent) })));
+  } else {
+    details.append(textLine(t("working")), textLine(t("progressUnavailable")));
+  }
+  if (progress.downloaded_bytes !== null && progress.downloaded_bytes !== undefined) {
+    details.append(textLine(t("downloadedAmount", { value: formatBytes(progress.downloaded_bytes) })));
+  }
+  if (progress.total_bytes !== null && progress.total_bytes !== undefined) {
+    details.append(textLine(t("downloadSize", { value: formatBytes(progress.total_bytes) })));
+  }
+  if (progress.speed_bytes_per_sec !== null && progress.speed_bytes_per_sec !== undefined) {
+    details.append(textLine(t("downloadSpeed", { value: formatBytes(progress.speed_bytes_per_sec) })));
+  }
+  if (progress.eta_sec !== null && progress.eta_sec !== undefined) {
+    details.append(textLine(t("downloadEta", { value: formatReadableEstimateDuration(progress.eta_sec) })));
+  }
+  if (progress.completed_units !== null && progress.completed_units !== undefined) {
+    details.append(textLine(t("stageProgressUnits", {
+      completed: progress.completed_units,
+      total: progress.total_units ?? t("notAvailable"),
+    })));
+  }
+  wrapper.append(details);
+  return wrapper;
 }
 
 function queueStageStatusType(status) {
@@ -3000,6 +3068,7 @@ function createQueueItemElement(queueItem, status) {
   item.className = "queue-item-card";
   item.dataset.queueIndex = String(queueItem.index);
   item.dataset.mediaKind = queueItem.media_kind || (queueItemIsVideo(queueItem) ? "video" : "audio");
+  item.dataset.queueStage = queueItem.stage || queueStageFromStatus(queueItem.status);
 
   const header = document.createElement("div");
   header.className = "queue-item-header";
@@ -3035,12 +3104,13 @@ function createQueueItemElement(queueItem, status) {
   const canRemove = queueItem.status === "pending";
   const cancellationPending = Boolean(queueItem.cancel_requested)
     || pendingQueueCancellationIds.has(queueItem.index)
-    || ["cancelling_transcription", "cancelling"].includes(queueItem.stage);
+    || ["cancelling_download", "cancelling_transcription", "cancelling"].includes(queueItem.stage);
+  const canCancelDownload = isCurrent && !cancellationPending && queueItem.status === "downloading";
   const canCancelTranscription = isCurrent
     && !cancellationPending
     && ["extracting_audio", "transcribing"].includes(queueItem.status);
   const canCancelFrameExtraction = isCurrent && !cancellationPending && queueItem.status === "extracting_frames";
-  const canCancel = canCancelTranscription || canCancelFrameExtraction;
+  const canCancel = canCancelDownload || canCancelTranscription || canCancelFrameExtraction;
   const currentButCannotCancel = isCurrent && !canCancel && status.status === "running";
   if (canRemove || canCancel || currentButCannotCancel) {
     const actionButton = document.createElement("button");
@@ -3051,14 +3121,18 @@ function createQueueItemElement(queueItem, status) {
     actionButton.textContent = canRemove
       ? "\u00d7"
       : cancellationPending
-        ? t("cancelling")
+        ? t(queueItem.stage === "cancelling_download" ? "cancellingDownload" : "cancelling")
+      : canCancelDownload
+        ? t("cancelDownload")
       : canCancelTranscription
         ? t("cancelTranscription")
         : t("cancelCurrentShort");
     actionButton.dataset.queueAction = canRemove ? "remove" : "cancel";
     actionButton.disabled = cancellationPending || currentButCannotCancel;
     actionButton.title = cancellationPending
-      ? t("cancelling")
+      ? t(queueItem.stage === "cancelling_download" ? "cancellingDownload" : "cancelling")
+      : canCancelDownload
+        ? t("cancelDownload")
       : canCancelTranscription
       ? t("transcriptionCancelAfterSegment")
       : canCancelFrameExtraction
@@ -3081,6 +3155,10 @@ function createQueueItemElement(queueItem, status) {
     textLine(t("queueItemStatusLine", { status: queueStatusLabel(queueItem.status) })),
     textLine(t("queueItemStageLine", { stage: queueStageLabel(queueItem) })),
   );
+  const stageProgress = createQueueStageProgress(queueItem);
+  if (stageProgress) {
+    stageBlock.append(stageProgress);
+  }
   item.append(stageBlock);
 
   const options = queueItem.operations || {};
@@ -3212,7 +3290,7 @@ function renderQueue(status, options = {}) {
     showOperation(
       "queue",
       current.status === "downloading"
-        ? t("urlDownloading")
+        ? queueStageLabel(current)
         : modelLoading
           ? t("modelDownloading", { model: activeRuntimeModel })
           : t("queueRunning"),
@@ -3387,7 +3465,11 @@ async function removeOrCancelQueueItem(card, action) {
     const button = card.querySelector('[data-queue-action="cancel"]');
     if (button) {
       button.disabled = true;
-      button.textContent = t("cancelling");
+      button.textContent = t(
+        ["downloading_media", "downloading_video", "cancelling_download"].includes(card.dataset.queueStage)
+          ? "cancellingDownload"
+          : "cancelling",
+      );
     }
     setOutput(queueOutput, t("cancelRequestSent"), "warning");
   }

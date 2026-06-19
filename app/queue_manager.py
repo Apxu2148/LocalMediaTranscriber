@@ -2,6 +2,7 @@ import copy
 import inspect
 import logging
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -32,9 +33,13 @@ STAGE_LABEL_KEYS = {
     "idle": "queueStageIdle",
     "adding_file": "queueStageAddingFile",
     "adding_url": "queueStageAddingUrl",
+    "waiting_download": "queueStageWaitingDownload",
     "preparing_source": "queueStagePreparingSource",
     "downloading_media": "queueStageDownloadingMedia",
     "downloading_video": "queueStageDownloadingVideo",
+    "cancelling_download": "queueStageCancellingDownload",
+    "download_cancelled": "queueStageDownloadCancelled",
+    "download_failed": "queueStageDownloadFailed",
     "transcribing_audio": "queueStageTranscribingAudio",
     "extracting_frames": "queueStageExtractingFrames",
     "cancelling_transcription": "queueStageCancellingTranscription",
@@ -108,6 +113,7 @@ class QueueManager:
         self._worker: threading.Thread | None = None
         self._cancel_events: dict[int, threading.Event] = {}
         self._estimating_indices: set[int] = set()
+        self._progress_persisted_at: dict[int, float] = {}
 
     @staticmethod
     def _callable_accepts_cancel_event(callback: Callable) -> bool:
@@ -129,6 +135,36 @@ class QueueManager:
         if self._processor_accepts_cancel_event:
             return self.processor(item, model, device_preference, cancel_event)
         return self.processor(item, model, device_preference)
+
+    @staticmethod
+    def _process_download(
+        downloader: Callable,
+        source_url: str,
+        cancel_event: threading.Event,
+        progress_callback: Callable[[dict], None],
+    ) -> dict:
+        try:
+            signature = inspect.signature(downloader)
+        except (TypeError, ValueError):
+            return downloader(source_url, cancel_event, progress_callback)
+        parameters = signature.parameters
+        if "cancel_event" in parameters or "progress_callback" in parameters:
+            kwargs = {}
+            if "cancel_event" in parameters:
+                kwargs["cancel_event"] = cancel_event
+            if "progress_callback" in parameters:
+                kwargs["progress_callback"] = progress_callback
+            return downloader(source_url, **kwargs)
+        positional = [
+            parameter
+            for parameter in parameters.values()
+            if parameter.kind in {inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD}
+        ]
+        if any(parameter.kind == inspect.Parameter.VAR_POSITIONAL for parameter in parameters.values()) or len(positional) >= 3:
+            return downloader(source_url, cancel_event, progress_callback)
+        if len(positional) >= 2:
+            return downloader(source_url, cancel_event)
+        return downloader(source_url)
 
     @property
     def is_running(self) -> bool:
@@ -216,9 +252,10 @@ class QueueManager:
                     "downloaded_media_path": None,
                     "downloaded_video_path": None,
                     "status": "pending",
-                    "stage": "idle",
-                    "stage_label_key": STAGE_LABEL_KEYS["idle"],
+                    "stage": "waiting_download",
+                    "stage_label_key": STAGE_LABEL_KEYS["waiting_download"],
                     "stage_detail": f"url_{index:03d}",
+                    "stage_progress": {"mode": "none"},
                     "operations": self._default_operations("url"),
                     "frame_extraction": None,
                     "processing_plan": self._normalize_processing_plan(queue_url.processing_plan, "url"),
@@ -336,7 +373,8 @@ class QueueManager:
                         "outputs": {},
                     }
                 )
-                self._set_item_stage_locked(item, "idle", status="pending")
+                retry_stage = "waiting_download" if item.get("source_type") == "url" and not item.get("source_path") else "idle"
+                self._set_item_stage_locked(item, retry_stage, status="pending")
                 if item.get("frame_extraction") is not None:
                     item["frame_extraction"]["result"] = None
             self._status = "pending"
@@ -467,14 +505,18 @@ class QueueManager:
                     return self._status_snapshot_locked()
                 raise RuntimeError("Эта задача сейчас не выполняется.")
 
-            if item["status"] not in {"extracting_audio", "transcribing", "extracting_frames"}:
+            if item.get("cancel_requested"):
+                return self._status_snapshot_locked()
+            if item["status"] not in {"downloading", "extracting_audio", "transcribing", "extracting_frames"}:
                 raise RuntimeError("Эту задачу нельзя отменить на текущем этапе.")
 
             cancel_event = self._cancel_events.get(index)
             if cancel_event is not None:
                 cancel_event.set()
             item["cancel_requested"] = True
-            if item["status"] == "extracting_frames":
+            if item["status"] == "downloading":
+                self._set_item_stage_locked(item, "cancelling_download", status="downloading")
+            elif item["status"] == "extracting_frames":
                 self._set_item_stage_locked(item, "cancelling", status="extracting_frames")
             else:
                 self._set_item_stage_locked(item, "cancelling_transcription", status="transcribing")
@@ -500,6 +542,7 @@ class QueueManager:
             "stage": "idle",
             "stage_label_key": STAGE_LABEL_KEYS["idle"],
             "stage_detail": queue_file.source_filename,
+            "stage_progress": {"mode": "none"},
             "operations": self._normalize_operations(queue_file.operations, media_kind),
             "frame_extraction": None,
             "processing_plan": self._normalize_processing_plan(
@@ -763,11 +806,36 @@ class QueueManager:
         return item.get("source_title") or item.get("source_filename") or item.get("source_url") or item.get("source_path")
 
     def _set_item_stage_locked(self, item: dict, stage: str, *, status: str | None = None, detail: str | None = None) -> None:
+        previous_stage = item.get("stage")
         if status is not None:
             item["status"] = status
         item["stage"] = stage
         item["stage_label_key"] = STAGE_LABEL_KEYS.get(stage, STAGE_LABEL_KEYS["idle"])
         item["stage_detail"] = detail if detail is not None else self._stage_detail_for(item)
+        if stage in {"downloading_media", "downloading_video"} and previous_stage != stage:
+            item["stage_progress"] = {"mode": "indeterminate"}
+        elif stage in {"preparing_source", "transcribing_audio", "cancelling_transcription", "cancelling"}:
+            item["stage_progress"] = {"mode": "indeterminate"}
+        elif stage == "extracting_frames" and previous_stage != stage:
+            estimated = (item.get("frame_extraction") or {}).get("estimated_frame_count")
+            item["stage_progress"] = {
+                "mode": "determinate" if estimated else "indeterminate",
+                "percent": 0.0 if estimated else None,
+                "completed_units": 0,
+                "total_units": estimated,
+            }
+        elif stage == "cancelling_download":
+            item.setdefault("stage_progress", {"mode": "indeterminate"})
+        elif stage in {
+            "idle",
+            "waiting_download",
+            "completed",
+            "failed",
+            "cancelled",
+            "download_cancelled",
+            "download_failed",
+        }:
+            item["stage_progress"] = {"mode": "none"}
 
     @staticmethod
     def _path_exists(path_value: str | None) -> bool:
@@ -870,9 +938,59 @@ class QueueManager:
                 frame_settings = item.get("frame_extraction")
                 if frame_settings is not None:
                     frame_settings["result"] = progress
+                estimated = progress.get("estimated_frame_count") or (frame_settings or {}).get("estimated_frame_count")
+                completed = int(progress.get("extracted_frame_count") or 0)
+                percent = min(100.0, completed * 100.0 / estimated) if estimated else None
+                item["stage_progress"] = {
+                    "mode": "determinate" if estimated else "indeterminate",
+                    "percent": round(percent, 1) if percent is not None else None,
+                    "completed_units": completed,
+                    "total_units": estimated,
+                }
                 self._persist_locked()
 
         return update
+
+    def _download_progress_callback(self, index: int) -> Callable[[dict], None]:
+        def update(progress: dict) -> None:
+            with self._lock:
+                item = next((entry for entry in self._items if entry["index"] == index), None)
+                if item is None or item["status"] != "downloading":
+                    return
+                item["stage_progress"] = self._normalize_stage_progress(progress)
+                now = time.monotonic()
+                last_persisted = self._progress_persisted_at.get(index, 0.0)
+                if now - last_persisted >= 0.25 or item["stage_progress"].get("percent") == 100.0:
+                    self._progress_persisted_at[index] = now
+                    self._persist_locked()
+
+        return update
+
+    @staticmethod
+    def _normalize_stage_progress(progress: dict | None) -> dict:
+        value = progress or {}
+        mode = value.get("mode") if value.get("mode") in {"determinate", "indeterminate"} else "indeterminate"
+
+        def optional_number(key: str) -> float | int | None:
+            raw = value.get(key)
+            try:
+                number = float(raw) if raw is not None else None
+            except (TypeError, ValueError):
+                return None
+            if number is None or number < 0:
+                return None
+            return int(number) if key in {"downloaded_bytes", "total_bytes"} else round(number, 1)
+
+        percent = optional_number("percent")
+        return {
+            "mode": mode,
+            "percent": min(100.0, float(percent)) if percent is not None and mode == "determinate" else None,
+            "downloaded_bytes": optional_number("downloaded_bytes"),
+            "total_bytes": optional_number("total_bytes"),
+            "speed_bytes_per_sec": optional_number("speed_bytes_per_sec"),
+            "eta_sec": optional_number("eta_sec"),
+            "source": str(value.get("source") or "unknown"),
+        }
 
     @staticmethod
     def _output_base_from_transcript_path(transcript_path: str | None, model: str) -> str | None:
@@ -894,6 +1012,7 @@ class QueueManager:
 
     def _worker_loop(self) -> None:
         while True:
+            download_cancel_event: threading.Event | None = None
             with self._lock:
                 item = next((entry for entry in self._items if entry["status"] == "pending"), None)
                 if item is None:
@@ -902,6 +1021,9 @@ class QueueManager:
 
                 self._current_index = item["index"]
                 if item.get("source_type") == "url":
+                    download_cancel_event = threading.Event()
+                    self._cancel_events[item["index"]] = download_cancel_event
+                    item["cancel_requested"] = False
                     operations = item.get("operations") or self._default_operations(item.get("media_kind", "url"))
                     self._set_item_stage_locked(
                         item,
@@ -925,7 +1047,13 @@ class QueueManager:
                 )
 
             try:
-                source_path = self._prepare_source(item, item_snapshot)
+                try:
+                    source_path = self._prepare_source(item, item_snapshot, download_cancel_event)
+                finally:
+                    if download_cancel_event is not None:
+                        with self._lock:
+                            self._cancel_events.pop(item["index"], None)
+                            self._progress_persisted_at.pop(item["index"], None)
                 task_cancelled = False
                 task_failed = False
                 with self._lock:
@@ -1153,32 +1281,55 @@ class QueueManager:
                             item["realtime_factor"],
                         )
             except Exception as exc:
-                error_metadata: dict = {}
-                if self.error_recorder is not None:
-                    try:
-                        error_metadata = self.error_recorder(item_snapshot, model, device_preference, exc)
-                    except Exception:
-                        logger.exception("Failed to save queue task error JSON")
+                if getattr(exc, "cancelled", False):
+                    with self._lock:
+                        item.update(
+                            {
+                                "status": "cancelled",
+                                "error_message": None,
+                                "technical_details": None,
+                            }
+                        )
+                        self._set_item_stage_locked(item, "download_cancelled", status="cancelled")
+                        self._refresh_outputs_locked(item)
+                        self._persist_locked()
+                        logger.info(
+                            "Queue URL download cancelled: job_id=%s index=%s url=%s",
+                            self._job_id,
+                            item["index"],
+                            item.get("source_url"),
+                        )
+                else:
+                    error_metadata: dict = {}
+                    if self.error_recorder is not None:
+                        try:
+                            error_metadata = self.error_recorder(item_snapshot, model, device_preference, exc)
+                        except Exception:
+                            logger.exception("Failed to save queue task error JSON")
 
-                with self._lock:
-                    item.update(
-                        {
-                            "status": "error",
-                            "transcript_path": error_metadata.get("transcript_path") or item.get("transcript_path"),
-                            "json_path": error_metadata.get("json_path") or error_metadata.get("benchmark_path") or item.get("json_path"),
-                            "error_message": str(exc),
-                            "technical_details": str(getattr(exc, "technical_details", "") or exc),
-                        }
-                    )
-                    self._set_item_stage_locked(item, "failed", status="error")
-                    self._refresh_outputs_locked(item)
-                    self._persist_locked()
-                    logger.exception(
-                        "Queue task failed: job_id=%s index=%s file=%s",
-                        self._job_id,
-                        item["index"],
-                        item.get("source_path") or item.get("source_url"),
-                    )
+                    with self._lock:
+                        item.update(
+                            {
+                                "status": "error",
+                                "transcript_path": error_metadata.get("transcript_path") or item.get("transcript_path"),
+                                "json_path": error_metadata.get("json_path") or error_metadata.get("benchmark_path") or item.get("json_path"),
+                                "error_message": str(exc),
+                                "technical_details": str(getattr(exc, "technical_details", "") or exc),
+                            }
+                        )
+                        download_failed = item.get("source_type") == "url" and (
+                            getattr(exc, "download_error", False)
+                            or item.get("stage") in {"downloading_media", "downloading_video", "cancelling_download"}
+                        )
+                        self._set_item_stage_locked(item, "download_failed" if download_failed else "failed", status="error")
+                        self._refresh_outputs_locked(item)
+                        self._persist_locked()
+                        logger.exception(
+                            "Queue task failed: job_id=%s index=%s file=%s",
+                            self._job_id,
+                            item["index"],
+                            item.get("source_path") or item.get("source_url"),
+                        )
 
             with self._lock:
                 self._current_index = None
@@ -1299,7 +1450,12 @@ class QueueManager:
         end = datetime.fromisoformat(self._finished_at) if self._finished_at else datetime.now().astimezone()
         return round(max(0.0, (end - start).total_seconds()), 1)
 
-    def _prepare_source(self, item: dict, item_snapshot: dict) -> Path:
+    def _prepare_source(
+        self,
+        item: dict,
+        item_snapshot: dict,
+        cancel_event: threading.Event | None = None,
+    ) -> Path:
         if item_snapshot.get("source_type") != "url":
             return Path(item_snapshot["source_path"])
 
@@ -1322,7 +1478,13 @@ class QueueManager:
                 status="downloading",
             )
             self._persist_locked()
-        metadata = downloader(item_snapshot["source_url"])
+        active_cancel_event = cancel_event or threading.Event()
+        metadata = self._process_download(
+            downloader,
+            item_snapshot["source_url"],
+            active_cancel_event,
+            self._download_progress_callback(item["index"]),
+        )
         source_path = Path(metadata["source_path"])
         if not source_path.exists():
             raise RuntimeError("Скачанный аудиофайл не найден.")

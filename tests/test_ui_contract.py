@@ -252,6 +252,26 @@ class UiContractTests(unittest.TestCase):
         self.assertIn(".queue-runtime-estimate", css)
         self.assertIn(".queue-estimate-button", css)
 
+    def test_queue_stage_progress_and_download_cancel_contract_exist(self) -> None:
+        app_js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        css = (STATIC_DIR / "style.css").read_text(encoding="utf-8")
+
+        self.assertIsNone(re.search(r"[А-Яа-яЁё]", app_js))
+        self.assertIsNone(re.search(r"[А-Яа-яЁё]", html))
+        self.assertIn("function createQueueStageProgress(queueItem)", app_js)
+        self.assertIn("queueItem.stage_progress", app_js)
+        self.assertIn('bar.removeAttribute("value")', app_js)
+        self.assertIn('wrapper.dataset.progressMode = progress.mode', app_js)
+        self.assertIn("queueStageCancellingDownload", app_js)
+        self.assertIn("queueStageDownloadCancelled", app_js)
+        self.assertIn("queueStageDownloadFailed", app_js)
+        self.assertIn('t("cancelDownload")', app_js)
+        self.assertIn(".queue-item-stage-progress", css)
+        self.assertIn("transition: width 220ms ease", css)
+        self.assertIn("function renderModelDownloadStatus(status)", app_js)
+        self.assertIn('id="modelDownloadProgress"', html)
+
     def test_processing_plan_polish_contract(self) -> None:
         app_js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
         html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
@@ -273,7 +293,8 @@ class UiContractTests(unittest.TestCase):
         self.assertEqual(1, app_js.count("runtimeSpeed.textContent ="))
         self.assertIn("pendingQueueCancellationIds", app_js)
         self.assertIn("queueItem.cancel_requested", app_js)
-        self.assertIn('button.textContent = t("cancelling")', app_js)
+        self.assertIn('"cancellingDownload"', app_js)
+        self.assertIn(': "cancelling",', app_js)
         self.assertIn('t("cancelRequestSent")', app_js)
 
     def test_queue_start_button_uses_processing_copy(self) -> None:

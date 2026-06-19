@@ -392,7 +392,8 @@ Key behavior:
 - URL items are created as media processing items. By default they transcribe audio, keep frame extraction off, and carry default frame extraction settings for later opt-in when no frontend processing plan is supplied.
 - Visible but disabled future operations are `ocr` and `cv`.
 - Queue item status remains the behavior switch for existing logic. Stage fields are a small UI/status model layered on top: `stage`, `stage_label_key`, and `stage_detail`.
-- Current stage IDs are `idle`, `preparing_source`, `downloading_media`, `downloading_video`, `transcribing_audio`, `cancelling_transcription`, `extracting_frames`, `cancelling`, `completed`, `failed`, and `cancelled`.
+- Current stage IDs are `idle`, `waiting_download`, `preparing_source`, `downloading_media`, `downloading_video`, `cancelling_download`, `download_cancelled`, `download_failed`, `transcribing_audio`, `cancelling_transcription`, `extracting_frames`, `cancelling`, `completed`, `failed`, and `cancelled`.
+- Active items expose one `stage_progress` object. `mode` is `determinate`, `indeterminate`, or `none`; determinate downloads may include percent/bytes/speed/ETA, and frame extraction may include completed/total units. Transcription stays indeterminate because the backend has no reliable segment total.
 - Future reserved stage IDs are `ocr_pending_future`, `cv_pending_future`, and `media_index_pending_future`; they are labels only and must not imply OCR/CV/media-index implementation.
 - Stores each item's actual processing plan in `processing_plan`. The current schema has `audio.enabled/model/device`, `frames.enabled/rate/interval_sec/jpeg_quality`, `ocr.enabled/engine/languages/status`, and `cv.enabled/engine/status`.
 - Default processing settings are frontend state for now. The frontend sends a snapshot with each add-files/add-recordings/add-urls request, so defaults apply only to newly added items.
@@ -612,10 +613,29 @@ Key behavior:
 - Uses `yt-dlp` for webpage/video-platform URLs such as YouTube or VK.
 - Accepts public HTTP(S) URLs.
 - Downloads direct media or extracts platform audio/video to `data\downloads`.
+- Accepts a cancellation event and progress callback for both direct and `yt-dlp` downloads.
+- Direct downloads stream into a unique `.part` path, report real byte progress from `Content-Length` when available, and atomically rename only after a non-empty successful download.
+- `yt-dlp` uses progress hooks for bytes/total/speed/ETA and postprocessor hooks for cancellation checks. Unknown totals remain indeterminate rather than using a fabricated percentage.
+- Cancellation raises `UrlDownloadCancelled`; the queue maps it to `download_cancelled` without creating a normal error artifact and continues to the next item.
+- Cancellation/failure cleanup only removes downloader-owned files inside the configured downloads directory. If a locked `yt-dlp` file cannot be deleted, cleanup attempts to quarantine it with a `.partial` suffix. Prefix cleanup never traverses or deletes outside that directory.
 - Returns source metadata to the queue and transcript store.
 - Keeps raw downloader failures in technical details while exposing readable queue errors for timeout and authorization/cookies cases.
 
-Direct download behavior is tested with mocked HTTP responses. Platform downloads are best-effort and depend on the installed `yt-dlp` version and platform support; cookies/browser-auth support remains future work.
+Progress callback schema:
+
+```json
+{
+  "mode": "determinate",
+  "percent": 43.2,
+  "downloaded_bytes": 12345678,
+  "total_bytes": 28765432,
+  "speed_bytes_per_sec": 123456,
+  "eta_sec": 132,
+  "source": "direct"
+}
+```
+
+Direct download behavior is tested with mocked HTTP responses. Platform downloads are best-effort and depend on the installed `yt-dlp` version and platform support; cookies/browser-auth support remains future work. This stage does not redesign model download progress; model lifecycle progress remains owned by `model_manager.py` and its existing UI.
 
 ## Frontend Files
 
@@ -773,9 +793,9 @@ Audio files, screen videos, input event JSONL files, merged videos, and new scre
 13. For URL frame extraction, `UrlDownloader.download_video()` downloads direct media URLs directly or asks `yt-dlp` for a video-readable media file under `data\downloads`; the queue reuses it for frame extraction and, when selected, transcription.
 14. For audio transcription, files are validated and passed to `AudioTranscriber`; `TranscriptStore` saves TXT and JSON outputs.
 15. For frame extraction, `VideoFrameExtractor` writes JPEGs and `frames_index.json` under `data\recordings\<base>__frames`.
-16. A running item can be cancelled while its status is `extracting_audio`, `transcribing`, or `extracting_frames`; cancellation is cooperative and the worker continues to the next pending item.
+16. A running item can be cancelled while its status is `downloading`, `extracting_audio`, `transcribing`, or `extracting_frames`; cancellation is cooperative and the worker continues to the next pending item.
 17. Transcription cancellation may wait for the current model-loading step or Whisper segment to finish. Partial transcripts are saved with a `__partial_cancelled__` marker and cancelled/partial JSON metadata. Frame extraction cancellation keeps partial frames and marks `frames_index.json` cancelled/incomplete.
-18. Running URL download is currently not cancellable. Cancellation becomes available after the URL item reaches transcription or frame extraction.
+18. URL download cancellation signals the active downloader event, moves the item through `cancelling_download` to `download_cancelled`, cleans partial files, and continues the queue.
 19. On full success only, `StorageManager.apply_retention_cleanup()` may delete downloaded URL media or uploaded temp files when the user disabled the matching keep setting. It never deletes primary outputs.
 20. Terminal queue items refresh `outputs` so the UI can show created artifacts, missing/deleted markers, and cleanup errors directly on the item card.
 21. Queue status shows counts, current item, current stage, elapsed time, ETA, progress, operation settings, estimates, downloaded media paths, transcript output paths, frame folder paths, frame counts, frame index paths, and output artifacts.
@@ -784,10 +804,13 @@ Audio files, screen videos, input event JSONL files, merged videos, and new scre
 
 Stage transitions are intentionally coarse and persistent:
 
-- pending item: `idle`;
+- pending local item: `idle`;
+- pending URL item: `waiting_download`;
 - local item setup and post-download metadata/duration checks: `preparing_source`;
 - URL audio/media download: `downloading_media`;
 - URL video-readable download for frame extraction: `downloading_video`;
+- requested URL download cancellation: `cancelling_download`;
+- terminal URL download states: `download_cancelled` or `download_failed`;
 - audio extraction/transcription: `transcribing_audio`;
 - requested transcription cancellation: `cancelling_transcription`;
 - frame extraction: `extracting_frames`;
@@ -828,7 +851,7 @@ URL source
   -> future combined media index
 ```
 
-URL frame indexes can include `source_type`, `source_url`, source title/platform, and downloaded media paths when that metadata is available. Direct URL extension detection ignores query strings, so `video.mp4?token=abc` is treated as a direct `.mp4` file. If transcription succeeds and frame extraction fails, the transcript path remains on the queue item. If transcription fails but frame extraction was selected, the worker still attempts frame extraction and preserves frame outputs if they succeed. OCR, CV, cookies/authentication, playlists, video quality selection, and URL download cancellation remain non-goals.
+URL frame indexes can include `source_type`, `source_url`, source title/platform, and downloaded media paths when that metadata is available. Direct URL extension detection ignores query strings, so `video.mp4?token=abc` is treated as a direct `.mp4` file. If transcription succeeds and frame extraction fails, the transcript path remains on the queue item. If transcription fails but frame extraction was selected, the worker still attempts frame extraction and preserves frame outputs if they succeed. OCR, CV, cookies/authentication, playlists, and video quality selection remain non-goals.
 
 Manual cancellation checklist:
 
@@ -836,6 +859,7 @@ Manual cancellation checklist:
 - Cancelling a long transcription shows `cancelling_transcription`, then a cancelled item with a partial transcript marker when text was recognized.
 - After cancelling the first of two queued items, the second pending item runs normally.
 - Frame extraction cancellation still preserves partial frames and cancelled index metadata.
+- Cancelling a direct or `yt-dlp` download shows `cancelling_download`, removes downloader-owned partial files, marks the item `download_cancelled`, and continues to the next pending item.
 - URL transcription can be cancelled after download when the item is in transcription.
 
 Manual cleanup for `data\downloads` and `data\uploads` is separate from queue retention. It is user-triggered, confirmed in the UI, and returns deleted counts plus per-entry errors. Do not add destructive cleanup for `data\recordings` or `data\transcripts` without a separate product requirement.

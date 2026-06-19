@@ -10,7 +10,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from app.queue_manager import QueueFile, QueueManager, QueueUrl
-from app.url_downloader import UrlDownloader
+from app.url_downloader import UrlDownloadCancelled, UrlDownloader
 
 
 PROJECT_TMP = Path(__file__).resolve().parents[1] / "tmp"
@@ -290,8 +290,8 @@ class QueueManagerTests(unittest.TestCase):
 
         self.assertEqual("url", item["source_type"])
         self.assertEqual("url", item["media_kind"])
-        self.assertEqual("idle", item["stage"])
-        self.assertEqual("queueStageIdle", item["stage_label_key"])
+        self.assertEqual("waiting_download", item["stage"])
+        self.assertEqual("queueStageWaitingDownload", item["stage_label_key"])
         self.assertTrue(item["operations"]["transcribe_audio"])
         self.assertFalse(item["operations"]["extract_frames"])
         self.assertFalse(item["operations"]["ocr"])
@@ -517,6 +517,85 @@ class QueueManagerTests(unittest.TestCase):
         release.set()
         manager.wait(timeout=3)
 
+    def test_url_download_progress_and_cancellation_continue_queue(self) -> None:
+        download_started = threading.Event()
+        processed: list[str] = []
+
+        def downloader(_url: str, cancel_event: threading.Event, progress_callback) -> dict:
+            progress_callback({
+                "mode": "determinate",
+                "percent": 43.2,
+                "downloaded_bytes": 432,
+                "total_bytes": 1000,
+                "speed_bytes_per_sec": 100,
+                "eta_sec": 6,
+                "source": "direct",
+            })
+            download_started.set()
+            cancel_event.wait(timeout=3)
+            raise UrlDownloadCancelled()
+
+        def processor(item: dict, _model: str, _device: str) -> dict:
+            processed.append(item["source_filename"])
+            return {"processing_time_sec": 1, "audio_duration_sec": 1}
+
+        manager = self.make_manager(
+            processor=processor,
+            downloader=downloader,
+            duration_reader=lambda _path: 1,
+        )
+        status = self.track_job(manager.add_urls([QueueUrl("https://example.test/slow")]))
+        manager.add_files([self.make_file("after.wav")])
+
+        manager.start("small", "cpu")
+        self.assertTrue(download_started.wait(timeout=2))
+        active = manager.status()["current_item"]
+        self.assertEqual("downloading_media", active["stage"])
+        self.assertEqual("determinate", active["stage_progress"]["mode"])
+        self.assertEqual(43.2, active["stage_progress"]["percent"])
+
+        cancelling = manager.cancel_item(status["items"][0]["index"])
+        self.assertEqual("cancelling_download", cancelling["current_stage"])
+        self.assertTrue(cancelling["current_item"]["cancel_requested"])
+        manager.wait(timeout=3)
+
+        result = manager.status()
+        self.assertEqual("completed", result["status"])
+        self.assertEqual(["cancelled", "completed"], [item["status"] for item in result["items"]])
+        self.assertEqual("download_cancelled", result["items"][0]["stage"])
+        self.assertEqual(["after.wav"], processed)
+
+    def test_frame_extraction_progress_updates_stage_percent(self) -> None:
+        progress_seen = threading.Event()
+        release = threading.Event()
+
+        def frame_processor(_item: dict, _cancel_event: threading.Event, progress_callback) -> dict:
+            progress_callback({"estimated_frame_count": 10, "extracted_frame_count": 4})
+            progress_seen.set()
+            release.wait(timeout=3)
+            return {"status": "completed", "completed": True, "estimated_frame_count": 10, "extracted_frame_count": 10}
+
+        manager = self.make_manager(
+            processor=lambda _item, _model, _device: {},
+            frame_processor=frame_processor,
+            duration_reader=lambda _path: 10,
+            video_metadata_reader=lambda _path: {"duration_sec": 10, "fps": 30, "width": 100, "height": 50},
+        )
+        manager.add_files([QueueFile(
+            source_path=self.make_file("progress.mp4").source_path,
+            source_filename="progress.mp4",
+            operations={"transcribe_audio": False, "extract_frames": True},
+        )])
+        manager.start("small", "cpu")
+        self.assertTrue(progress_seen.wait(timeout=2))
+
+        active = manager.status()["current_item"]
+        self.assertEqual("extracting_frames", active["stage"])
+        self.assertEqual(40.0, active["stage_progress"]["percent"])
+        self.assertEqual(4, active["stage_progress"]["completed_units"])
+        release.set()
+        manager.wait(timeout=3)
+
     def test_frame_extraction_exposes_stage_and_terminal_cancel_stage(self) -> None:
         started = threading.Event()
 
@@ -551,8 +630,8 @@ class QueueManagerTests(unittest.TestCase):
         self.assertTrue(started.wait(timeout=2))
         status = manager.status()
         self.assertEqual("extracting_frames", status["current_stage"])
-        manager.cancel_item(1)
-        self.assertEqual("cancelling", manager.status()["current_stage"])
+        cancelling = manager.cancel_item(1)
+        self.assertEqual("cancelling", cancelling["current_stage"])
         manager.wait(timeout=3)
         item = manager.status()["items"][0]
         self.assertEqual("cancelled", item["status"])

@@ -24,6 +24,8 @@ This project is a separate fork of `LocalAudioTranscriber`. The current version 
 - Extract and transcribe the audio track from supported video files.
 - Choose per-video queue operations: transcribe audio, extract frames, or both.
 - Choose URL queue operations: transcribe audio, extract frames from a downloaded video-readable file, or both.
+- See direct URL download bytes, total size, speed, ETA, and percentage when the server provides a size; unknown-size and platform downloads show an active indeterminate state.
+- Cancel an active direct or `yt-dlp` URL download without stopping the app; partial download files are removed and the queue continues.
 - Extract video frames to a per-source folder with a `frames_index.json` manifest.
 - Choose JPEG quality `75`, `80`, `85`, `90`, `95`, or `100` for frame extraction; `90` is the default.
 - Run a 60-second runtime estimate for a pending item's enabled transcription and frame extraction operations before full processing.
@@ -140,6 +142,7 @@ Queue usability:
 - Add buttons are disabled while a file, latest recording, or link is being added. If the laptop is slow, wait for the visible "Adding..." or stage message instead of clicking repeatedly.
 - Fast repeated clicks and active duplicate file/link adds are ignored before they can create duplicate queue items.
 - Queue stages include preparing source, downloading media/video, transcribing audio, cancelling transcription/frame extraction, extracting frames, completed, failed, and cancelled.
+- Active item cards show determinate stage progress for URL downloads and frame extraction when counts are known, or an indeterminate progress bar when the backend cannot provide a real percentage.
 - Default processing settings live near the queue controls. They define the audio model/device, frame extraction defaults, and OCR/CV placeholders for newly added items only.
 - Each queue item stores its own processing plan. Changing defaults later does not silently mutate existing items; pending item settings override defaults.
 - Pending local items have an **Estimate time** action. It tests up to the first 60 seconds with that item's model/device and frame interval/JPEG quality, then shows separate and combined approximate runtimes.
@@ -226,7 +229,7 @@ C:\Python\LocalMediaTranscriber\data\logs\app.log
 
 Runtime output under `data\recordings`, `data\transcripts`, `data\uploads`, `data\downloads`, `data\jobs`, and `data\logs` is ignored by Git.
 
-Current cancellation behavior: pending or waiting queue items can be removed; running audio transcription and running frame extraction can be cancelled cooperatively, and the queue continues with the next pending item. Audio transcription cancellation is safe but not an unsafe thread kill, so it may finish after the current Whisper segment or model-loading step. Cancelled transcription saves any recognized text as a clearly marked partial transcript with `__partial_cancelled__` in the filename and `status: "cancelled"` / `partial: true` in the diagnostic JSON; the queue does not present that file as a successful final transcript.
+Current cancellation behavior: pending or waiting queue items can be removed; active URL downloads, audio transcription, and frame extraction can be cancelled cooperatively, and the queue continues with the next pending item. Direct downloads stop at the next streaming chunk; `yt-dlp` downloads stop through progress/postprocessor hooks. Cancelled or failed downloads remove their owned partial files instead of exposing them as completed media. Audio transcription cancellation is safe but not an unsafe thread kill, so it may finish after the current Whisper segment or model-loading step. Cancelled transcription saves any recognized text as a clearly marked partial transcript with `__partial_cancelled__` in the filename and `status: "cancelled"` / `partial: true` in the diagnostic JSON; the queue does not present that file as a successful final transcript.
 
 Microphone privacy behavior: microphone access is requested only when the user starts a recording that includes the microphone source. Queue processing, URL downloads, local file transcription, frame extraction, storage views, and normal UI browsing do not use the microphone. The level meters stay idle until a matching recording source is active, and the recording stop flow releases the microphone stream.
 

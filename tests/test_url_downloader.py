@@ -1,12 +1,13 @@
 import sys
 import shutil
+import threading
 import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
 
-from app.url_downloader import UrlDownloader, get_direct_media_url_extension, is_direct_media_url
+from app.url_downloader import UrlDownloadCancelled, UrlDownloader, get_direct_media_url_extension, is_direct_media_url
 
 
 PROJECT_TMP = Path(__file__).resolve().parents[1] / "tmp"
@@ -41,10 +42,11 @@ class CookieErrorYoutubeDL(FakeYoutubeDL):
 
 
 class FakeHttpResponse:
-    def __init__(self, chunks: list[bytes], *, status: int = 200) -> None:
+    def __init__(self, chunks: list[bytes | Exception], *, status: int = 200, headers: dict | None = None, on_read=None) -> None:
         self.chunks = list(chunks)
         self.status = status
-        self.headers = {}
+        self.headers = headers or {}
+        self.on_read = on_read
 
     def __enter__(self):
         return self
@@ -58,7 +60,12 @@ class FakeHttpResponse:
     def read(self, _size: int) -> bytes:
         if not self.chunks:
             return b""
-        return self.chunks.pop(0)
+        chunk = self.chunks.pop(0)
+        if isinstance(chunk, Exception):
+            raise chunk
+        if self.on_read is not None:
+            self.on_read()
+        return chunk
 
 
 class UrlDownloaderTests(unittest.TestCase):
@@ -137,6 +144,79 @@ class UrlDownloaderTests(unittest.TestCase):
         self.assertEqual("direct", result["source_platform"])
         self.assertTrue(Path(result["source_path"]).exists())
         self.assertEqual(result["source_path"], result["downloaded_media_path"])
+
+    def test_direct_download_reports_determinate_progress_with_content_length(self) -> None:
+        progress: list[dict] = []
+        response = FakeHttpResponse([b"1234", b"567890"], headers={"Content-Length": "10"})
+        downloader = UrlDownloader(self.root)
+        with patch("app.url_downloader.urlopen", return_value=response):
+            downloader.download_video(
+                "https://example.test/known.mp4",
+                progress_callback=progress.append,
+            )
+
+        self.assertEqual("determinate", progress[0]["mode"])
+        self.assertEqual(10, progress[-1]["downloaded_bytes"])
+        self.assertEqual(10, progress[-1]["total_bytes"])
+        self.assertEqual(100.0, progress[-1]["percent"])
+
+    def test_direct_download_reports_indeterminate_progress_without_content_length(self) -> None:
+        progress: list[dict] = []
+        downloader = UrlDownloader(self.root)
+        with patch("app.url_downloader.urlopen", return_value=FakeHttpResponse([b"unknown-size"])):
+            downloader.download_video(
+                "https://example.test/unknown.mp4",
+                progress_callback=progress.append,
+            )
+
+        active = [item for item in progress if item["percent"] is None]
+        self.assertTrue(active)
+        self.assertEqual("indeterminate", active[-1]["mode"])
+        self.assertEqual(len(b"unknown-size"), active[-1]["downloaded_bytes"])
+
+    def test_direct_download_cancellation_removes_partial_file(self) -> None:
+        cancel_event = threading.Event()
+        response = FakeHttpResponse([b"partial", b"more"], on_read=cancel_event.set)
+        downloader = UrlDownloader(self.root)
+        with patch("app.url_downloader.urlopen", return_value=response):
+            with self.assertRaises(UrlDownloadCancelled):
+                downloader.download_video(
+                    "https://example.test/cancel.mp4",
+                    cancel_event=cancel_event,
+                )
+
+        self.assertEqual([], list(self.root.iterdir()))
+
+    def test_failed_direct_download_removes_partial_file(self) -> None:
+        response = FakeHttpResponse([b"partial", OSError("connection lost")])
+        downloader = UrlDownloader(self.root)
+        with patch("app.url_downloader.urlopen", return_value=response):
+            with self.assertRaisesRegex(RuntimeError, "connection lost"):
+                downloader.download_video("https://example.test/fail.mp4")
+
+        self.assertEqual([], list(self.root.iterdir()))
+
+    def test_ytdlp_progress_hook_cancellation_cleans_partial_files(self) -> None:
+        cancel_event = threading.Event()
+
+        class CancellingYoutubeDL(FakeYoutubeDL):
+            def extract_info(self, _url: str, download: bool) -> dict:
+                self.path.with_suffix(".part").write_bytes(b"partial")
+                cancel_event.set()
+                self.options["progress_hooks"][0]({"status": "downloading", "downloaded_bytes": 1})
+                return {}
+
+        fake_module = types.SimpleNamespace(YoutubeDL=CancellingYoutubeDL)
+        downloader = UrlDownloader(self.root)
+        with patch.dict(sys.modules, {"yt_dlp": fake_module}):
+            with patch("app.url_downloader.timestamp_for_filename", return_value=self.prefix):
+                with self.assertRaises(UrlDownloadCancelled):
+                    downloader.download_video(
+                        "https://example.test/watch",
+                        cancel_event=cancel_event,
+                    )
+
+        self.assertEqual([], list(self.root.iterdir()))
 
     def test_direct_download_timeout_uses_readable_message_and_technical_details(self) -> None:
         downloader = UrlDownloader(self.root)

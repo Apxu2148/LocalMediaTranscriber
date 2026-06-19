@@ -1,7 +1,10 @@
 import logging
 import socket
+import threading
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import unquote, urlparse
 from urllib.request import Request, urlopen
@@ -22,9 +25,19 @@ DIRECT_DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 
 
 class UrlDownloadError(RuntimeError):
+    download_error = True
+
     def __init__(self, message: str, *, technical_details: str | None = None) -> None:
         super().__init__(message)
         self.technical_details = technical_details or message
+
+
+class UrlDownloadCancelled(RuntimeError):
+    cancelled = True
+
+    def __init__(self) -> None:
+        super().__init__("URL download was cancelled.")
+        self.technical_details = "URL download was cancelled by the user."
 
 
 def get_direct_media_url_extension(url: str) -> str | None:
@@ -57,11 +70,16 @@ class UrlDownloader:
     def __init__(self, downloads_dir: Path | None = None) -> None:
         self.downloads_dir = downloads_dir or config.DOWNLOADS_DIR
 
-    def download(self, source_url: str) -> dict:
+    def download(
+        self,
+        source_url: str,
+        cancel_event: threading.Event | None = None,
+        progress_callback: Callable[[dict], None] | None = None,
+    ) -> dict:
         url = self._validate_url(source_url)
         direct_extension = get_direct_media_url_extension(url)
         if direct_extension:
-            return self._download_direct_media(url, direct_extension)
+            return self._download_direct_media(url, direct_extension, cancel_event, progress_callback)
 
         self.downloads_dir.mkdir(parents=True, exist_ok=True)
         prefix = f"url__{timestamp_for_filename()}__{uuid4().hex[:8]}"
@@ -74,6 +92,25 @@ class UrlDownloader:
                 "Не найден yt-dlp. Установите зависимости из requirements-cpu.txt и перезапустите run.bat."
             ) from exc
 
+        cancelled = False
+
+        def progress_hook(progress: dict) -> None:
+            nonlocal cancelled
+            if cancel_event is not None and cancel_event.is_set():
+                cancelled = True
+                raise UrlDownloadCancelled()
+            if progress.get("status") == "downloading":
+                self._emit_progress(
+                    progress_callback,
+                    self._yt_dlp_progress(progress),
+                )
+
+        def postprocessor_hook(_progress: dict) -> None:
+            nonlocal cancelled
+            if cancel_event is not None and cancel_event.is_set():
+                cancelled = True
+                raise UrlDownloadCancelled()
+
         options = {
             "format": "m4a/bestaudio/best",
             "outtmpl": output_template,
@@ -83,6 +120,8 @@ class UrlDownloader:
             "retries": 3,
             "fragment_retries": 3,
             "socket_timeout": 15,
+            "progress_hooks": [progress_hook],
+            "postprocessor_hooks": [postprocessor_hook],
             "postprocessors": [
                 {
                     "key": "FFmpegExtractAudio",
@@ -92,16 +131,22 @@ class UrlDownloader:
         }
 
         logger.info("Downloading URL audio: url=%s output=%s", url, output_template)
+        self._emit_progress(progress_callback, self._indeterminate_progress("yt_dlp"))
         try:
             with yt_dlp.YoutubeDL(options) as downloader:
                 info = downloader.extract_info(url, download=True)
                 prepared_path = Path(downloader.prepare_filename(info))
         except Exception as exc:
+            self._cleanup_prefix(prefix)
+            if cancelled or (cancel_event is not None and cancel_event.is_set()) or getattr(exc, "cancelled", False):
+                logger.info("URL audio download cancelled: url=%s", url)
+                raise UrlDownloadCancelled() from exc
             logger.exception("URL audio download failed: url=%s", url)
             raise self._friendly_download_error(exc, prefix="Не удалось скачать аудио по ссылке") from exc
 
         source_path = self._find_downloaded_audio(prefix, prepared_path)
         if source_path is None:
+            self._cleanup_prefix(prefix)
             raise RuntimeError("yt-dlp завершил работу, но извлеченный аудиофайл не найден.")
 
         result = DownloadedAudio(
@@ -118,13 +163,19 @@ class UrlDownloader:
             result.source_title,
             result.audio_duration_sec,
         )
+        self._emit_progress(progress_callback, self._completed_progress(result.source_path.stat().st_size, "yt_dlp"))
         return result.as_dict()
 
-    def download_video(self, source_url: str) -> dict:
+    def download_video(
+        self,
+        source_url: str,
+        cancel_event: threading.Event | None = None,
+        progress_callback: Callable[[dict], None] | None = None,
+    ) -> dict:
         url = self._validate_url(source_url)
         direct_extension = get_direct_media_url_extension(url)
         if direct_extension:
-            return self._download_direct_media(url, direct_extension)
+            return self._download_direct_media(url, direct_extension, cancel_event, progress_callback)
 
         self.downloads_dir.mkdir(parents=True, exist_ok=True)
         prefix = f"url_video__{timestamp_for_filename()}__{uuid4().hex[:8]}"
@@ -137,6 +188,22 @@ class UrlDownloader:
                 "Не найден yt-dlp. Установите зависимости из requirements-cpu.txt и перезапустите run.bat."
             ) from exc
 
+        cancelled = False
+
+        def progress_hook(progress: dict) -> None:
+            nonlocal cancelled
+            if cancel_event is not None and cancel_event.is_set():
+                cancelled = True
+                raise UrlDownloadCancelled()
+            if progress.get("status") == "downloading":
+                self._emit_progress(progress_callback, self._yt_dlp_progress(progress))
+
+        def postprocessor_hook(_progress: dict) -> None:
+            nonlocal cancelled
+            if cancel_event is not None and cancel_event.is_set():
+                cancelled = True
+                raise UrlDownloadCancelled()
+
         options = {
             "format": "bv*+ba/bestvideo+bestaudio/best",
             "outtmpl": output_template,
@@ -147,19 +214,27 @@ class UrlDownloader:
             "retries": 3,
             "fragment_retries": 3,
             "socket_timeout": 15,
+            "progress_hooks": [progress_hook],
+            "postprocessor_hooks": [postprocessor_hook],
         }
 
         logger.info("Downloading URL video: url=%s output=%s", url, output_template)
+        self._emit_progress(progress_callback, self._indeterminate_progress("yt_dlp"))
         try:
             with yt_dlp.YoutubeDL(options) as downloader:
                 info = downloader.extract_info(url, download=True)
                 prepared_path = Path(downloader.prepare_filename(info))
         except Exception as exc:
+            self._cleanup_prefix(prefix)
+            if cancelled or (cancel_event is not None and cancel_event.is_set()) or getattr(exc, "cancelled", False):
+                logger.info("URL video download cancelled: url=%s", url)
+                raise UrlDownloadCancelled() from exc
             logger.exception("URL video download failed: url=%s", url)
             raise self._friendly_download_error(exc, prefix="Не удалось скачать видео по ссылке") from exc
 
         source_path = self._find_downloaded_video(prefix, prepared_path)
         if source_path is None:
+            self._cleanup_prefix(prefix)
             raise RuntimeError("yt-dlp завершил работу, но видеофайл не найден.")
 
         result = DownloadedAudio(
@@ -178,11 +253,19 @@ class UrlDownloader:
             result["source_title"],
             result["audio_duration_sec"],
         )
+        self._emit_progress(progress_callback, self._completed_progress(source_path.stat().st_size, "yt_dlp"))
         return result
 
-    def _download_direct_media(self, url: str, extension: str) -> dict:
+    def _download_direct_media(
+        self,
+        url: str,
+        extension: str,
+        cancel_event: threading.Event | None = None,
+        progress_callback: Callable[[dict], None] | None = None,
+    ) -> dict:
         self.downloads_dir.mkdir(parents=True, exist_ok=True)
         target_path = self._reserve_download_path(self._direct_media_filename(url, extension))
+        partial_path = target_path.with_name(f"{target_path.name}.{uuid4().hex[:8]}.part")
         request = Request(url, headers={"User-Agent": "LocalMediaTranscriber/1.0"})
 
         logger.info("Downloading direct media URL: url=%s output=%s", url, target_path)
@@ -194,23 +277,51 @@ class UrlDownloader:
                 if status and int(status) >= 400:
                     raise HTTPError(url, int(status), f"HTTP {status}", getattr(response, "headers", None), None)
 
-                with target_path.open("xb") as file:
+                total_bytes = self._content_length(response)
+                downloaded_bytes = 0
+                started_at = time.monotonic()
+                self._emit_progress(
+                    progress_callback,
+                    self._download_progress(downloaded_bytes, total_bytes, started_at, "direct"),
+                )
+                with partial_path.open("xb") as file:
                     while True:
+                        if cancel_event is not None and cancel_event.is_set():
+                            raise UrlDownloadCancelled()
                         chunk = response.read(DIRECT_DOWNLOAD_CHUNK_BYTES)
                         if not chunk:
                             break
                         file.write(chunk)
+                        downloaded_bytes += len(chunk)
+                        self._emit_progress(
+                            progress_callback,
+                            self._download_progress(downloaded_bytes, total_bytes, started_at, "direct"),
+                        )
+                if cancel_event is not None and cancel_event.is_set():
+                    raise UrlDownloadCancelled()
+        except UrlDownloadCancelled:
+            self._safe_unlink_partial(partial_path)
+            logger.info("Direct media download cancelled: url=%s", url)
+            raise
         except Exception as exc:
-            target_path.unlink(missing_ok=True)
+            self._safe_unlink_partial(partial_path)
             logger.exception("Direct media download failed: url=%s", url)
             raise self._friendly_download_error(exc, prefix="Не удалось скачать медиафайл") from exc
 
-        if not target_path.exists() or target_path.stat().st_size <= 0:
-            target_path.unlink(missing_ok=True)
+        if not partial_path.exists() or partial_path.stat().st_size <= 0:
+            self._safe_unlink_partial(partial_path)
             raise UrlDownloadError(
                 "Не удалось скачать медиафайл: скачанный файл пустой.",
                 technical_details="Downloaded direct media file is empty.",
             )
+        try:
+            partial_path.replace(target_path)
+        except OSError as exc:
+            self._safe_unlink_partial(partial_path)
+            raise UrlDownloadError(
+                "Не удалось завершить скачивание медиафайла.",
+                technical_details=str(exc),
+            ) from exc
 
         result = DownloadedAudio(
             source_path=target_path,
@@ -222,7 +333,107 @@ class UrlDownloader:
         if extension in DIRECT_VIDEO_EXTENSIONS:
             result["downloaded_video_path"] = str(target_path)
         logger.info("Direct media downloaded: url=%s file=%s size=%s", url, target_path, target_path.stat().st_size)
+        self._emit_progress(progress_callback, self._completed_progress(target_path.stat().st_size, "direct"))
         return result
+
+    @staticmethod
+    def _content_length(response) -> int | None:
+        headers = getattr(response, "headers", None)
+        value = headers.get("Content-Length") if headers is not None and hasattr(headers, "get") else None
+        try:
+            total = int(value) if value is not None else None
+            return total if total and total > 0 else None
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _emit_progress(callback: Callable[[dict], None] | None, progress: dict) -> None:
+        if callback is not None:
+            callback(progress)
+
+    @staticmethod
+    def _indeterminate_progress(source: str) -> dict:
+        return {
+            "mode": "indeterminate",
+            "percent": None,
+            "downloaded_bytes": 0,
+            "total_bytes": None,
+            "speed_bytes_per_sec": None,
+            "eta_sec": None,
+            "source": source,
+        }
+
+    @staticmethod
+    def _completed_progress(downloaded_bytes: int, source: str) -> dict:
+        return {
+            "mode": "determinate",
+            "percent": 100.0,
+            "downloaded_bytes": downloaded_bytes,
+            "total_bytes": downloaded_bytes,
+            "speed_bytes_per_sec": None,
+            "eta_sec": 0,
+            "source": source,
+        }
+
+    @staticmethod
+    def _download_progress(downloaded_bytes: int, total_bytes: int | None, started_at: float, source: str) -> dict:
+        elapsed = max(0.001, time.monotonic() - started_at)
+        speed = downloaded_bytes / elapsed if downloaded_bytes > 0 else None
+        remaining = max(0, total_bytes - downloaded_bytes) if total_bytes is not None else None
+        eta = remaining / speed if remaining is not None and speed else None
+        percent = min(100.0, downloaded_bytes * 100.0 / total_bytes) if total_bytes else None
+        return {
+            "mode": "determinate" if total_bytes else "indeterminate",
+            "percent": round(percent, 1) if percent is not None else None,
+            "downloaded_bytes": downloaded_bytes,
+            "total_bytes": total_bytes,
+            "speed_bytes_per_sec": round(speed, 1) if speed is not None else None,
+            "eta_sec": round(eta, 1) if eta is not None else None,
+            "source": source,
+        }
+
+    @staticmethod
+    def _yt_dlp_progress(progress: dict) -> dict:
+        downloaded = int(progress.get("downloaded_bytes") or 0)
+        total_value = progress.get("total_bytes") or progress.get("total_bytes_estimate")
+        try:
+            total = int(total_value) if total_value else None
+        except (TypeError, ValueError):
+            total = None
+        percent = min(100.0, downloaded * 100.0 / total) if total else None
+        return {
+            "mode": "determinate" if total else "indeterminate",
+            "percent": round(percent, 1) if percent is not None else None,
+            "downloaded_bytes": downloaded,
+            "total_bytes": total,
+            "speed_bytes_per_sec": UrlDownloader._optional_float(progress.get("speed")),
+            "eta_sec": UrlDownloader._optional_float(progress.get("eta")),
+            "source": "yt_dlp",
+        }
+
+    def _safe_unlink_partial(self, path: Path) -> None:
+        try:
+            if path.resolve().parent == self.downloads_dir.resolve():
+                path.unlink(missing_ok=True)
+        except OSError:
+            logger.warning("Could not remove partial download: path=%s", path, exc_info=True)
+
+    def _cleanup_prefix(self, prefix: str) -> None:
+        try:
+            root = self.downloads_dir.resolve()
+            for path in self.downloads_dir.glob(f"{prefix}.*"):
+                try:
+                    if path.is_file() and path.resolve().parent == root:
+                        path.unlink(missing_ok=True)
+                except OSError:
+                    quarantine_path = path.with_name(f"{path.name}.partial")
+                    try:
+                        if path.resolve().parent == root:
+                            path.replace(quarantine_path)
+                    except OSError:
+                        logger.warning("Could not remove or quarantine partial yt-dlp file: path=%s", path, exc_info=True)
+        except OSError:
+            logger.warning("Could not inspect partial yt-dlp files: prefix=%s", prefix, exc_info=True)
 
     def _direct_media_filename(self, url: str, extension: str) -> str:
         parsed = urlparse(url)
