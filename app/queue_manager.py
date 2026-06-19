@@ -78,6 +78,7 @@ class QueueManager:
         frame_processor: Callable[[dict, threading.Event, Callable[[dict], None]], dict] | None = None,
         video_metadata_reader: Callable[[Path], dict] | None = read_video_metadata,
         retention_cleaner: Callable[[dict], dict] | None = None,
+        estimate_processor: Callable[[dict], dict] | None = None,
     ) -> None:
         self.jobs_dir = jobs_dir
         self.processor = processor
@@ -89,6 +90,7 @@ class QueueManager:
         self.frame_processor = frame_processor
         self.video_metadata_reader = video_metadata_reader
         self.retention_cleaner = retention_cleaner
+        self.estimate_processor = estimate_processor
         self._processor_accepts_cancel_event = self._callable_accepts_cancel_event(processor)
 
         self._lock = threading.RLock()
@@ -105,6 +107,7 @@ class QueueManager:
         self._stop_after_current = False
         self._worker: threading.Thread | None = None
         self._cancel_events: dict[int, threading.Event] = {}
+        self._estimating_indices: set[int] = set()
 
     @staticmethod
     def _callable_accepts_cancel_event(callback: Callable) -> bool:
@@ -131,6 +134,11 @@ class QueueManager:
     def is_running(self) -> bool:
         with self._lock:
             return self._is_running_locked()
+
+    @property
+    def is_estimating(self) -> bool:
+        with self._lock:
+            return bool(self._estimating_indices)
 
     def add_files(self, files: list[QueueFile]) -> dict:
         if not files:
@@ -231,6 +239,7 @@ class QueueManager:
                     "technical_details": None,
                     "partial_transcript": False,
                     "outputs": {},
+                    "estimate": None,
                 }
                 self._sync_legacy_fields_from_processing_plan(item)
                 self._refresh_frame_estimate_locked(item)
@@ -245,6 +254,7 @@ class QueueManager:
     def start(self, model: str, device_preference: str = "auto") -> dict:
         with self._lock:
             self._ensure_inactive_locked("Очередь уже выполняется.")
+            self._ensure_no_estimate_locked()
             if not any(item["status"] == "pending" for item in self._items):
                 raise RuntimeError("В очереди нет ожидающих задач.")
 
@@ -283,6 +293,7 @@ class QueueManager:
     def clear(self) -> dict:
         with self._lock:
             self._ensure_inactive_locked("Нельзя очистить очередь во время обработки.")
+            self._ensure_no_estimate_locked()
             logger.info("Queue cleared: job_id=%s items=%s", self._job_id, len(self._items))
             self._items = []
             self._job_id = None
@@ -301,6 +312,7 @@ class QueueManager:
     def retry_errors(self) -> dict:
         with self._lock:
             self._ensure_inactive_locked("Нельзя повторить задачи во время обработки очереди.")
+            self._ensure_no_estimate_locked()
             failed_items = [item for item in self._items if item["status"] in {"error", "failed"}]
             if not failed_items:
                 raise RuntimeError("В очереди нет ошибочных задач для повтора.")
@@ -347,6 +359,7 @@ class QueueManager:
     ) -> dict:
         with self._lock:
             self._ensure_inactive_locked("Нельзя менять параметры задач во время обработки очереди.")
+            self._ensure_no_estimate_locked()
             item = self._find_item_locked(index)
             if item["status"] != "pending":
                 raise RuntimeError("Можно менять только ожидающие задачи очереди.")
@@ -366,12 +379,14 @@ class QueueManager:
             )
             self._sync_legacy_fields_from_processing_plan(item)
             self._refresh_frame_estimate_locked(item)
+            item["estimate"] = None
             self._persist_locked()
             logger.info("Queue item updated: job_id=%s index=%s", self._job_id, index)
             return self._status_snapshot_locked()
 
     def remove_item(self, index: int) -> dict:
         with self._lock:
+            self._ensure_no_estimate_locked()
             item = self._find_item_locked(index)
             if item["status"] != "pending":
                 raise RuntimeError("Можно удалить только ожидающую задачу очереди.")
@@ -392,6 +407,54 @@ class QueueManager:
                 self._status = "pending"
             self._persist_locked()
             logger.info("Queue item removed: job_id=%s index=%s", self._job_id, index)
+            return self._status_snapshot_locked()
+
+    def estimate_item(self, index: int) -> dict:
+        with self._lock:
+            self._ensure_inactive_locked("Нельзя запускать оценку во время обработки очереди.")
+            self._ensure_no_estimate_locked()
+            if self.estimate_processor is None:
+                raise RuntimeError("Оценка времени не настроена.")
+            item = self._find_item_locked(index)
+            if item["status"] != "pending":
+                raise RuntimeError("Оценка доступна только для ожидающих задач очереди.")
+            self._sync_legacy_fields_from_processing_plan(item)
+            item["estimate"] = {
+                "status": "estimating",
+                "created_at": self._now(),
+            }
+            self._estimating_indices.add(index)
+            item_snapshot = copy.deepcopy(item)
+            self._persist_locked()
+
+        try:
+            estimate = self.estimate_processor(item_snapshot)
+        except Exception as exc:
+            error_code = getattr(exc, "code", None) or "estimate_failed"
+            estimate = {
+                "status": "failed",
+                "created_at": self._now(),
+                "error_code": error_code,
+                "error_message": str(exc),
+            }
+            logger.warning(
+                "Queue runtime estimate failed: job_id=%s index=%s code=%s error=%s",
+                self._job_id,
+                index,
+                error_code,
+                exc,
+            )
+        with self._lock:
+            item = self._find_item_locked(index)
+            item["estimate"] = copy.deepcopy(estimate)
+            self._estimating_indices.discard(index)
+            self._persist_locked()
+            logger.info(
+                "Queue runtime estimate finished: job_id=%s index=%s status=%s",
+                self._job_id,
+                index,
+                estimate.get("status"),
+            )
             return self._status_snapshot_locked()
 
     def cancel_item(self, index: int) -> dict:
@@ -462,6 +525,7 @@ class QueueManager:
             "technical_details": None,
             "partial_transcript": False,
             "outputs": {},
+            "estimate": None,
         }
         self._sync_legacy_fields_from_processing_plan(item)
         if media_kind == "video":
@@ -1180,6 +1244,7 @@ class QueueManager:
             "eta_message": eta_message,
             "progress_percent": round((finished_items / total_items) * 100, 1) if total_items else 0,
             "stop_after_current": self._stop_after_current,
+            "estimating_items": len(self._estimating_indices),
         }
 
     def _job_payload_locked(self) -> dict:
@@ -1284,6 +1349,10 @@ class QueueManager:
     def _ensure_inactive_locked(self, message: str) -> None:
         if self._is_running_locked():
             raise RuntimeError(message)
+
+    def _ensure_no_estimate_locked(self) -> None:
+        if self._estimating_indices:
+            raise RuntimeError("Дождитесь завершения текущей оценки времени.")
 
     def _is_running_locked(self) -> bool:
         return self._worker is not None and self._worker.is_alive()

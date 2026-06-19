@@ -2,7 +2,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
-from unittest.mock import PropertyMock, patch
+from unittest.mock import PropertyMock, call, patch
 
 from fastapi.testclient import TestClient
 
@@ -111,6 +111,34 @@ class HttpSmokeTests(unittest.TestCase):
             cleanup_response = client.post("/api/storage/cleanup", json={"folder": "downloads"})
             self.assertEqual(200, cleanup_response.status_code)
             cleanup_folder.assert_called_once_with("downloads")
+
+    def test_queue_runtime_estimate_endpoint_returns_success_noop_and_invalid_item(self) -> None:
+        success = {
+            "status": "pending",
+            "items": [{"index": 1, "estimate": {"status": "complete", "total_estimated_full_runtime_sec": 12}}],
+        }
+        noop = {
+            "status": "pending",
+            "items": [{"index": 2, "estimate": {"status": "complete", "no_enabled_operations": True}}],
+        }
+        with (
+            patch.object(
+                main_module.queue_manager,
+                "estimate_item",
+                side_effect=[success, noop, RuntimeError("Queue item was not found.")],
+            ) as estimate_item,
+            TestClient(main_module.app) as client,
+        ):
+            success_response = client.post("/api/queue/estimate-item", json={"index": 1})
+            noop_response = client.post("/api/queue/estimate-item", json={"index": 2})
+            invalid_response = client.post("/api/queue/estimate-item", json={"index": 999})
+
+        self.assertEqual(200, success_response.status_code)
+        self.assertEqual(12, success_response.json()["items"][0]["estimate"]["total_estimated_full_runtime_sec"])
+        self.assertEqual(200, noop_response.status_code)
+        self.assertTrue(noop_response.json()["items"][0]["estimate"]["no_enabled_operations"])
+        self.assertEqual(400, invalid_response.status_code)
+        self.assertEqual([call(1), call(2), call(999)], estimate_item.call_args_list)
 
     def test_recording_queue_and_transcript_reader_are_path_constrained(self) -> None:
         with TemporaryDirectory(dir=PROJECT_TMP) as temp_dir:

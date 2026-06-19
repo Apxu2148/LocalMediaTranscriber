@@ -183,6 +183,7 @@ const queueControlSelector = ".queue-item-card select, .queue-item-card input, .
 const terminalQueueStatuses = new Set(["completed", "error", "failed", "cancelled"]);
 const pendingAddKeys = new Set();
 const pendingQueueCancellationIds = new Set();
+const pendingRuntimeEstimateIds = new Set();
 const audioRuntimeStages = new Set(["transcribing_audio", "cancelling_transcription"]);
 
 function t(key, variables = {}) {
@@ -1278,6 +1279,18 @@ function renderRuntimeDetails() {
         ? `${current.realtime_factor}x`
         : unavailable,
     }, "statusTranscribingAudio");
+    return;
+  }
+
+  const estimatingItem = latestQueueStatus?.items?.find((item) => item.estimate?.status === "estimating");
+  if (estimatingItem || pendingRuntimeEstimateIds.size) {
+    const estimating = t("estimating");
+    setRuntimeDetails({
+      model: estimating,
+      device: estimating,
+      compute: estimating,
+      speed: estimating,
+    }, "runtimeEstimate");
     return;
   }
 
@@ -2636,6 +2649,148 @@ function createProcessingPlanSummary(queueItem) {
   return wrapper;
 }
 
+function runtimeEstimateActive(status = latestQueueStatus) {
+  return pendingRuntimeEstimateIds.size > 0
+    || Number(status?.estimating_items || 0) > 0
+    || Boolean(status?.items?.some((item) => item.estimate?.status === "estimating"));
+}
+
+function formatReadableEstimateDuration(seconds) {
+  if (seconds === null || seconds === undefined || !Number.isFinite(Number(seconds))) {
+    return t("notAvailable");
+  }
+  const totalSeconds = Math.max(0, Math.round(Number(seconds)));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const remainingSeconds = totalSeconds % 60;
+  if (hours) {
+    return [
+      t("durationHoursShort", { value: hours }),
+      minutes ? t("durationMinutesShort", { value: minutes }) : "",
+    ].filter(Boolean).join(" ");
+  }
+  if (minutes) {
+    return [
+      t("durationMinutesShort", { value: minutes }),
+      remainingSeconds ? t("durationSecondsShort", { value: remainingSeconds }) : "",
+    ].filter(Boolean).join(" ");
+  }
+  return t("durationSecondsShort", { value: remainingSeconds });
+}
+
+function approximateEstimateDuration(seconds) {
+  return t("estimateAboutDuration", { duration: formatReadableEstimateDuration(seconds) });
+}
+
+function runtimeEstimateErrorMessage(estimate) {
+  const key = {
+    duration_unavailable: "estimateDurationUnavailable",
+    url_download_required: "estimateUrlDownloadRequired",
+    ffmpeg_unavailable: "estimateFfmpegUnavailable",
+    sample_preparation_failed: "estimateSamplePreparationFailed",
+    source_unavailable: "estimateSourceUnavailable",
+  }[estimate?.error_code];
+  return t(key || "estimateFailed");
+}
+
+function createRuntimeEstimate(queueItem, status) {
+  const estimate = queueItem.estimate;
+  const wrapper = document.createElement("section");
+  wrapper.className = "queue-runtime-estimate";
+  wrapper.dataset.runtimeEstimateResult = "true";
+
+  const heading = document.createElement("div");
+  heading.className = "queue-runtime-estimate-heading";
+  const title = document.createElement("h4");
+  title.textContent = t("runtimeEstimate");
+  heading.append(title);
+
+  if (queueItem.status === "pending") {
+    const button = document.createElement("button");
+    const estimating = estimate?.status === "estimating" || pendingRuntimeEstimateIds.has(queueItem.index);
+    button.type = "button";
+    button.className = "queue-estimate-button";
+    button.dataset.queueAction = "estimate";
+    button.textContent = estimating ? t("estimating") : t("estimateTime");
+    button.disabled = estimating || queueActive || runtimeEstimateActive(status);
+    heading.append(button);
+  }
+  wrapper.append(heading);
+
+  if (!estimate) {
+    return wrapper;
+  }
+  if (estimate.status === "estimating") {
+    const state = textLine(t("estimating"));
+    state.dataset.type = "active";
+    wrapper.append(state);
+    return wrapper;
+  }
+  if (estimate.status === "failed") {
+    const state = textLine(t("estimateFailed"));
+    state.dataset.type = "error";
+    wrapper.append(state, textLine(runtimeEstimateErrorMessage(estimate)));
+    return wrapper;
+  }
+
+  const state = textLine(t("estimateComplete"));
+  state.dataset.type = "success";
+  wrapper.append(state);
+  if (estimate.no_enabled_operations) {
+    wrapper.append(textLine(t("noEnabledOperationsEstimate")));
+    return wrapper;
+  }
+
+  const audio = estimate.audio || {};
+  const frames = estimate.frames || {};
+  if (audio.enabled) {
+    wrapper.append(textLine(t("estimateAudioSummary", {
+      duration: approximateEstimateDuration(audio.estimated_full_runtime_sec),
+    })));
+  }
+  if (frames.enabled) {
+    wrapper.append(textLine(t("estimateFramesSummary", {
+      duration: approximateEstimateDuration(frames.estimated_full_runtime_sec),
+    })));
+  }
+  wrapper.append(textLine(t("totalEstimate", {
+    duration: approximateEstimateDuration(estimate.total_estimated_full_runtime_sec),
+  })));
+
+  const details = document.createElement("details");
+  const summary = document.createElement("summary");
+  summary.textContent = t("estimateDetails");
+  details.append(summary, textLine(t("sampleSegment", {
+    duration: formatReadableEstimateDuration(estimate.sample_duration_sec),
+  })));
+  if (audio.enabled) {
+    details.append(
+      textLine(t("estimateAudioConfig", {
+        model: audio.model,
+        device: deviceLabel(audio.effective_device || audio.device),
+      })),
+      textLine(t("sampleRuntime", { duration: formatReadableEstimateDuration(audio.sample_runtime_sec) })),
+      textLine(t("estimatedFullTime", { duration: approximateEstimateDuration(audio.estimated_full_runtime_sec) })),
+      textLine(t("estimateSpeed", { value: Number(audio.speed_factor || 0).toFixed(1) })),
+    );
+  }
+  if (frames.enabled) {
+    details.append(
+      textLine(t("estimateFramesConfig", {
+        rate: frameRateLabel(frames.rate),
+        quality: frames.jpeg_quality,
+      })),
+      textLine(t("sampleFrames", { count: frames.sample_frames })),
+      textLine(t("estimatedTotalFrames", { count: frames.estimated_total_frames })),
+      textLine(t("sampleRuntime", { duration: formatReadableEstimateDuration(frames.sample_runtime_sec) })),
+      textLine(t("estimatedFullTime", { duration: approximateEstimateDuration(frames.estimated_full_runtime_sec) })),
+    );
+  }
+  details.append(textLine(t("approximateEstimate")));
+  wrapper.append(details);
+  return wrapper;
+}
+
 function createAudioPlanSettings(queueItem, disabled) {
   const plan = processingPlanForQueueItem(queueItem);
   const wrapper = document.createElement("div");
@@ -2929,7 +3084,7 @@ function createQueueItemElement(queueItem, status) {
   item.append(stageBlock);
 
   const options = queueItem.operations || {};
-  const controlsDisabled = queueActive || queueItem.status !== "pending";
+  const controlsDisabled = queueActive || runtimeEstimateActive(status) || queueItem.status !== "pending";
   const optionGroup = document.createElement("div");
   optionGroup.className = "queue-options";
   const label = document.createElement("div");
@@ -2946,6 +3101,7 @@ function createQueueItemElement(queueItem, status) {
   } else {
     optionGroup.append(createComingSoonOption("ocr"), createComingSoonOption("cv"));
   }
+  optionGroup.append(createRuntimeEstimate(queueItem, status));
   item.append(optionGroup);
 
   const outputLines = queueItemArtifactLines(queueItem);
@@ -2988,6 +3144,12 @@ function renderQueue(status, options = {}) {
     const item = status.items?.find((candidate) => candidate.index === index);
     if (!item || terminalQueueStatuses.has(item.status)) {
       pendingQueueCancellationIds.delete(index);
+    }
+  }
+  for (const index of pendingRuntimeEstimateIds) {
+    const item = status.items?.find((candidate) => candidate.index === index);
+    if (!item || ["complete", "failed"].includes(item.estimate?.status)) {
+      pendingRuntimeEstimateIds.delete(index);
     }
   }
   const total = Number(status.total_items || 0);
@@ -3148,7 +3310,7 @@ function collectQueueItemPayload(card) {
 }
 
 async function updateQueueItemFromCard(card) {
-  if (!card || queueActive) {
+  if (!card || queueActive || runtimeEstimateActive()) {
     return;
   }
   try {
@@ -3161,6 +3323,53 @@ async function updateQueueItemFromCard(card) {
     setOutput(queueOutput, error.message, "error");
     showToast(error.message, "error");
     await refreshQueueStatus();
+  }
+}
+
+async function runRuntimeEstimate(card) {
+  if (!card) {
+    return;
+  }
+  const index = Number(card.dataset.queueIndex);
+  if (pendingRuntimeEstimateIds.has(index) || runtimeEstimateActive()) {
+    return;
+  }
+  pendingRuntimeEstimateIds.add(index);
+  const button = card.querySelector('[data-queue-action="estimate"]');
+  if (button) {
+    button.disabled = true;
+    button.textContent = t("estimating");
+  }
+  setOutput(queueOutput, t("estimating"), "info");
+  renderRuntimeDetails();
+  updateLongOperationControls();
+
+  try {
+    const updated = await requestJson("/api/queue/update-item", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(collectQueueItemPayload(card)),
+    });
+    renderQueue(updated);
+    const status = await requestJson("/api/queue/estimate-item", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ index }),
+    });
+    renderQueue(status);
+    const estimate = status.items?.find((item) => item.index === index)?.estimate;
+    const key = estimate?.status === "failed" ? "estimateFailed" : "estimateComplete";
+    const type = estimate?.status === "failed" ? "error" : "success";
+    setOutput(queueOutput, t(key), type);
+    showToast(t(key), type);
+  } catch (error) {
+    pendingRuntimeEstimateIds.delete(index);
+    setOutput(queueOutput, error.message, "error");
+    showToast(error.message, "error");
+    await refreshQueueStatus();
+  } finally {
+    updateLongOperationControls();
+    renderRuntimeDetails();
   }
 }
 
@@ -3223,7 +3432,12 @@ function validateQueueStartOptions() {
 }
 
 function updateLongOperationControls() {
-  const active = isTranscribing || queueActive || benchmarkActive || videoMuxInFlight || hasAddingInProgress();
+  const active = isTranscribing
+    || queueActive
+    || runtimeEstimateActive()
+    || benchmarkActive
+    || videoMuxInFlight
+    || hasAddingInProgress();
   const fileAddBlocked = active || isAddingFile;
   const urlAddBlocked = active || isAddingUrl;
   whisperModelSelect.disabled = active || !defaultAudioEnabled.checked;
@@ -3479,7 +3693,12 @@ queueList.addEventListener("click", async (event) => {
   if (!button) {
     return;
   }
-  await removeOrCancelQueueItem(queueCardFromTarget(button), button.dataset.queueAction);
+  const card = queueCardFromTarget(button);
+  if (button.dataset.queueAction === "estimate") {
+    await runRuntimeEstimate(card);
+    return;
+  }
+  await removeOrCancelQueueItem(card, button.dataset.queueAction);
 });
 queueAddForm.addEventListener("submit", async (event) => {
   event.preventDefault();

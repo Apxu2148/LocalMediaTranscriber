@@ -1135,6 +1135,43 @@ summary:focus-visible {
   margin: 0;
 }
 
+.queue-runtime-estimate {
+  display: grid;
+  gap: 5px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-soft);
+  font-size: 13px;
+}
+
+.queue-runtime-estimate-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.queue-runtime-estimate h4,
+.queue-runtime-estimate p {
+  margin: 0;
+}
+
+.queue-runtime-estimate details {
+  padding-top: 3px;
+}
+
+.queue-runtime-estimate details p {
+  margin-top: 4px;
+  color: var(--muted);
+}
+
+.queue-estimate-button {
+  width: auto;
+  min-height: 32px;
+  padding: 6px 10px;
+}
+
 .queue-frame-settings {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

@@ -109,6 +109,7 @@ Important endpoints include:
 - `POST /api/queue/update-item`
 - `POST /api/queue/remove-item`
 - `POST /api/queue/cancel-item`
+- `POST /api/queue/estimate-item`
 - `POST /api/queue/start`
 - `POST /api/queue/stop-after-current`
 - `POST /api/queue/clear`
@@ -396,6 +397,8 @@ Key behavior:
 - Stores each item's actual processing plan in `processing_plan`. The current schema has `audio.enabled/model/device`, `frames.enabled/rate/interval_sec/jpeg_quality`, `ocr.enabled/engine/languages/status`, and `cv.enabled/engine/status`.
 - Default processing settings are frontend state for now. The frontend sends a snapshot with each add-files/add-recordings/add-urls request, so defaults apply only to newly added items.
 - Pending item edits update the item plan. Precedence is per-item `processing_plan` over defaults; legacy `operations` and `frame_extraction` are synchronized compatibility fields.
+- `POST /api/queue/estimate-item` runs one pending-item runtime estimate at a time. Queue start, item edits/removal, retry, and clear are blocked until it finishes.
+- Estimates always use the item's normalized `processing_plan`; defaults are relevant only through the legacy-plan normalization fallback.
 - The runtime Model/Device/Compute type/Speed cards have one frontend renderer. During audio transcription they use the current item's audio plan plus matching resolved transcriber values; during non-audio queue stages they show not applicable, and while idle they show idle.
 - Old queue items without `processing_plan` remain valid. The worker falls back to the queue start model/device and legacy operation/frame fields.
 - Stores per-item operation choices in `operations`: `transcribe_audio`, `extract_frames`, `ocr`, and `cv`.
@@ -403,9 +406,9 @@ Key behavior:
 - Stores per-item frame settings in `frame_extraction`: extraction rate, JPEG quality, estimates, warning flag, and latest extraction result.
 - Stores terminal output metadata in `outputs`: transcript path/existence, diagnostic JSON path/existence, frame folder path/existence, frame index path/existence, downloaded URL media path/existence/deleted marker, uploaded temp path/existence/deleted marker, and retention cleanup error markers.
 - Calls the optional `retention_cleaner` callback only after a fully successful item. Failed, cancelled, and partial-success items keep intermediate files for debugging.
-- Uses callbacks supplied by `app/main.py` to download URLs, transcribe files, extract frames, and record errors.
+- Uses callbacks supplied by `app/main.py` to download URLs, transcribe files, extract frames, estimate runtimes, and record errors.
 
-Future estimate/test-run, OCR/CV engines, media indexes, and RemoteBackend worker plans should extend `processing_plan` instead of adding another disconnected global selector. They must keep the compatibility fields stable until older job JSON and UI code no longer depend on them.
+Future OCR/CV engines, media indexes, and RemoteBackend worker plans should extend `processing_plan` instead of adding another disconnected global selector. They must keep the compatibility fields stable until older job JSON and UI code no longer depend on them.
 
 The queue intentionally processes one item at a time. This lowers CUDA memory pressure and keeps the UI progress model simple.
 
@@ -414,6 +417,54 @@ Stage labels are frontend-localized through `static/i18n.js`. Backend snapshots 
 Add-button safety lives primarily in `static/app.js`. The UI keeps `isAddingFile`, `isAddingUrl`, `isAddingRecording`, and `pendingAddKeys` guards so repeated clicks during a slow backend response do not enqueue duplicates. Browser file keys use file name, size, and `lastModified`; URL keys use normalized URL text; latest-recording keys use source type plus saved audio path. The backend also ignores active duplicate source paths and normalized URL adds as a secondary guard. Controls must be re-enabled in `finally` paths after success or failure.
 
 Output artifacts are a compatibility layer, not a replacement for existing top-level result fields. Keep `transcript_path`, `json_path`, `frames_path`, `frames_index_path`, and downloaded media fields on the item for older code. Use `outputs` for user-facing artifact display and future artifact extensions. Future OCR should add keys such as `ocr_timeline_path`, `ocr_text_path`, and matching existence/deleted markers without changing existing transcript/frame keys.
+
+### `app/runtime_estimate.py`
+
+Runtime test-run service for pending queue items.
+
+- Uses a default sample duration of 60 seconds and caps it to the source duration for shorter media.
+- Uses `audio_duration_seconds()` with existing item/video metadata as fallback. Missing duration produces `duration_unavailable` rather than a misleading projection.
+- Clips long audio/video sources to a temporary mono 16 kHz WAV through the existing FFmpeg dependency, then calls `AudioTranscriber` directly. It never calls `TranscriptStore`.
+- Calls `VideoFrameExtractor.extract_sample()` with the item's frame rate and JPEG quality. Sample JPEGs are written only below the estimate workspace; no `frames_index.json` is created.
+- Wraps all sample work in `TemporaryDirectory` under the project `tmp` directory. Temporary WAV/JPEG/scratch files must be removed on success and exception paths.
+- URL items use an existing local `source_path`/downloaded media path only. The estimate endpoint does not start a URL download.
+- Stores only a compact `estimate` object on the queue item. It does not alter item `status`, terminal outputs, transcript paths, or frame paths.
+
+Current compact schema:
+
+```json
+{
+  "estimate": {
+    "status": "complete",
+    "created_at": "2026-06-19T12:00:00+03:00",
+    "sample_duration_sec": 60.0,
+    "source_duration_sec": 1800.0,
+    "approximate": true,
+    "audio": {
+      "enabled": true,
+      "model": "small",
+      "device": "auto",
+      "effective_device": "cuda",
+      "compute_type": "float16",
+      "sample_runtime_sec": 8.4,
+      "estimated_full_runtime_sec": 252.0,
+      "speed_factor": 7.143
+    },
+    "frames": {
+      "enabled": true,
+      "rate": {"mode": "interval", "seconds": 30},
+      "jpeg_quality": 75,
+      "sample_frames": 3,
+      "estimated_total_frames": 61,
+      "sample_runtime_sec": 1.2,
+      "estimated_full_runtime_sec": 24.4
+    },
+    "total_estimated_full_runtime_sec": 276.4
+  }
+}
+```
+
+Failures use `status=failed` plus a stable `error_code`; a plan with no enabled executable operations returns `status=complete` and `no_enabled_operations=true`. When OCR or CV processing is implemented, its estimator must be added in the same feature stage and included in the combined total without weakening the temporary-file rule.
 
 ### `app/frame_extractor.py`
 
@@ -712,23 +763,24 @@ Audio files, screen videos, input event JSONL files, merged videos, and new scre
 3. Video items receive default operations: `transcribe_audio=true`, `extract_frames=false`, `ocr=false`, and `cv=false`.
 4. Before the queue starts, the UI can call `/api/queue/update-item` to change video operations and frame extraction settings.
 5. Before the queue starts, or while another item is running, pending items can be removed through `/api/queue/remove-item`.
-6. The user starts the queue with `/api/queue/start`, passing the selected model and device preference.
-7. Queue settings are frozen for that run.
-8. A single worker thread processes items in order.
-9. The UI polls `/api/queue/status` and renders persistent stage status. Stage labels come from `static/i18n.js`, and stage text must stay visible for the whole active stage.
-10. URL items are downloaded/extracted through `UrlDownloader` before processing.
-11. For URL audio-only transcription, `UrlDownloader.download()` downloads direct media URLs directly; non-direct URLs keep the stable `yt-dlp` audio-only extraction path.
-12. For URL frame extraction, `UrlDownloader.download_video()` downloads direct media URLs directly or asks `yt-dlp` for a video-readable media file under `data\downloads`; the queue reuses it for frame extraction and, when selected, transcription.
-13. For audio transcription, files are validated and passed to `AudioTranscriber`; `TranscriptStore` saves TXT and JSON outputs.
-14. For frame extraction, `VideoFrameExtractor` writes JPEGs and `frames_index.json` under `data\recordings\<base>__frames`.
-15. A running item can be cancelled while its status is `extracting_audio`, `transcribing`, or `extracting_frames`; cancellation is cooperative and the worker continues to the next pending item.
-16. Transcription cancellation may wait for the current model-loading step or Whisper segment to finish. Partial transcripts are saved with a `__partial_cancelled__` marker and cancelled/partial JSON metadata. Frame extraction cancellation keeps partial frames and marks `frames_index.json` cancelled/incomplete.
-17. Running URL download is currently not cancellable. Cancellation becomes available after the URL item reaches transcription or frame extraction.
-18. On full success only, `StorageManager.apply_retention_cleanup()` may delete downloaded URL media or uploaded temp files when the user disabled the matching keep setting. It never deletes primary outputs.
-19. Terminal queue items refresh `outputs` so the UI can show created artifacts, missing/deleted markers, and cleanup errors directly on the item card.
-20. Queue status shows counts, current item, current stage, elapsed time, ETA, progress, operation settings, estimates, downloaded media paths, transcript output paths, frame folder paths, frame counts, frame index paths, and output artifacts.
-21. `stop-after-current` completes the active item and cancels pending items.
-22. `retry-errors` moves failed items back to pending for a later manual start.
+6. While the queue is idle, `/api/queue/estimate-item` can test a pending local item's enabled audio/frame operations in a temporary workspace and attach compact estimate metadata without changing the item result state.
+7. The user starts the queue with `/api/queue/start`, passing the selected model and device preference.
+8. Queue settings are frozen for that run.
+9. A single worker thread processes items in order.
+10. The UI polls `/api/queue/status` and renders persistent stage status. Stage labels come from `static/i18n.js`, and stage text must stay visible for the whole active stage.
+11. URL items are downloaded/extracted through `UrlDownloader` before processing.
+12. For URL audio-only transcription, `UrlDownloader.download()` downloads direct media URLs directly; non-direct URLs keep the stable `yt-dlp` audio-only extraction path.
+13. For URL frame extraction, `UrlDownloader.download_video()` downloads direct media URLs directly or asks `yt-dlp` for a video-readable media file under `data\downloads`; the queue reuses it for frame extraction and, when selected, transcription.
+14. For audio transcription, files are validated and passed to `AudioTranscriber`; `TranscriptStore` saves TXT and JSON outputs.
+15. For frame extraction, `VideoFrameExtractor` writes JPEGs and `frames_index.json` under `data\recordings\<base>__frames`.
+16. A running item can be cancelled while its status is `extracting_audio`, `transcribing`, or `extracting_frames`; cancellation is cooperative and the worker continues to the next pending item.
+17. Transcription cancellation may wait for the current model-loading step or Whisper segment to finish. Partial transcripts are saved with a `__partial_cancelled__` marker and cancelled/partial JSON metadata. Frame extraction cancellation keeps partial frames and marks `frames_index.json` cancelled/incomplete.
+18. Running URL download is currently not cancellable. Cancellation becomes available after the URL item reaches transcription or frame extraction.
+19. On full success only, `StorageManager.apply_retention_cleanup()` may delete downloaded URL media or uploaded temp files when the user disabled the matching keep setting. It never deletes primary outputs.
+20. Terminal queue items refresh `outputs` so the UI can show created artifacts, missing/deleted markers, and cleanup errors directly on the item card.
+21. Queue status shows counts, current item, current stage, elapsed time, ETA, progress, operation settings, estimates, downloaded media paths, transcript output paths, frame folder paths, frame counts, frame index paths, and output artifacts.
+22. `stop-after-current` completes the active item and cancels pending items.
+23. `retry-errors` moves failed items back to pending for a later manual start.
 
 Stage transitions are intentionally coarse and persistent:
 

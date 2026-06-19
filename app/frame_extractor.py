@@ -211,6 +211,46 @@ class VideoFrameExtractor:
             "estimated_frames_warning": bool(frame_count and frame_count > 1000),
         }
 
+    def extract_sample(
+        self,
+        *,
+        source_path: Path,
+        output_dir: Path,
+        sample_duration_sec: float,
+        rate: dict | None = None,
+        jpeg_quality: int | str | None = None,
+    ) -> dict:
+        settings = normalize_frame_extraction_settings({"rate": rate, "jpeg_quality": jpeg_quality})
+        metadata = read_video_metadata(source_path)
+        source_duration = metadata.get("duration_sec")
+        bounded_duration = min(float(sample_duration_sec), float(source_duration or sample_duration_sec))
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        import cv2
+
+        capture = cv2.VideoCapture(str(source_path))
+        if not capture.isOpened():
+            raise FrameExtractionError("Could not open the video file for frame extraction estimate.")
+        extracted = 0
+        try:
+            encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), settings["jpeg_quality"]]
+            for frame_index, timestamp_sec in enumerate(frame_timestamps(bounded_duration, settings["rate"]), start=1):
+                frame = self._read_frame_at(capture, cv2, timestamp_sec, frame_index)
+                if frame is None:
+                    if frame_index == 1:
+                        raise FrameExtractionError("Could not decode the first video frame.")
+                    break
+                frame_name = f"sample_{frame_index:06d}.jpg"
+                self._write_jpeg_frame(cv2, output_dir / frame_name, frame, encode_params, frame_name)
+                extracted += 1
+        finally:
+            capture.release()
+
+        return {
+            "sample_frames": extracted,
+            "sample_duration_sec": round(bounded_duration, 3),
+        }
+
     def extract_frames(
         self,
         *,

@@ -26,6 +26,7 @@ This project is a separate fork of `LocalAudioTranscriber`. The current version 
 - Choose URL queue operations: transcribe audio, extract frames from a downloaded video-readable file, or both.
 - Extract video frames to a per-source folder with a `frames_index.json` manifest.
 - Choose JPEG quality `75`, `80`, `85`, `90`, `95`, or `100` for frame extraction; `90` is the default.
+- Run a 60-second runtime estimate for a pending item's enabled transcription and frame extraction operations before full processing.
 - Remove pending queue items, or cancel a running frame extraction item and continue with the rest of the queue.
 - Choose Whisper models: `tiny`, `base`, `small`, `medium`, `large-v3`.
 - Manage Whisper models before transcription: check local availability, download, verify, view info, and delete selected local caches.
@@ -141,8 +142,11 @@ Queue usability:
 - Queue stages include preparing source, downloading media/video, transcribing audio, cancelling transcription/frame extraction, extracting frames, completed, failed, and cancelled.
 - Default processing settings live near the queue controls. They define the audio model/device, frame extraction defaults, and OCR/CV placeholders for newly added items only.
 - Each queue item stores its own processing plan. Changing defaults later does not silently mutate existing items; pending item settings override defaults.
+- Pending local items have an **Estimate time** action. It tests up to the first 60 seconds with that item's model/device and frame interval/JPEG quality, then shows separate and combined approximate runtimes.
+- Estimate samples use temporary clipped audio and temporary JPEGs. They do not create normal transcripts, frame folders, `frames_index.json`, or output artifacts, and the temporary workspace is removed after success or failure.
+- Pending URL items can be estimated only when a local downloaded media file is already available. Stage 0.96 does not download a URL solely for estimation.
 - After an item completes, fails, or is cancelled, its card shows a "Created files" section with known artifacts: transcript TXT, diagnostic JSON, frame folder, `frames_index.json`, downloaded URL media, and uploaded temporary file when available. Cancelled transcription outputs are labelled as partial transcripts. If retention removed a file, the item says so instead of showing it as still present.
-- OCR/CV/media-index stage labels and plan entries are reserved for future work. OCR/CV controls are disabled/coming-soon placeholders and do not create OCR/CV output files.
+- OCR/CV/media-index stage labels and plan entries are reserved for future work. OCR/CV controls are disabled/coming-soon placeholders and do not create OCR/CV output files. Runtime estimates must be extended when OCR or CV becomes executable.
 
 Storage panel:
 
@@ -228,7 +232,7 @@ Microphone privacy behavior: microphone access is requested only when the user s
 
 ## Whisper Models
 
-The Transcription settings section includes a compact Whisper models table. Use it to:
+The Whisper models section includes a compact model table. Use it to:
 
 - see whether each supported model is available locally;
 - download a selected model before first transcription;

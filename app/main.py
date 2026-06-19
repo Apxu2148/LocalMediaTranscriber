@@ -21,6 +21,7 @@ from .benchmark_service import BenchmarkService
 from .frame_extractor import VideoFrameExtractor
 from .model_manager import WhisperModelManager
 from .queue_manager import QueueFile, QueueManager, QueueUrl
+from .runtime_estimate import RuntimeEstimator
 from .screen_recorder import (
     ScreenRecorder,
     ScreenRecorderDependencyError,
@@ -232,6 +233,31 @@ def process_queue_frame_extraction(item: dict, cancel_event: threading.Event, pr
     )
 
 
+def process_runtime_estimate_audio(sample_path: Path, model_name: str, device_preference: str) -> dict:
+    result = transcriber.transcribe(sample_path, model_name, device_preference)
+    return {
+        "model": result.model,
+        "device": result.device,
+        "compute_type": result.compute_type,
+    }
+
+
+def process_runtime_estimate_frames(
+    source_path: Path,
+    output_dir: Path,
+    sample_duration_sec: float,
+    rate: dict,
+    jpeg_quality: int,
+) -> dict:
+    return frame_extractor.extract_sample(
+        source_path=source_path,
+        output_dir=output_dir,
+        sample_duration_sec=sample_duration_sec,
+        rate=rate,
+        jpeg_quality=jpeg_quality,
+    )
+
+
 def save_queue_item_error(item: dict, model_name: str, _device_preference: str, exc: Exception) -> dict:
     source_path = Path(item.get("source_path") or config.DOWNLOADS_DIR / item["source_filename"])
     return transcript_store.save_error(
@@ -246,6 +272,10 @@ def save_queue_item_error(item: dict, model_name: str, _device_preference: str, 
 
 
 url_downloader = UrlDownloader()
+runtime_estimator = RuntimeEstimator(
+    audio_processor=process_runtime_estimate_audio,
+    frame_processor=process_runtime_estimate_frames,
+)
 queue_manager = QueueManager(
     jobs_dir=config.JOBS_DIR,
     processor=process_queue_item,
@@ -255,6 +285,7 @@ queue_manager = QueueManager(
     video_downloader=url_downloader.download_video,
     frame_processor=process_queue_frame_extraction,
     retention_cleaner=storage_manager.apply_retention_cleanup,
+    estimate_processor=runtime_estimator.estimate,
 )
 benchmark_service = BenchmarkService(
     transcriber=transcriber,
@@ -383,7 +414,7 @@ def model_verify(payload: ModelVerifyRequest) -> dict:
 @app.post("/api/models/delete")
 def model_delete(payload: ModelDeleteRequest) -> dict:
     selected_model = validate_whisper_model(payload.model)
-    if transcriber.status()["in_progress"] or queue_manager.is_running or benchmark_service.is_running:
+    if transcriber.status()["in_progress"] or queue_manager.is_running or queue_manager.is_estimating or benchmark_service.is_running:
         raise_api_error("Wait for the current transcription, queue, or benchmark to finish before deleting a model.", status_code=409)
     transcriber.clear_model()
     try:
@@ -1004,6 +1035,17 @@ def queue_cancel_item(payload: QueueItemIndexRequest) -> dict:
         raise_api_error(str(exc))
 
 
+@app.post("/api/queue/estimate-item")
+def queue_estimate_item(payload: QueueItemIndexRequest) -> dict:
+    ensure_benchmark_inactive()
+    if any_recording_active():
+        raise_api_error("Остановите запись перед запуском оценки времени.")
+    try:
+        return queue_manager.estimate_item(payload.index)
+    except RuntimeError as exc:
+        raise_api_error(str(exc))
+
+
 @app.post("/api/queue/stop-after-current")
 def queue_stop_after_current() -> dict:
     try:
@@ -1109,7 +1151,7 @@ def validate_supported_suffix(filename: str) -> str:
 
 
 def ensure_queue_inactive_for_direct_transcription() -> None:
-    if queue_manager.is_running:
+    if queue_manager.is_running or queue_manager.is_estimating:
         raise_api_error("Дождитесь завершения очереди перед одиночной транскрибацией.")
     ensure_benchmark_inactive()
 
@@ -1121,7 +1163,7 @@ def ensure_benchmark_inactive() -> None:
 
 def ensure_benchmark_can_start() -> None:
     ensure_benchmark_inactive()
-    if queue_manager.is_running:
+    if queue_manager.is_running or queue_manager.is_estimating:
         raise_api_error("Дождитесь завершения очереди перед запуском benchmark.")
     if any_recording_active():
         raise_api_error("Остановите запись перед запуском benchmark.")

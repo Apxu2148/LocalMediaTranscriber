@@ -102,6 +102,23 @@ class FrameExtractorTests(unittest.TestCase):
         self.assertTrue((frames_dir / payload["frames"][0]["file"]).is_file())
         self.assertEqual(payload["extracted_frame_count"], len(list(frames_dir.glob("*.jpg"))))
 
+    def test_extract_sample_writes_only_to_requested_temporary_directory(self) -> None:
+        path = self.make_video("sample.avi", fps=5, frames=15)
+        output_dir = self.root / "estimate_sample"
+
+        result = self.extractor.extract_sample(
+            source_path=path,
+            output_dir=output_dir,
+            sample_duration_sec=1,
+            rate={"mode": "interval", "seconds": 1},
+            jpeg_quality=75,
+        )
+
+        self.assertGreaterEqual(result["sample_frames"], 1)
+        self.assertEqual(result["sample_frames"], len(list(output_dir.glob("*.jpg"))))
+        self.assertFalse((output_dir / "frames_index.json").exists())
+        self.assertEqual([], list(self.recordings_dir.iterdir()))
+
     def test_unicode_output_base_writes_jpegs_and_index(self) -> None:
         path = self.make_video("unicode.avi", fps=5, frames=8)
         result = self.extractor.extract_frames(

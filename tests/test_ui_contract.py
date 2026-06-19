@@ -77,6 +77,7 @@ class UiContractTests(unittest.TestCase):
         self.assertIn('"/api/queue/update-item"', app_js)
         self.assertIn('"/api/queue/remove-item"', app_js)
         self.assertIn('"/api/queue/cancel-item"', app_js)
+        self.assertIn('"/api/queue/estimate-item"', app_js)
         self.assertIn('"/api/storage/summary"', app_js)
         self.assertIn('"/api/storage/settings"', app_js)
         self.assertIn('"/api/storage/cleanup"', app_js)
@@ -229,6 +230,27 @@ class UiContractTests(unittest.TestCase):
         self.assertIn('disabled>', html)
         self.assertNotIn("Tesseract OCR (coming soon)", app_js)
         self.assertNotIn("Basic OpenCV (coming soon)", app_js)
+
+    def test_runtime_estimate_action_and_result_contract_exist(self) -> None:
+        app_js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        css = (STATIC_DIR / "style.css").read_text(encoding="utf-8")
+
+        self.assertIsNone(re.search(r"[А-Яа-яЁё]", app_js))
+        self.assertIsNone(re.search(r"[А-Яа-яЁё]", html))
+        self.assertIn('button.dataset.queueAction = "estimate"', app_js)
+        self.assertIn('wrapper.dataset.runtimeEstimateResult = "true"', app_js)
+        self.assertIn("function createRuntimeEstimate(queueItem, status)", app_js)
+        self.assertIn("function formatReadableEstimateDuration(seconds)", app_js)
+        self.assertIn("function runRuntimeEstimate(card)", app_js)
+        self.assertIn("pendingRuntimeEstimateIds", app_js)
+        self.assertIn("runtimeEstimateActive", app_js)
+        self.assertIn("estimateDetails", app_js)
+        self.assertIn("noEnabledOperationsEstimate", app_js)
+        self.assertIn("createComingSoonOption(\"ocr\")", app_js)
+        self.assertIn("createComingSoonOption(\"cv\")", app_js)
+        self.assertIn(".queue-runtime-estimate", css)
+        self.assertIn(".queue-estimate-button", css)
 
     def test_processing_plan_polish_contract(self) -> None:
         app_js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
