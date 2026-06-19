@@ -49,6 +49,17 @@ class UiContractTests(unittest.TestCase):
             "defaultFramesEnabled",
             "defaultFrameRateSelect",
             "defaultJpegQualitySelect",
+            "ocrSettingsPanel",
+            "ocrStatusBadge",
+            "ocrDetectedPath",
+            "ocrVersion",
+            "ocrLanguages",
+            "ocrRusStatus",
+            "ocrEngStatus",
+            "ocrPathInput",
+            "ocrCheckButton",
+            "ocrSaveButton",
+            "ocrStatusMessage",
             "queueStageStatus",
             "queueMetrics",
             "queueProgress",
@@ -81,6 +92,9 @@ class UiContractTests(unittest.TestCase):
         self.assertIn('"/api/storage/summary"', app_js)
         self.assertIn('"/api/storage/settings"', app_js)
         self.assertIn('"/api/storage/cleanup"', app_js)
+        self.assertIn('"/api/ocr/status"', app_js)
+        self.assertIn('"/api/ocr/settings"', app_js)
+        self.assertIn('"/api/ocr/check"', app_js)
         self.assertIn('"/api/video-mux/merge"', app_js)
         self.assertIn('"/api/displays"', app_js)
         self.assertIn('"/api/displays/preview"', app_js)
@@ -230,6 +244,18 @@ class UiContractTests(unittest.TestCase):
         self.assertIn('disabled>', html)
         self.assertNotIn("Tesseract OCR (coming soon)", app_js)
         self.assertNotIn("Basic OpenCV (coming soon)", app_js)
+
+    def test_ocr_ui_reports_readiness_but_keeps_processing_as_coming_soon(self) -> None:
+        app_js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+
+        self.assertIn('id="ocrSettingsPanel"', html)
+        self.assertIn('data-i18n="ocrNextStage"', html)
+        self.assertIn('fieldset class="placeholder-fieldset" disabled', html)
+        self.assertIn('engine_available: Boolean(', app_js)
+        self.assertIn('enabled: false,', app_js)
+        self.assertNotIn("frames_ocr.jsonl", html + app_js)
+        self.assertNotIn("frames_ocr.txt", html + app_js)
 
     def test_runtime_estimate_action_and_result_contract_exist(self) -> None:
         app_js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")

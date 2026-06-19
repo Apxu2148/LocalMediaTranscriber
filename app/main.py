@@ -20,6 +20,7 @@ from .audio_recorder import AudioRecorder
 from .benchmark_service import BenchmarkService
 from .frame_extractor import VideoFrameExtractor
 from .model_manager import WhisperModelManager
+from .ocr_manager import OcrManager
 from .queue_manager import QueueFile, QueueManager, QueueUrl
 from .runtime_estimate import RuntimeEstimator
 from .screen_recorder import (
@@ -70,6 +71,7 @@ transcriber = AudioTranscriber()
 model_manager = WhisperModelManager()
 transcript_store = TranscriptStore()
 storage_manager = StorageManager()
+ocr_manager = OcrManager()
 recording_lock = threading.Lock()
 active_recording_mode: str | None = None
 active_recording_started_at: float | None = None
@@ -158,6 +160,15 @@ class StorageSettingsRequest(BaseModel):
 
 class StorageCleanupRequest(BaseModel):
     folder: str
+
+
+class OcrSettingsRequest(BaseModel):
+    tesseract_path: str | None = None
+    default_languages: list[str] | None = None
+
+
+class OcrCheckRequest(BaseModel):
+    tesseract_path: str | None = None
 
 
 class BenchmarkRunRequest(BaseModel):
@@ -486,6 +497,29 @@ def storage_cleanup(payload: StorageCleanupRequest) -> dict:
         return storage_manager.cleanup_folder(payload.folder)
     except RuntimeError as exc:
         raise_api_error(str(exc))
+
+
+@app.get("/api/ocr/status")
+def ocr_status() -> dict:
+    return ocr_manager.status()
+
+
+@app.post("/api/ocr/settings")
+def ocr_settings_update(payload: OcrSettingsRequest) -> dict:
+    changes = {
+        field: getattr(payload, field)
+        for field in payload.model_fields_set
+        if field in {"tesseract_path", "default_languages"}
+    }
+    settings = ocr_manager.update_settings(changes)
+    return {"settings": settings, "status": ocr_manager.status()}
+
+
+@app.post("/api/ocr/check")
+def ocr_check(payload: OcrCheckRequest | None = Body(default=None)) -> dict:
+    if payload is None or "tesseract_path" not in payload.model_fields_set:
+        return ocr_manager.status()
+    return ocr_manager.status(payload.tesseract_path)
 
 
 @app.get("/api/transcripts/read")

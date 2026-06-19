@@ -30,6 +30,7 @@ transcriber = AudioTranscriber()
 model_manager = WhisperModelManager()
 transcript_store = TranscriptStore()
 storage_manager = StorageManager()
+ocr_manager = OcrManager()
 ```
 
 Queue and benchmark services use these shared objects. This keeps model caching and recording state centralized, but it also means future changes should be careful with threading, locks, and shared mutable state.
@@ -88,6 +89,9 @@ Important endpoints include:
 - `GET /api/storage/settings`
 - `POST /api/storage/settings`
 - `POST /api/storage/cleanup`
+- `GET /api/ocr/status`
+- `POST /api/ocr/settings`
+- `POST /api/ocr/check`
 - `GET /api/audio/devices`
 - `GET /api/audio/output-devices`
 - `GET /api/audio/level`
@@ -141,6 +145,34 @@ Safe deletion rules:
 - If a path is ambiguous, outside the expected known folder, missing, locked, or otherwise unsafe, do not delete it; return an error marker where appropriate.
 
 Future OCR/CV cleanup should extend the same model with explicit artifact keys and dedicated cleanup controls. Expected future artifacts include `ocr_timeline.json` and `ocr_text.txt`, but OCR is not implemented yet.
+
+### `app/ocr_manager.py`
+
+Tesseract detection and OCR settings service for Stage 1.1a.
+
+Key behavior:
+
+- Reads and writes the `ocr` section in the existing `data\settings.json` file while preserving storage and future settings sections.
+- Detects candidates in this order: configured executable path, `shutil.which("tesseract")`, then the standard 64-bit and 32-bit Windows install paths.
+- An explicitly configured invalid path returns `error=invalid_configured_path` instead of silently reporting a different automatic installation as the configured engine.
+- Validates the executable path and runs `tesseract --version` and `tesseract --list-langs` with a five-second timeout for each subprocess.
+- Returns stable non-throwing error codes for missing executables, failed commands, and timeouts.
+- Parses the installed language list and exposes `has_rus` and `has_eng` readiness flags.
+
+Settings schema:
+
+```json
+{
+  "ocr": {
+    "tesseract_path": "C:\\Program Files\\Tesseract-OCR\\tesseract.exe",
+    "default_languages": ["rus", "eng"]
+  }
+}
+```
+
+`GET /api/ocr/status` checks the saved configuration. `POST /api/ocr/settings` persists the supplied path/languages and returns the resulting status. `POST /api/ocr/check` can check the saved configuration or an unsaved path supplied in the request.
+
+Stage 1.1a intentionally does not read images, invoke OCR on frames, create OCR artifacts, estimate OCR runtime, or add OCR cancellation. Stage 1.1b should consume extracted frame indexes through a dedicated processor, add explicit OCR artifacts, and extend queue/runtime/cancellation contracts in that stage.
 
 ### `app/audio_recorder.py`
 
@@ -395,7 +427,7 @@ Key behavior:
 - Current stage IDs are `idle`, `waiting_download`, `preparing_source`, `downloading_media`, `downloading_video`, `cancelling_download`, `download_cancelled`, `download_failed`, `transcribing_audio`, `cancelling_transcription`, `extracting_frames`, `cancelling`, `completed`, `failed`, and `cancelled`.
 - Active items expose one `stage_progress` object. `mode` is `determinate`, `indeterminate`, or `none`; determinate downloads may include percent/bytes/speed/ETA, and frame extraction may include completed/total units. Transcription stays indeterminate because the backend has no reliable segment total.
 - Future reserved stage IDs are `ocr_pending_future`, `cv_pending_future`, and `media_index_pending_future`; they are labels only and must not imply OCR/CV/media-index implementation.
-- Stores each item's actual processing plan in `processing_plan`. The current schema has `audio.enabled/model/device`, `frames.enabled/rate/interval_sec/jpeg_quality`, `ocr.enabled/engine/languages/status`, and `cv.enabled/engine/status`.
+- Stores each item's actual processing plan in `processing_plan`. The current schema has `audio.enabled/model/device`, `frames.enabled/rate/interval_sec/jpeg_quality`, `ocr.enabled/engine/languages/status/engine_available`, and `cv.enabled/engine/status`.
 - Default processing settings are frontend state for now. The frontend sends a snapshot with each add-files/add-recordings/add-urls request, so defaults apply only to newly added items.
 - Pending item edits update the item plan. Precedence is per-item `processing_plan` over defaults; legacy `operations` and `frame_extraction` are synchronized compatibility fields.
 - `POST /api/queue/estimate-item` runs one pending-item runtime estimate at a time. Queue start, item edits/removal, retry, and clear are blocked until it finishes.
@@ -403,7 +435,7 @@ Key behavior:
 - The runtime Model/Device/Compute type/Speed cards have one frontend renderer. During audio transcription they use the current item's audio plan plus matching resolved transcriber values; during non-audio queue stages they show not applicable, and while idle they show idle.
 - Old queue items without `processing_plan` remain valid. The worker falls back to the queue start model/device and legacy operation/frame fields.
 - Stores per-item operation choices in `operations`: `transcribe_audio`, `extract_frames`, `ocr`, and `cv`.
-- Keeps OCR and CV as no-op placeholders in the backend. Incoming OCR/CV enabled flags are normalized back to disabled with `status=coming_soon`.
+- Keeps OCR and CV as no-op placeholders in the backend. Incoming OCR/CV enabled flags are normalized back to disabled with `status=coming_soon`; OCR may additionally snapshot `engine_available` for readiness display without triggering work.
 - Stores per-item frame settings in `frame_extraction`: extraction rate, JPEG quality, estimates, warning flag, and latest extraction result.
 - Stores terminal output metadata in `outputs`: transcript path/existence, diagnostic JSON path/existence, frame folder path/existence, frame index path/existence, downloaded URL media path/existence/deleted marker, uploaded temp path/existence/deleted marker, and retention cleanup error markers.
 - Calls the optional `retention_cleaner` callback only after a fully successful item. Failed, cancelled, and partial-success items keep intermediate files for debugging.

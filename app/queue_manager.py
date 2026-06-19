@@ -659,6 +659,7 @@ class QueueManager:
                 "engine": str(ocr_plan.get("engine") or "tesseract"),
                 "languages": list(ocr_plan.get("languages") or ["rus", "eng"]),
                 "status": "coming_soon",
+                "engine_available": bool(ocr_plan.get("engine_available", False)),
             },
             "cv": {
                 "enabled": False,

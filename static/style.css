@@ -1148,6 +1148,84 @@ summary:focus-visible {
   margin: 0 0 6px;
 }
 
+.ocr-settings-panel {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.ocr-settings-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ocr-settings-heading h4,
+.ocr-settings-heading p {
+  margin: 0;
+}
+
+.ocr-status-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.ocr-status-grid > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-soft);
+}
+
+.ocr-status-grid span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.ocr-status-grid code,
+.ocr-status-grid strong {
+  overflow-wrap: anywhere;
+}
+
+.ocr-language-readiness {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.ocr-settings-actions {
+  margin-top: 0;
+}
+
+.status-pill {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 4px 9px;
+  background: var(--panel-muted);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.status-pill[data-status="success"] {
+  color: var(--success);
+}
+
+.status-pill[data-status="warning"] {
+  color: var(--warning);
+}
+
+.status-pill[data-status="error"] {
+  color: var(--danger);
+}
+
 .queue-audio-settings {
   display: grid;
   grid-template-columns: minmax(120px, 1fr) repeat(2, minmax(0, 1fr));

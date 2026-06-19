@@ -343,6 +343,41 @@ class I18nTests(unittest.TestCase):
         self.assertEqual("Storage settings saved.", dictionary_value(i18n, "en", "storageSettingsSaved"))
         self.assertIn('"Настройки хранения сохранены.": "Storage settings saved."', i18n)
 
+    def test_ocr_settings_copy_is_localized(self) -> None:
+        i18n = (STATIC_DIR / "i18n.js").read_text(encoding="utf-8")
+        ru_keys = dictionary_keys(i18n, "ru")
+        en_keys = dictionary_keys(i18n, "en")
+        for key in (
+            "ocrSettingsTitle",
+            "ocrEngineLabel",
+            "ocrEngineTesseract",
+            "ocrPathLabel",
+            "ocrVersionLabel",
+            "ocrLanguagesLabel",
+            "ocrCustomPathLabel",
+            "ocrCustomPathPlaceholder",
+            "ocrCheckButton",
+            "ocrSaveButton",
+            "ocrChecking",
+            "ocrStatusAvailable",
+            "ocrStatusNotFound",
+            "ocrStatusCheckFailed",
+            "ocrHasRus",
+            "ocrMissingRus",
+            "ocrHasEng",
+            "ocrMissingEng",
+            "ocrInstallHint",
+            "ocrNextStage",
+            "ocrErrorInvalidPath",
+        ):
+            self.assertIn(key, ru_keys)
+            self.assertIn(key, en_keys)
+        self.assertEqual("OCR / text recognition", dictionary_value(i18n, "en", "ocrSettingsTitle"))
+        self.assertEqual(
+            "OCR processing will be added in the next stage.",
+            dictionary_value(i18n, "en", "ocrNextStage"),
+        )
+
     def test_idle_level_messages_are_localized(self) -> None:
         i18n = (STATIC_DIR / "i18n.js").read_text(encoding="utf-8")
 

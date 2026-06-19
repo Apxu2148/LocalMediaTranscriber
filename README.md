@@ -29,6 +29,7 @@ This project is a separate fork of `LocalAudioTranscriber`. The current version 
 - Extract video frames to a per-source folder with a `frames_index.json` manifest.
 - Choose JPEG quality `75`, `80`, `85`, `90`, `95`, or `100` for frame extraction; `90` is the default.
 - Run a 60-second runtime estimate for a pending item's enabled transcription and frame extraction operations before full processing.
+- Detect a local Tesseract OCR installation, show its version and languages, and save a custom executable path.
 - Remove pending queue items, or cancel a running frame extraction item and continue with the rest of the queue.
 - Choose Whisper models: `tiny`, `base`, `small`, `medium`, `large-v3`.
 - Manage Whisper models before transcription: check local availability, download, verify, view info, and delete selected local caches.
@@ -84,6 +85,14 @@ pip install -r requirements-gpu.txt
 
 `requirements-gpu.txt` contains the CUDA/NVIDIA packages needed for GPU acceleration plus the screen-recording runtime packages mirrored from the CPU file. Keep both requirements files updated when dependencies change.
 
+## OCR Engine Setup (Stage 1.1a)
+
+Stage 1.1a checks whether the external Tesseract OCR engine is available. The OCR panel near the default queue settings shows the detected executable path, version, installed language packs, and separate readiness for `rus` and `eng`. You can save a custom path to `tesseract.exe` when automatic detection does not find it.
+
+Tesseract is not bundled, downloaded, or installed by this app. Install Tesseract OCR for Windows separately, then either make `tesseract` available in `PATH`, use a standard `C:\Program Files\Tesseract-OCR` installation, or enter the executable path in the UI. The Russian and English language packs (`rus` and `eng`) are recommended.
+
+This stage does not run OCR on extracted frames and does not create OCR output files. Actual frame OCR is reserved for Stage 1.1b; the OCR processing option remains disabled and marked as coming soon.
+
 ## Run
 
 ```bat
@@ -134,7 +143,7 @@ If Git reports `.git/index.lock` before commit, run `cleanup-dev.bat`.
 
 ## Stored Files
 
-The queue is now a media processing queue. Its main action is "Start processing". Video files and supported video URLs can currently be transcribed, split into frames, or both. OCR and CV/VLM options are visible as disabled coming-soon placeholders and are not implemented yet.
+The queue is now a media processing queue. Its main action is "Start processing". Video files and supported video URLs can currently be transcribed, split into frames, or both. Tesseract availability can be checked in OCR settings, but OCR processing and CV/VLM options remain disabled coming-soon operations.
 
 Queue usability:
 
@@ -159,7 +168,7 @@ Storage panel:
 - Retention cleanup runs only after successful processing. It does not run for failed, cancelled, partial-success, or running items.
 - Retention cleanup never deletes `data\recordings`, `data\transcripts`, extracted frames, screen recordings, or `frames_index.json`.
 - The manual cleanup buttons clear only `data\downloads` or `data\uploads` after confirmation. They do not delete transcripts, recordings, frames, or original user files outside the project `data` folder.
-- Storage settings are persisted in `data\settings.json`.
+- Storage and OCR engine settings are persisted in `data\settings.json`.
 
 Recordings:
 

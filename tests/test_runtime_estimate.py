@@ -119,6 +119,7 @@ class RuntimeEstimatorTests(unittest.TestCase):
             "processing_plan": {
                 "audio": {"enabled": False},
                 "frames": {"enabled": False},
+                "ocr": {"enabled": True, "engine_available": True, "status": "coming_soon"},
             },
         })
 

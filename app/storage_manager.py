@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 from typing import Any
@@ -45,8 +46,6 @@ class StorageManager:
         payload = dict(DEFAULT_STORAGE_SETTINGS)
         try:
             if self.settings_path.exists():
-                import json
-
                 stored = json.loads(self.settings_path.read_text(encoding="utf-8"))
                 if isinstance(stored, dict):
                     for key in payload:
@@ -61,7 +60,16 @@ class StorageManager:
         for key in DEFAULT_STORAGE_SETTINGS:
             if key in changes:
                 settings[key] = bool(changes[key])
-        write_json_file_atomic(self.settings_path, settings)
+        stored: dict[str, Any] = {}
+        try:
+            if self.settings_path.exists():
+                loaded = json.loads(self.settings_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    stored = loaded
+        except (OSError, ValueError):
+            pass
+        stored.update(settings)
+        write_json_file_atomic(self.settings_path, stored)
         return settings
 
     def cleanup_folder(self, key: str) -> dict:

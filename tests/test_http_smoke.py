@@ -140,6 +140,47 @@ class HttpSmokeTests(unittest.TestCase):
         self.assertEqual(400, invalid_response.status_code)
         self.assertEqual([call(1), call(2), call(999)], estimate_item.call_args_list)
 
+    def test_ocr_status_settings_and_check_endpoints_are_non_crashing(self) -> None:
+        available = {
+            "engine": "tesseract",
+            "available": True,
+            "path": r"C:\Tesseract-OCR\tesseract.exe",
+            "version": "5.3.0",
+            "languages": ["eng", "rus"],
+            "has_eng": True,
+            "has_rus": True,
+            "configured_path": None,
+            "error": None,
+        }
+        invalid = {**available, "available": False, "path": r"C:\bad\tesseract.exe", "error": "invalid_configured_path"}
+        with (
+            patch.object(main_module.ocr_manager, "status", side_effect=[available, available, invalid]) as status,
+            patch.object(
+                main_module.ocr_manager,
+                "update_settings",
+                return_value={"tesseract_path": r"C:\Tesseract-OCR\tesseract.exe", "default_languages": ["rus", "eng"]},
+            ) as update_settings,
+            TestClient(main_module.app) as client,
+        ):
+            status_response = client.get("/api/ocr/status")
+            settings_response = client.post(
+                "/api/ocr/settings",
+                json={"tesseract_path": r"C:\Tesseract-OCR\tesseract.exe", "default_languages": ["rus", "eng"]},
+            )
+            check_response = client.post("/api/ocr/check", json={"tesseract_path": r"C:\bad\tesseract.exe"})
+
+        self.assertEqual(200, status_response.status_code)
+        self.assertTrue(status_response.json()["available"])
+        self.assertEqual(200, settings_response.status_code)
+        self.assertEqual("5.3.0", settings_response.json()["status"]["version"])
+        update_settings.assert_called_once_with({
+            "tesseract_path": r"C:\Tesseract-OCR\tesseract.exe",
+            "default_languages": ["rus", "eng"],
+        })
+        self.assertEqual(200, check_response.status_code)
+        self.assertEqual("invalid_configured_path", check_response.json()["error"])
+        self.assertEqual(r"C:\bad\tesseract.exe", status.call_args_list[-1].args[0])
+
     def test_recording_queue_and_transcript_reader_are_path_constrained(self) -> None:
         with TemporaryDirectory(dir=PROJECT_TMP) as temp_dir:
             root = Path(temp_dir)

@@ -54,6 +54,19 @@ class StorageManagerTests(unittest.TestCase):
             reloaded,
         )
 
+    def test_storage_settings_update_preserves_ocr_section(self) -> None:
+        settings_path = self.data_dir / "settings.json"
+        settings_path.write_text(
+            '{"ocr":{"tesseract_path":"C:\\\\OCR\\\\tesseract.exe","default_languages":["rus","eng"]}}',
+            encoding="utf-8",
+        )
+
+        self.make_manager().update_settings({"keep_downloaded_url_media": False})
+
+        content = settings_path.read_text(encoding="utf-8")
+        self.assertIn('"ocr"', content)
+        self.assertIn('"tesseract_path"', content)
+
     def test_cleanup_deletes_only_allowed_intermediate_folders(self) -> None:
         (self.data_dir / "downloads" / "nested").mkdir(parents=True)
         (self.data_dir / "downloads" / "media.mp4").write_bytes(b"1234")

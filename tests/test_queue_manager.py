@@ -311,7 +311,7 @@ class QueueManagerTests(unittest.TestCase):
                 "rate": {"mode": "interval", "seconds": 30},
                 "jpeg_quality": 75,
             },
-            "ocr": {"enabled": False, "engine": "tesseract", "languages": ["rus", "eng"], "status": "coming_soon"},
+            "ocr": {"enabled": True, "engine": "tesseract", "languages": ["rus", "eng"], "status": "coming_soon", "engine_available": True},
             "cv": {"enabled": False, "engine": "basic_opencv", "status": "coming_soon"},
         }
 
@@ -327,6 +327,9 @@ class QueueManagerTests(unittest.TestCase):
         self.assertTrue(item["processing_plan"]["frames"]["enabled"])
         self.assertEqual({"mode": "interval", "seconds": 30}, item["processing_plan"]["frames"]["rate"])
         self.assertEqual(75, item["processing_plan"]["frames"]["jpeg_quality"])
+        self.assertFalse(item["processing_plan"]["ocr"]["enabled"])
+        self.assertTrue(item["processing_plan"]["ocr"]["engine_available"])
+        self.assertFalse(item["operations"]["ocr"])
         self.assertTrue(item["operations"]["extract_frames"])
         self.assertEqual(75, item["frame_extraction"]["jpeg_quality"])
 

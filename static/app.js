@@ -114,6 +114,16 @@ const defaultAudioEnabled = document.querySelector("#defaultAudioEnabled");
 const defaultFramesEnabled = document.querySelector("#defaultFramesEnabled");
 const defaultFrameRateSelect = document.querySelector("#defaultFrameRateSelect");
 const defaultJpegQualitySelect = document.querySelector("#defaultJpegQualitySelect");
+const ocrStatusBadge = document.querySelector("#ocrStatusBadge");
+const ocrDetectedPath = document.querySelector("#ocrDetectedPath");
+const ocrVersion = document.querySelector("#ocrVersion");
+const ocrLanguages = document.querySelector("#ocrLanguages");
+const ocrRusStatus = document.querySelector("#ocrRusStatus");
+const ocrEngStatus = document.querySelector("#ocrEngStatus");
+const ocrPathInput = document.querySelector("#ocrPathInput");
+const ocrCheckButton = document.querySelector("#ocrCheckButton");
+const ocrSaveButton = document.querySelector("#ocrSaveButton");
+const ocrStatusMessage = document.querySelector("#ocrStatusMessage");
 const diskFree = document.querySelector("#diskFree");
 const operationOverlay = document.querySelector("#operationOverlay");
 const operationOverlayTitle = document.querySelector("#operationOverlayTitle");
@@ -178,6 +188,7 @@ let outputSwitchInFlight = false;
 let latestRecordingFiles = [];
 let latestMicDevicesResult = null;
 let latestOutputDevicesResult = null;
+let latestOcrStatus = null;
 const dynamicOutputRenderers = new Map();
 const queueControlSelector = ".queue-item-card select, .queue-item-card input, .queue-item-card button";
 const terminalQueueStatuses = new Set(["completed", "error", "failed", "cancelled"]);
@@ -1571,6 +1582,89 @@ async function saveStorageSettings() {
   }
 }
 
+function ocrErrorMessageKey(errorCode) {
+  return {
+    invalid_configured_path: "ocrErrorInvalidPath",
+    version_timeout: "ocrErrorVersionTimeout",
+    version_check_failed: "ocrErrorVersionCheck",
+    languages_timeout: "ocrErrorLanguagesTimeout",
+    languages_check_failed: "ocrErrorLanguagesCheck",
+  }[errorCode] || "ocrErrorCheckFailed";
+}
+
+function renderOcrStatus(status, { syncConfiguredPath = false } = {}) {
+  latestOcrStatus = status;
+  if (syncConfiguredPath) {
+    ocrPathInput.value = status.configured_path || "";
+  }
+  const available = Boolean(status.available);
+  const missing = status.error === "not_found";
+  const statusKey = available ? "ocrStatusAvailable" : missing ? "ocrStatusNotFound" : "ocrStatusCheckFailed";
+  ocrStatusBadge.textContent = t(statusKey);
+  ocrStatusBadge.dataset.status = available ? "success" : missing ? "warning" : "error";
+  ocrDetectedPath.textContent = status.path || t("ocrValueUnavailable");
+  ocrVersion.textContent = status.version || t("ocrValueUnavailable");
+  ocrLanguages.textContent = status.languages?.length ? status.languages.join(", ") : t("ocrLanguagesNone");
+  ocrRusStatus.textContent = t(status.has_rus ? "ocrHasRus" : "ocrMissingRus");
+  ocrEngStatus.textContent = t(status.has_eng ? "ocrHasEng" : "ocrMissingEng");
+  if (available) {
+    setLocalizedOutput(ocrStatusMessage, "ocrNextStage", {}, "info");
+  } else if (missing) {
+    setLocalizedOutput(ocrStatusMessage, "ocrInstallHint", {}, "warning");
+  } else {
+    setLocalizedOutput(ocrStatusMessage, ocrErrorMessageKey(status.error), {}, "error");
+  }
+}
+
+async function refreshOcrStatus() {
+  try {
+    renderOcrStatus(await requestJson("/api/ocr/status"), { syncConfiguredPath: true });
+  } catch (error) {
+    setOutput(ocrStatusMessage, error.message, "error");
+  }
+}
+
+async function checkOcrStatus() {
+  ocrCheckButton.disabled = true;
+  ocrSaveButton.disabled = true;
+  setLocalizedOutput(ocrStatusMessage, "ocrChecking");
+  try {
+    const status = await requestJson("/api/ocr/check", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tesseract_path: ocrPathInput.value.trim() || null }),
+    });
+    renderOcrStatus(status);
+  } catch (error) {
+    setOutput(ocrStatusMessage, error.message, "error");
+  } finally {
+    ocrCheckButton.disabled = false;
+    ocrSaveButton.disabled = false;
+  }
+}
+
+async function saveOcrSettings() {
+  ocrCheckButton.disabled = true;
+  ocrSaveButton.disabled = true;
+  try {
+    const result = await requestJson("/api/ocr/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tesseract_path: ocrPathInput.value.trim() || null,
+        default_languages: ["rus", "eng"],
+      }),
+    });
+    renderOcrStatus(result.status, { syncConfiguredPath: true });
+    showToast(t("ocrPathSaved"), "success");
+  } catch (error) {
+    setOutput(ocrStatusMessage, error.message, "error");
+  } finally {
+    ocrCheckButton.disabled = false;
+    ocrSaveButton.disabled = false;
+  }
+}
+
 async function cleanupStorageFolder(folder) {
   const messageKey = folder === "downloads" ? "confirmClearDownloads" : "confirmClearUploads";
   if (!window.confirm(t(messageKey))) {
@@ -2558,7 +2652,7 @@ function populateDefaultProcessingControls() {
   }
 }
 
-function processingPlanFromValues({ audioEnabled, model, device, framesEnabled, frameRate, jpegQuality }) {
+function processingPlanFromValues({ audioEnabled, model, device, framesEnabled, frameRate, jpegQuality, ocrEngineAvailable }) {
   return {
     audio: {
       enabled: Boolean(audioEnabled),
@@ -2576,6 +2670,7 @@ function processingPlanFromValues({ audioEnabled, model, device, framesEnabled, 
       engine: "tesseract",
       languages: ["rus", "eng"],
       status: "coming_soon",
+      engine_available: Boolean(ocrEngineAvailable ?? latestOcrStatus?.available),
     },
     cv: {
       enabled: false,
@@ -2609,6 +2704,7 @@ function processingPlanForQueueItem(queueItem) {
     framesEnabled: frames.enabled ?? operations.extract_frames ?? false,
     frameRate: frames.rate || frameSettings.rate || frameRateFromValue("interval:10"),
     jpegQuality: frames.jpeg_quality || frameSettings.jpeg_quality || 90,
+    ocrEngineAvailable: plan.ocr?.engine_available,
   });
 }
 
@@ -3734,6 +3830,8 @@ keepDownloadedMediaCheckbox.addEventListener("change", saveStorageSettings);
 keepUploadedTempCheckbox.addEventListener("change", saveStorageSettings);
 clearDownloadsButton.addEventListener("click", () => cleanupStorageFolder("downloads"));
 clearUploadsButton.addEventListener("click", () => cleanupStorageFolder("uploads"));
+ocrCheckButton.addEventListener("click", checkOcrStatus);
+ocrSaveButton.addEventListener("click", saveOcrSettings);
 videoMuxForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   await mergeVideoWithAudio();
@@ -3911,6 +4009,7 @@ async function boot() {
   await refreshModelDownloadStatus(true);
   await refreshStorage();
   await refreshStorageSettings();
+  await refreshOcrStatus();
   await refreshQueueStatus();
   await refreshBenchmarkStatus();
   await refreshMicLevel();
@@ -3956,6 +4055,9 @@ document.addEventListener("lat-language-change", () => {
     renderQueue(latestQueueStatus);
   }
   renderRuntimeDetails();
+  if (latestOcrStatus) {
+    renderOcrStatus(latestOcrStatus);
+  }
   rerenderDynamicOutputs();
   refreshStatus();
   refreshBenchmarkStatus();
