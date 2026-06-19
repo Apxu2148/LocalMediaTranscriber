@@ -1059,6 +1059,82 @@ summary:focus-visible {
   color: var(--muted);
 }
 
+.default-processing-settings {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-muted);
+}
+
+.default-processing-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.default-processing-heading h4,
+.queue-processing-plan-summary h4 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.default-processing-heading small {
+  color: var(--muted);
+  font-size: 12px;
+  text-align: right;
+}
+
+.default-processing-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.default-processing-grid fieldset {
+  min-width: 0;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.default-processing-grid legend {
+  padding: 0 4px;
+  color: var(--text);
+  font-weight: 700;
+}
+
+.placeholder-fieldset {
+  color: var(--muted);
+}
+
+.placeholder-fieldset p {
+  margin: 0 0 6px;
+}
+
+.queue-audio-settings {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  align-items: end;
+}
+
+.queue-processing-plan-summary {
+  display: grid;
+  gap: 3px;
+  padding: 6px 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.queue-processing-plan-summary p {
+  margin: 0;
+}
+
 .queue-frame-settings {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1604,6 +1680,7 @@ textarea {
   .app-header,
   .model-manager-heading,
   .model-info-heading,
+  .default-processing-heading,
   .section-heading {
     display: block;
   }
@@ -1628,6 +1705,8 @@ textarea {
   .screen-controls-heading,
   .model-row,
     .settings-grid,
+    .default-processing-grid,
+    .queue-audio-settings,
     .level-grid,
     .transcription-grid,
     .unified-transcription-grid,

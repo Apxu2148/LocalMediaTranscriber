@@ -55,11 +55,13 @@ class QueueFile:
     source_type: str = "local_file"
     operations: dict | None = None
     frame_extraction: dict | None = None
+    processing_plan: dict | None = None
 
 
 @dataclass(frozen=True)
 class QueueUrl:
     source_url: str
+    processing_plan: dict | None = None
 
 
 class QueueManager:
@@ -211,6 +213,7 @@ class QueueManager:
                     "stage_detail": f"url_{index:03d}",
                     "operations": self._default_operations("url"),
                     "frame_extraction": None,
+                    "processing_plan": self._normalize_processing_plan(queue_url.processing_plan, "url"),
                     "video_metadata": None,
                     "video_metadata_error": None,
                     "audio_duration_sec": None,
@@ -229,7 +232,7 @@ class QueueManager:
                     "partial_transcript": False,
                     "outputs": {},
                 }
-                item["frame_extraction"] = self._frame_extraction_payload(item, normalize_frame_extraction_settings(None))
+                self._sync_legacy_fields_from_processing_plan(item)
                 self._refresh_frame_estimate_locked(item)
                 self._items.append(item)
 
@@ -340,6 +343,7 @@ class QueueManager:
         *,
         operations: dict | None = None,
         frame_extraction: dict | None = None,
+        processing_plan: dict | None = None,
     ) -> dict:
         with self._lock:
             self._ensure_inactive_locked("Нельзя менять параметры задач во время обработки очереди.")
@@ -348,13 +352,19 @@ class QueueManager:
                 raise RuntimeError("Можно менять только ожидающие задачи очереди.")
 
             media_kind = item.get("media_kind") or self._media_kind_for(item.get("source_path") or item["source_filename"])
-            if operations is not None:
-                item["operations"] = self._normalize_operations(operations, media_kind)
-            if frame_extraction is not None:
-                item["frame_extraction"] = self._frame_extraction_payload(
-                    item,
-                    normalize_frame_extraction_settings(frame_extraction),
-                )
+            legacy_operations = operations if operations is not None else (item.get("operations") if item.get("processing_plan") is None else None)
+            legacy_frame_extraction = (
+                frame_extraction
+                if frame_extraction is not None
+                else (item.get("frame_extraction") if processing_plan is None else None)
+            )
+            item["processing_plan"] = self._normalize_processing_plan(
+                processing_plan if processing_plan is not None else item.get("processing_plan"),
+                media_kind,
+                operations=legacy_operations,
+                frame_extraction=legacy_frame_extraction,
+            )
+            self._sync_legacy_fields_from_processing_plan(item)
             self._refresh_frame_estimate_locked(item)
             self._persist_locked()
             logger.info("Queue item updated: job_id=%s index=%s", self._job_id, index)
@@ -417,7 +427,6 @@ class QueueManager:
 
     def _new_file_item_locked(self, index: int, queue_file: QueueFile) -> dict:
         media_kind = self._media_kind_for(queue_file.source_path)
-        settings = normalize_frame_extraction_settings(queue_file.frame_extraction)
         item = {
             "index": index,
             "source_type": queue_file.source_type,
@@ -430,6 +439,12 @@ class QueueManager:
             "stage_detail": queue_file.source_filename,
             "operations": self._normalize_operations(queue_file.operations, media_kind),
             "frame_extraction": None,
+            "processing_plan": self._normalize_processing_plan(
+                queue_file.processing_plan,
+                media_kind,
+                operations=queue_file.operations,
+                frame_extraction=queue_file.frame_extraction,
+            ),
             "video_metadata": None,
             "video_metadata_error": None,
             "audio_duration_sec": None,
@@ -448,8 +463,8 @@ class QueueManager:
             "partial_transcript": False,
             "outputs": {},
         }
+        self._sync_legacy_fields_from_processing_plan(item)
         if media_kind == "video":
-            item["frame_extraction"] = self._frame_extraction_payload(item, settings)
             self._refresh_video_analysis_locked(item)
         return item
 
@@ -472,15 +487,113 @@ class QueueManager:
             for key in normalized:
                 if key in operations:
                     normalized[key] = bool(operations[key])
-        if normalized.get("ocr"):
-            raise RuntimeError("OCR is not implemented yet.")
-        if normalized.get("cv"):
-            raise RuntimeError("CV is not implemented yet.")
+        normalized["ocr"] = False
+        normalized["cv"] = False
         if media_kind not in {"video", "url"}:
             normalized["extract_frames"] = False
             normalized["ocr"] = False
             normalized["cv"] = False
         return normalized
+
+    def _normalize_processing_plan(
+        self,
+        processing_plan: dict | None,
+        media_kind: str,
+        *,
+        operations: dict | None = None,
+        frame_extraction: dict | None = None,
+    ) -> dict:
+        plan = copy.deepcopy(processing_plan) if isinstance(processing_plan, dict) else {}
+        operation_defaults = self._normalize_operations(operations, media_kind)
+        audio_plan = plan.get("audio") if isinstance(plan.get("audio"), dict) else {}
+        frames_plan = plan.get("frames") if isinstance(plan.get("frames"), dict) else {}
+        ocr_plan = plan.get("ocr") if isinstance(plan.get("ocr"), dict) else {}
+        cv_plan = plan.get("cv") if isinstance(plan.get("cv"), dict) else {}
+        supports_frames = media_kind in {"video", "url"}
+
+        model = str(audio_plan.get("model") or config.WHISPER_MODEL or "small").strip()
+        if model not in config.SUPPORTED_WHISPER_MODELS:
+            model = config.WHISPER_MODEL if config.WHISPER_MODEL in config.SUPPORTED_WHISPER_MODELS else "small"
+
+        device = str(audio_plan.get("device") or config.WHISPER_DEVICE or "auto").strip().lower()
+        if device not in {"auto", "cpu", "cuda"}:
+            device = "auto"
+
+        frame_source = frame_extraction if frame_extraction is not None else frames_plan
+        frame_settings = normalize_frame_extraction_settings(frame_source)
+        rate = normalize_frame_rate(frame_settings.get("rate"))
+        interval_sec = rate.get("seconds") if rate.get("mode") == "interval" else None
+
+        audio_enabled = (
+            operation_defaults.get("transcribe_audio", True)
+            if operations is not None
+            else audio_plan.get("enabled", operation_defaults.get("transcribe_audio", True))
+        )
+        frames_enabled = (
+            operation_defaults.get("extract_frames", False)
+            if operations is not None
+            else frames_plan.get("enabled", operation_defaults.get("extract_frames", False))
+        )
+
+        return {
+            "audio": {
+                "enabled": bool(audio_enabled),
+                "model": model,
+                "device": device,
+            },
+            "frames": {
+                "enabled": bool(frames_enabled) and supports_frames,
+                "rate": rate,
+                "interval_sec": interval_sec,
+                "jpeg_quality": normalize_jpeg_quality(frame_settings.get("jpeg_quality")),
+            },
+            "ocr": {
+                "enabled": False,
+                "engine": str(ocr_plan.get("engine") or "tesseract"),
+                "languages": list(ocr_plan.get("languages") or ["rus", "eng"]),
+                "status": "coming_soon",
+            },
+            "cv": {
+                "enabled": False,
+                "engine": str(cv_plan.get("engine") or "basic_opencv"),
+                "status": "coming_soon",
+            },
+        }
+
+    def _sync_legacy_fields_from_processing_plan(self, item: dict) -> None:
+        media_kind = item.get("media_kind") or self._media_kind_for(item.get("source_path") or item["source_filename"])
+        existing_plan = item.get("processing_plan")
+        plan = self._normalize_processing_plan(
+            existing_plan,
+            media_kind,
+            operations=None if existing_plan is not None else item.get("operations"),
+            frame_extraction=None if existing_plan is not None else item.get("frame_extraction"),
+        )
+        item["processing_plan"] = plan
+        item["operations"] = self._normalize_operations(
+            {
+                "transcribe_audio": plan["audio"]["enabled"],
+                "extract_frames": plan["frames"]["enabled"],
+                "ocr": False,
+                "cv": False,
+            },
+            media_kind,
+        )
+        if self._item_supports_frame_extraction(item):
+            item["frame_extraction"] = self._frame_extraction_payload(
+                item,
+                {"rate": plan["frames"]["rate"], "jpeg_quality": plan["frames"]["jpeg_quality"]},
+            )
+        else:
+            item["frame_extraction"] = None
+
+    @staticmethod
+    def _audio_plan_for(item: dict, fallback_model: str, fallback_device: str) -> tuple[str, str]:
+        audio_plan = (item.get("processing_plan") or {}).get("audio") or {}
+        return (
+            str(audio_plan.get("model") or fallback_model or config.WHISPER_MODEL),
+            str(audio_plan.get("device") or fallback_device or "auto"),
+        )
 
     def _frame_extraction_payload(self, item: dict, settings: dict) -> dict:
         payload = item.get("frame_extraction") or {}
@@ -538,10 +651,6 @@ class QueueManager:
                 continue
             media_kind = item.get("media_kind") or self._media_kind_for(item.get("source_path") or item["source_filename"])
             operations = item.get("operations") or self._default_operations(media_kind)
-            if operations.get("ocr"):
-                raise RuntimeError("OCR is not implemented yet.")
-            if operations.get("cv"):
-                raise RuntimeError("CV is not implemented yet.")
             if item.get("source_type") == "url" and not (operations.get("transcribe_audio") or operations.get("extract_frames")):
                 raise RuntimeError("Выберите хотя бы одну операцию для этой ссылки.")
             if media_kind == "video" and not (operations.get("transcribe_audio") or operations.get("extract_frames")):
@@ -739,8 +848,9 @@ class QueueManager:
                     self._set_item_stage_locked(item, "preparing_source", status="analyzing")
                 self._persist_locked()
                 item_snapshot = copy.deepcopy(item)
-                model = self._model or ""
-                device_preference = self._device_preference or "auto"
+                fallback_model = self._model or config.WHISPER_MODEL
+                fallback_device = self._device_preference or "auto"
+                model, device_preference = self._audio_plan_for(item_snapshot, fallback_model, fallback_device)
                 logger.info(
                     "Queue task started: job_id=%s index=%s source=%s model=%s device=%s",
                     self._job_id,
@@ -771,6 +881,11 @@ class QueueManager:
                     self._persist_locked()
 
                 operations = item_snapshot.get("operations") or self._default_operations(item_snapshot.get("media_kind", "audio"))
+                model, device_preference = self._audio_plan_for(
+                    item_snapshot,
+                    self._model or config.WHISPER_MODEL,
+                    self._device_preference or "auto",
+                )
                 transcript_result: dict = {}
                 transcript_error: Exception | None = None
                 if operations.get("transcribe_audio"):

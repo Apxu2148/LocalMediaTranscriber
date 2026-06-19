@@ -219,6 +219,7 @@ class QueueManagerTests(unittest.TestCase):
         self.assertEqual("transcribing_audio", snapshot["current_stage"])
         cancelled_snapshot = manager.cancel_item(1)
         self.assertEqual("cancelling_transcription", cancelled_snapshot["current_stage"])
+        self.assertTrue(cancelled_snapshot["current_item"]["cancel_requested"])
         self.assertTrue(cancel_seen.wait(timeout=2))
         allow_cancelled_result.set()
         manager.wait(timeout=3)
@@ -277,7 +278,7 @@ class QueueManagerTests(unittest.TestCase):
         self.assertFalse(manager.is_running)
 
         status = manager.status()
-        self.assertEqual([("local_file", "base", "cuda"), ("url", "base", "cuda")], calls)
+        self.assertEqual([("local_file", "small", "auto"), ("url", "small", "auto")], calls)
         self.assertEqual("youtube", status["items"][1]["source_platform"])
         self.assertEqual(str(downloaded.source_path), status["items"][1]["downloaded_audio_path"])
 
@@ -297,6 +298,149 @@ class QueueManagerTests(unittest.TestCase):
         self.assertFalse(item["operations"]["cv"])
         self.assertEqual({"mode": "interval", "seconds": 10}, item["frame_extraction"]["rate"])
         self.assertEqual(90, item["frame_extraction"]["jpeg_quality"])
+
+    def test_new_item_receives_processing_plan_snapshot(self) -> None:
+        manager = self.make_manager(
+            processor=lambda _item, _model, _device: {},
+            video_metadata_reader=lambda _path: {"duration_sec": 90, "fps": 30, "width": 320, "height": 180},
+        )
+        plan = {
+            "audio": {"enabled": True, "model": "medium", "device": "cuda"},
+            "frames": {
+                "enabled": True,
+                "rate": {"mode": "interval", "seconds": 30},
+                "jpeg_quality": 75,
+            },
+            "ocr": {"enabled": False, "engine": "tesseract", "languages": ["rus", "eng"], "status": "coming_soon"},
+            "cv": {"enabled": False, "engine": "basic_opencv", "status": "coming_soon"},
+        }
+
+        status = self.track_job(manager.add_files([QueueFile(
+            source_path=self.make_file("planned.mp4").source_path,
+            source_filename="planned.mp4",
+            processing_plan=plan,
+        )]))
+        item = status["items"][0]
+
+        self.assertEqual("medium", item["processing_plan"]["audio"]["model"])
+        self.assertEqual("cuda", item["processing_plan"]["audio"]["device"])
+        self.assertTrue(item["processing_plan"]["frames"]["enabled"])
+        self.assertEqual({"mode": "interval", "seconds": 30}, item["processing_plan"]["frames"]["rate"])
+        self.assertEqual(75, item["processing_plan"]["frames"]["jpeg_quality"])
+        self.assertTrue(item["operations"]["extract_frames"])
+        self.assertEqual(75, item["frame_extraction"]["jpeg_quality"])
+
+    def test_per_item_audio_model_and_device_are_used_for_transcription(self) -> None:
+        calls: list[tuple[str, str]] = []
+
+        def processor(_item: dict, model: str, device: str) -> dict:
+            calls.append((model, device))
+            return {"processing_time_sec": 1}
+
+        manager = self.make_manager(processor=processor, duration_reader=lambda _path: 1)
+        manager.add_files([QueueFile(
+            source_path=self.make_file("override.wav").source_path,
+            source_filename="override.wav",
+            processing_plan={"audio": {"enabled": True, "model": "large-v3", "device": "cuda"}},
+        )])
+
+        manager.start("small", "cpu")
+        manager.wait(timeout=3)
+
+        self.assertEqual([("large-v3", "cuda")], calls)
+
+    def test_per_item_frame_settings_are_passed_to_frame_processor(self) -> None:
+        captured_settings: list[dict] = []
+
+        def frame_processor(item: dict, _cancel_event: threading.Event, _progress) -> dict:
+            captured_settings.append(item["frame_extraction"])
+            return {"status": "completed", "completed": True, "extracted_frame_count": 2}
+
+        manager = self.make_manager(
+            processor=lambda _item, _model, _device: {},
+            frame_processor=frame_processor,
+            duration_reader=lambda _path: 10,
+            video_metadata_reader=lambda _path: {"duration_sec": 10, "fps": 30, "width": 320, "height": 180},
+        )
+        manager.add_files([QueueFile(
+            source_path=self.make_file("frames.mp4").source_path,
+            source_filename="frames.mp4",
+            processing_plan={
+                "audio": {"enabled": False, "model": "small", "device": "auto"},
+                "frames": {"enabled": True, "rate": {"mode": "interval", "seconds": 30}, "jpeg_quality": 75},
+            },
+        )])
+
+        manager.start("small", "cpu")
+        manager.wait(timeout=3)
+
+        self.assertEqual({"mode": "interval", "seconds": 30}, captured_settings[0]["rate"])
+        self.assertEqual(75, captured_settings[0]["jpeg_quality"])
+
+    def test_changing_defaults_does_not_mutate_existing_items(self) -> None:
+        manager = self.make_manager(processor=lambda _item, _model, _device: {})
+        first_plan = {"audio": {"enabled": True, "model": "small", "device": "auto"}}
+        second_plan = {"audio": {"enabled": True, "model": "medium", "device": "cpu"}}
+
+        manager.add_files([QueueFile(
+            source_path=self.make_file("first.wav").source_path,
+            source_filename="first.wav",
+            processing_plan=first_plan,
+        )])
+        status = manager.add_files([QueueFile(
+            source_path=self.make_file("second.wav").source_path,
+            source_filename="second.wav",
+            processing_plan=second_plan,
+        )])
+
+        self.assertEqual("small", status["items"][0]["processing_plan"]["audio"]["model"])
+        self.assertEqual("medium", status["items"][1]["processing_plan"]["audio"]["model"])
+
+    def test_legacy_item_without_processing_plan_uses_start_fallbacks(self) -> None:
+        calls: list[tuple[str, str]] = []
+
+        def processor(_item: dict, model: str, device: str) -> dict:
+            calls.append((model, device))
+            return {"processing_time_sec": 1}
+
+        manager = self.make_manager(processor=processor, duration_reader=lambda _path: 1)
+        manager.add_files([self.make_file("legacy.wav")])
+        manager._items[0].pop("processing_plan", None)
+
+        manager.start("tiny", "cpu")
+        manager.wait(timeout=3)
+
+        self.assertEqual([("tiny", "cpu")], calls)
+
+    def test_ocr_cv_placeholders_are_normalized_to_noop(self) -> None:
+        processed: list[str] = []
+
+        def processor(item: dict, _model: str, _device: str) -> dict:
+            processed.append(item["source_filename"])
+            return {"processing_time_sec": 1}
+
+        manager = self.make_manager(processor=processor, duration_reader=lambda _path: 1)
+        status = manager.add_files([QueueFile(
+            source_path=self.make_file("placeholder.wav").source_path,
+            source_filename="placeholder.wav",
+            processing_plan={
+                "audio": {"enabled": True, "model": "small", "device": "auto"},
+                "ocr": {"enabled": True, "engine": "tesseract"},
+                "cv": {"enabled": True, "engine": "basic_opencv"},
+            },
+        )])
+
+        item = status["items"][0]
+        self.assertFalse(item["processing_plan"]["ocr"]["enabled"])
+        self.assertEqual("coming_soon", item["processing_plan"]["ocr"]["status"])
+        self.assertFalse(item["processing_plan"]["cv"]["enabled"])
+        self.assertFalse(item["operations"]["ocr"])
+        self.assertFalse(item["operations"]["cv"])
+
+        manager.start("small", "auto")
+        manager.wait(timeout=3)
+
+        self.assertEqual(["placeholder.wav"], processed)
 
     def test_duplicate_pending_file_add_is_ignored(self) -> None:
         manager = self.make_manager(processor=lambda _item, _model, _device: {})
@@ -939,7 +1083,8 @@ class QueueManagerTests(unittest.TestCase):
 
         manager.start("small", "cpu")
         self.assertTrue(frame_started.wait(timeout=2))
-        manager.cancel_item(1)
+        cancelling = manager.cancel_item(1)
+        self.assertTrue(cancelling["current_item"]["cancel_requested"])
         manager.cancel_item(1)
         manager.wait(timeout=3)
 

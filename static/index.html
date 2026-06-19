@@ -29,36 +29,7 @@
           </div>
         </header>
 
-        <section id="transcriptionSettings" class="workspace-section">
-          <div class="section-heading">
-            <div>
-              <h2 data-i18n="settingsTitle"></h2>
-              <p class="section-note" data-i18n="settingsNote"></p>
-            </div>
-          </div>
-          <div class="settings-grid">
-            <label class="field" for="whisperModelSelect">
-              <span data-i18n="model"></span>
-              <select id="whisperModelSelect" data-i18n-title="modelSelectTitle">
-                <option value="tiny">tiny</option>
-                <option value="base">base</option>
-                <option value="small" selected>small</option>
-                <option value="medium">medium</option>
-                <option value="large-v3">large-v3</option>
-              </select>
-              <span id="modelAvailabilityOutput" class="hint" data-i18n="modelChecking"></span>
-            </label>
-            <label class="field" for="whisperDeviceSelect">
-              <span data-i18n="device"></span>
-              <select id="whisperDeviceSelect">
-                <option value="auto" data-i18n="auto"></option>
-                <option value="cpu">CPU</option>
-                <option value="cuda">GPU / CUDA</option>
-              </select>
-              <span id="deviceAvailabilityOutput" class="hint" data-i18n="checkingGpu"></span>
-            </label>
-          </div>
-          <output id="modelDownloadWarning" class="model-warning"></output>
+        <section id="modelManagementSection" class="workspace-section">
           <section id="whisperModelManager" class="model-manager" aria-labelledby="whisperModelManagerTitle">
             <div class="model-manager-heading">
               <div>
@@ -310,16 +281,81 @@
                 <button id="queueStopButton" type="button" disabled data-i18n="stopAfterCurrent"></button>
                 <button id="queueRetryButton" type="button" data-i18n="retryFailed"></button>
               </div>
+              <section id="defaultProcessingSettings" class="default-processing-settings" aria-labelledby="defaultProcessingSettingsTitle">
+                <div class="default-processing-heading">
+                  <div>
+                    <h4 id="defaultProcessingSettingsTitle" data-i18n="defaultProcessingSettingsTitle"></h4>
+                    <p class="section-note" data-i18n="appliesToNewQueueItems"></p>
+                  </div>
+                  <small data-i18n="itemSettingsOverrideDefaults"></small>
+                </div>
+                <div class="default-processing-grid">
+                  <fieldset>
+                    <legend>
+                      <label class="queue-option" for="defaultAudioEnabled">
+                        <input id="defaultAudioEnabled" type="checkbox" checked />
+                        <span data-i18n="audio"></span>
+                      </label>
+                    </legend>
+                    <label class="queue-setting-field" for="whisperModelSelect">
+                      <span data-i18n="model"></span>
+                      <select id="whisperModelSelect" data-i18n-title="modelSelectTitle"></select>
+                      <span id="modelAvailabilityOutput" class="hint" data-i18n="modelChecking"></span>
+                    </label>
+                    <label class="queue-setting-field" for="whisperDeviceSelect">
+                      <span data-i18n="device"></span>
+                      <select id="whisperDeviceSelect">
+                        <option value="auto" data-i18n="auto"></option>
+                        <option value="cpu">CPU</option>
+                        <option value="cuda">GPU / CUDA</option>
+                      </select>
+                      <span id="deviceAvailabilityOutput" class="hint" data-i18n="checkingGpu"></span>
+                    </label>
+                    <output id="modelDownloadWarning" class="model-warning"></output>
+                  </fieldset>
+                  <fieldset>
+                    <legend>
+                      <label class="queue-option" for="defaultFramesEnabled">
+                        <input id="defaultFramesEnabled" type="checkbox" checked />
+                        <span data-i18n="frames"></span>
+                      </label>
+                    </legend>
+                    <label class="queue-setting-field" for="defaultFrameRateSelect">
+                      <span data-i18n="frameInterval"></span>
+                      <select id="defaultFrameRateSelect"></select>
+                    </label>
+                    <label class="queue-setting-field" for="defaultJpegQualitySelect">
+                      <span data-i18n="jpegQuality"></span>
+                      <select id="defaultJpegQualitySelect"></select>
+                    </label>
+                  </fieldset>
+                  <fieldset class="placeholder-fieldset" disabled>
+                    <legend><span data-i18n="ocr"></span></legend>
+                    <p data-i18n="comingSoon"></p>
+                    <select data-i18n-aria-label="ocrEnginePlaceholder">
+                      <option data-i18n="ocrEngineComingSoon"></option>
+                    </select>
+                    <input type="text" value="rus+eng" readonly data-i18n-aria-label="ocrLanguagePlaceholder" />
+                  </fieldset>
+                  <fieldset class="placeholder-fieldset" disabled>
+                    <legend><span data-i18n="computerVision"></span></legend>
+                    <p data-i18n="comingSoon"></p>
+                    <select data-i18n-aria-label="cvEnginePlaceholder">
+                      <option data-i18n="cvEngineComingSoon"></option>
+                    </select>
+                  </fieldset>
+                </div>
+              </section>
               <output id="queueOutput" class="output"></output>
               <ul id="queueList" class="queue-list"></ul>
             </section>
           </div>
 
-          <div id="runtimeDetails" class="runtime-grid">
-            <div><span data-i18n="modelShort"></span><strong id="runtimeModel">small</strong></div>
-            <div><span data-i18n="deviceShort"></span><strong id="runtimeDevice">auto</strong></div>
-            <div><span data-i18n="computeTypeShort"></span><strong id="runtimeCompute">auto</strong></div>
-            <div><span data-i18n="speed"></span><strong id="runtimeSpeed" data-i18n="notAvailable"></strong></div>
+          <div id="runtimeDetails" class="runtime-grid" data-i18n-aria-label="statusIdle">
+            <div><span data-i18n="modelShort"></span><strong id="runtimeModel" data-i18n="statusIdle"></strong></div>
+            <div><span data-i18n="deviceShort"></span><strong id="runtimeDevice" data-i18n="statusIdle"></strong></div>
+            <div><span data-i18n="computeTypeShort"></span><strong id="runtimeCompute" data-i18n="statusIdle"></strong></div>
+            <div><span data-i18n="speed"></span><strong id="runtimeSpeed" data-i18n="statusIdle"></strong></div>
           </div>
           <div id="queueMetricsProgress">
             <div id="queueMetrics" class="queue-progress-grid">

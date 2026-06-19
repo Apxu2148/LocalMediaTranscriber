@@ -388,17 +388,24 @@ Key behavior:
 - Supports stop-after-current, clear, retry failed items, pending-item removal, running transcription/frame-extraction cancellation, status snapshots, elapsed time, ETA, and persistent job snapshots.
 - Treat the queue as a media processing queue, not only a transcription queue.
 - Current executable operations are `transcribe_audio` and `extract_frames`.
-- URL items are created as media processing items. By default they transcribe audio, keep frame extraction off, and carry default frame extraction settings for later opt-in.
+- URL items are created as media processing items. By default they transcribe audio, keep frame extraction off, and carry default frame extraction settings for later opt-in when no frontend processing plan is supplied.
 - Visible but disabled future operations are `ocr` and `cv`.
 - Queue item status remains the behavior switch for existing logic. Stage fields are a small UI/status model layered on top: `stage`, `stage_label_key`, and `stage_detail`.
 - Current stage IDs are `idle`, `preparing_source`, `downloading_media`, `downloading_video`, `transcribing_audio`, `cancelling_transcription`, `extracting_frames`, `cancelling`, `completed`, `failed`, and `cancelled`.
 - Future reserved stage IDs are `ocr_pending_future`, `cv_pending_future`, and `media_index_pending_future`; they are labels only and must not imply OCR/CV/media-index implementation.
-- Stores per-video operation choices in `operations`: `transcribe_audio`, `extract_frames`, `ocr`, and `cv`.
-- Keeps OCR and CV rejected in the backend; the current UI renders them as disabled coming-soon options.
-- Stores per-video frame settings in `frame_extraction`: extraction rate, JPEG quality, estimates, warning flag, and latest extraction result.
+- Stores each item's actual processing plan in `processing_plan`. The current schema has `audio.enabled/model/device`, `frames.enabled/rate/interval_sec/jpeg_quality`, `ocr.enabled/engine/languages/status`, and `cv.enabled/engine/status`.
+- Default processing settings are frontend state for now. The frontend sends a snapshot with each add-files/add-recordings/add-urls request, so defaults apply only to newly added items.
+- Pending item edits update the item plan. Precedence is per-item `processing_plan` over defaults; legacy `operations` and `frame_extraction` are synchronized compatibility fields.
+- The runtime Model/Device/Compute type/Speed cards have one frontend renderer. During audio transcription they use the current item's audio plan plus matching resolved transcriber values; during non-audio queue stages they show not applicable, and while idle they show idle.
+- Old queue items without `processing_plan` remain valid. The worker falls back to the queue start model/device and legacy operation/frame fields.
+- Stores per-item operation choices in `operations`: `transcribe_audio`, `extract_frames`, `ocr`, and `cv`.
+- Keeps OCR and CV as no-op placeholders in the backend. Incoming OCR/CV enabled flags are normalized back to disabled with `status=coming_soon`.
+- Stores per-item frame settings in `frame_extraction`: extraction rate, JPEG quality, estimates, warning flag, and latest extraction result.
 - Stores terminal output metadata in `outputs`: transcript path/existence, diagnostic JSON path/existence, frame folder path/existence, frame index path/existence, downloaded URL media path/existence/deleted marker, uploaded temp path/existence/deleted marker, and retention cleanup error markers.
 - Calls the optional `retention_cleaner` callback only after a fully successful item. Failed, cancelled, and partial-success items keep intermediate files for debugging.
 - Uses callbacks supplied by `app/main.py` to download URLs, transcribe files, extract frames, and record errors.
+
+Future estimate/test-run, OCR/CV engines, media indexes, and RemoteBackend worker plans should extend `processing_plan` instead of adding another disconnected global selector. They must keep the compatibility fields stable until older job JSON and UI code no longer depend on them.
 
 The queue intentionally processes one item at a time. This lowers CUDA memory pressure and keeps the UI progress model simple.
 
@@ -490,6 +497,7 @@ Transcription cancellation lifecycle:
 
 - `QueueManager.cancel_item()` accepts the active item while its status is `extracting_audio`, `transcribing`, or `extracting_frames`.
 - For transcription, the queue stores a per-item `threading.Event`, sets `cancel_requested`, and moves the visible stage to `cancelling_transcription`.
+- The frontend disables the current item's cancel button immediately, retains that pending state through polling via `cancel_requested`, and does not send duplicate cancellation requests.
 - `app/main.py` passes `cancel_event.is_set` into `AudioTranscriber.transcribe()` as `should_cancel`.
 - `AudioTranscriber` checks the callback before invoking segment iteration and between segments. It must not use unsafe Python thread termination.
 - A cancelled transcription returns partial segment data with `cancelled=True`, `partial=True`, and a cancellation reason.

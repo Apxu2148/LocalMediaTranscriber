@@ -28,6 +28,7 @@ class UiContractTests(unittest.TestCase):
             "displayList",
             "screenFpsSelect",
             "whisperModelManager",
+            "modelManagementSection",
             "modelManagerTable",
             "modelManagerBody",
             "modelDownloadProgress",
@@ -43,6 +44,11 @@ class UiContractTests(unittest.TestCase):
             "queueFilePickerText",
             "queueStartButton",
             "queueClearButton",
+            "defaultProcessingSettings",
+            "defaultAudioEnabled",
+            "defaultFramesEnabled",
+            "defaultFrameRateSelect",
+            "defaultJpegQualitySelect",
             "queueStageStatus",
             "queueMetrics",
             "queueProgress",
@@ -184,6 +190,69 @@ class UiContractTests(unittest.TestCase):
         self.assertIn('modelDownloadProgress.removeAttribute("value")', app_js)
         self.assertNotIn("Downloading model", app_js)
         self.assertNotIn("Progress:", app_js)
+
+    def test_default_processing_settings_and_plan_contract_exist(self) -> None:
+        app_js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+
+        self.assertEqual(1, html.count('id="whisperModelSelect"'))
+        self.assertEqual(1, html.count('id="whisperDeviceSelect"'))
+        self.assertLess(html.index('id="queueRetryButton"'), html.index('id="defaultProcessingSettings"'))
+        for element_id in (
+            "defaultProcessingSettings",
+            "defaultAudioEnabled",
+            "defaultFramesEnabled",
+            "defaultFrameRateSelect",
+            "defaultJpegQualitySelect",
+        ):
+            self.assertIn(f'id="{element_id}"', html)
+        for key in (
+            "defaultProcessingSettingsTitle",
+            "appliesToNewQueueItems",
+            "itemSettingsOverrideDefaults",
+            "processingPlan",
+            "processingPlanAudio",
+            "processingPlanFrames",
+            "processingPlanOcr",
+            "processingPlanCv",
+            "disabled",
+            "comingSoon",
+            "computerVision",
+            "ocrEngineComingSoon",
+            "cvEngineComingSoon",
+        ):
+            self.assertIn(key, html + app_js)
+        self.assertIn("defaultProcessingPlanSnapshot", app_js)
+        self.assertIn("processingPlanForQueueItem", app_js)
+        self.assertIn("processing_plan", app_js)
+        self.assertIn('status: "coming_soon"', app_js)
+        self.assertIn('disabled>', html)
+        self.assertNotIn("Tesseract OCR (coming soon)", app_js)
+        self.assertNotIn("Basic OpenCV (coming soon)", app_js)
+
+    def test_processing_plan_polish_contract(self) -> None:
+        app_js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+
+        self.assertNotIn('id="transcriptionSettings"', html)
+        self.assertNotIn('data-i18n="settingsTitle"', html)
+        self.assertNotIn('data-i18n="settingsNote"', html)
+        self.assertNotIn("Настройки транскрибации", html)
+        self.assertIn("function modelOptionLabel(model)", app_js)
+        self.assertIn("function populateModelSelect(select, selectedValue)", app_js)
+        self.assertIn("populateModelSelect(whisperModelSelect, selectedModel())", app_js)
+        self.assertIn('modelOptionLabel,', app_js)
+        self.assertIn("audioRuntimeStages", app_js)
+        self.assertIn("processingPlanForQueueItem(current).audio", app_js)
+        self.assertIn('t("statusNotApplicable")', app_js)
+        self.assertEqual(1, app_js.count("runtimeModel.textContent ="))
+        self.assertEqual(1, app_js.count("runtimeDevice.textContent ="))
+        self.assertEqual(1, app_js.count("runtimeCompute.textContent ="))
+        self.assertEqual(1, app_js.count("runtimeSpeed.textContent ="))
+        self.assertIn("pendingQueueCancellationIds", app_js)
+        self.assertIn("queueItem.cancel_requested", app_js)
+        self.assertIn('button.textContent = t("cancelling")', app_js)
+        self.assertIn('t("cancelRequestSent")', app_js)
 
     def test_queue_start_button_uses_processing_copy(self) -> None:
         html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")

@@ -118,6 +118,29 @@ class I18nTests(unittest.TestCase):
             "verifyModel",
             "deleteModel",
             "defaultSuffix",
+            "defaultProcessingSettingsTitle",
+            "appliesToNewQueueItems",
+            "itemSettingsOverrideDefaults",
+            "processingPlan",
+            "processingPlanAudio",
+            "processingPlanFrames",
+            "processingPlanOcr",
+            "processingPlanCv",
+            "audio",
+            "frames",
+            "ocr",
+            "cv",
+            "computerVision",
+            "frameInterval",
+            "jpegQuality",
+            "disabled",
+            "comingSoon",
+            "ocrEngineComingSoon",
+            "cvEngineComingSoon",
+            "ocrEnginePlaceholder",
+            "ocrLanguagePlaceholder",
+            "cvEnginePlaceholder",
+            "selectAtLeastOneAudioOperation",
             "modelStatusAvailable",
             "modelStatusReady",
             "modelStatusStarting",
@@ -163,12 +186,17 @@ class I18nTests(unittest.TestCase):
             "cancelCurrentShort",
             "cancelTranscription",
             "cancellingTranscription",
+            "cancelRequestSent",
+            "cancelling",
             "transcriptionCancelled",
             "transcriptionCancelAfterSegment",
             "runningItemCannotCancel",
             "frameWriteError",
             "selectAtLeastOneUrlOperation",
             "statusExtractingFrames",
+            "statusNotApplicable",
+            "statusIdle",
+            "statusTranscribingAudio",
             "queueStageStatusIdle",
             "queueStageStatusRunning",
             "queueItemStatusLine",
@@ -241,6 +269,27 @@ class I18nTests(unittest.TestCase):
         html_keys = set(re.findall(r'data-i18n(?:-title|-aria-label|-placeholder)?="([A-Za-z][A-Za-z0-9_]*)"', html))
         app_keys = set(re.findall(r'(?<![A-Za-z0-9_$])t\("([A-Za-z][A-Za-z0-9_]*)"', app_js))
         self.assertFalse((html_keys | app_keys) - keys)
+
+    def test_processing_plan_polish_copy_is_localized(self) -> None:
+        i18n = (STATIC_DIR / "i18n.js").read_text(encoding="utf-8")
+
+        expected = {
+            "audio": ("Аудио", "Audio"),
+            "statusNotApplicable": ("Не применяется", "Not applicable"),
+            "statusIdle": ("Ожидание", "Idle"),
+            "statusExtractingFrames": ("Извлечение кадров", "Extracting frames"),
+            "statusTranscribingAudio": ("Транскрибация аудио", "Transcribing audio"),
+            "cancelRequestSent": ("Запрос на отмену отправлен...", "Cancel request sent..."),
+            "cancelling": ("Отмена выполняется...", "Cancelling..."),
+            "modelOptionTiny": ("самая быстрая, минимальное качество", "fastest, lowest quality"),
+            "modelOptionBase": ("быстрая, базовое качество", "fast, basic quality"),
+            "modelOptionSmall": ("баланс скорости и качества", "balanced speed and quality"),
+            "modelOptionMedium": ("выше качество, медленнее", "higher quality, slower"),
+            "modelOptionLargeV3": ("лучшее качество, тяжелая модель", "best quality, heavy model"),
+        }
+        for key, (ru_value, en_value) in expected.items():
+            self.assertEqual(ru_value, dictionary_value(i18n, "ru", key))
+            self.assertEqual(en_value, dictionary_value(i18n, "en", key))
 
     def test_storage_settings_saved_message_is_localized(self) -> None:
         i18n = (STATIC_DIR / "i18n.js").read_text(encoding="utf-8")

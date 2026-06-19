@@ -2,7 +2,6 @@
   const STORAGE_KEY = "latTourSeen";
   const steps = [
     ["#uiLanguageSelect", "tourLanguageTitle", "tourLanguageText"],
-    ["#transcriptionSettings", "tourSettingsTitle", "tourSettingsText"],
     ["#whisperModelManager", "tourModelsTitle", "tourModelsText"],
     ["#recordingSection", "tourRecordingTitle", "tourRecordingText"],
     ["#helpSection", "tourHelpTitle", "tourHelpText"],

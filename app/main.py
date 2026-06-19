@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import subprocess
@@ -131,10 +132,12 @@ class QueueItemUpdateRequest(BaseModel):
     index: int
     operations: dict | None = None
     frame_extraction: dict | None = None
+    processing_plan: dict | None = None
 
 
 class QueueUrlsRequest(BaseModel):
     urls: list[str]
+    processing_plan: dict | None = None
 
 
 class QueueRecordingRequest(BaseModel):
@@ -144,6 +147,7 @@ class QueueRecordingRequest(BaseModel):
 
 class QueueRecordingsRequest(BaseModel):
     files: list[QueueRecordingRequest]
+    processing_plan: dict | None = None
 
 
 class StorageSettingsRequest(BaseModel):
@@ -870,8 +874,20 @@ async def transcribe_path(
     }
 
 
+def parse_processing_plan_form(value: str | None) -> dict | None:
+    if not value:
+        return None
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise_api_error(f"Invalid processing plan JSON: {exc.msg}")
+    if parsed is not None and not isinstance(parsed, dict):
+        raise_api_error("Invalid processing plan JSON: expected object.")
+    return parsed
+
+
 @app.post("/api/queue/add-files")
-async def queue_add_files(files: list[UploadFile] = File(...)) -> dict:
+async def queue_add_files(files: list[UploadFile] = File(...), processing_plan: str | None = Form(default=None)) -> dict:
     ensure_benchmark_inactive()
     if queue_manager.is_running:
         raise_api_error("Нельзя добавлять файлы во время обработки очереди.")
@@ -879,15 +895,18 @@ async def queue_add_files(files: list[UploadFile] = File(...)) -> dict:
         raise_api_error("Выберите хотя бы один файл для очереди.")
 
     validate_upload_filenames(files)
+    plan = parse_processing_plan_form(processing_plan)
     queue_files: list[QueueFile] = []
     for file in files:
         source_filename = Path(file.filename or "").name
         upload_path = await save_upload_file(file)
-        queue_files.append(QueueFile(source_path=upload_path, source_filename=source_filename))
+        queue_files.append(QueueFile(source_path=upload_path, source_filename=source_filename, processing_plan=plan))
 
     try:
         return queue_manager.add_files(queue_files)
     except RuntimeError as exc:
+        raise_api_error(str(exc))
+    except ValueError as exc:
         raise_api_error(str(exc))
 
 
@@ -910,6 +929,7 @@ def queue_add_recordings(payload: QueueRecordingsRequest) -> dict:
                 source_path=source_path,
                 source_filename=source_path.name,
                 source_type=source_type,
+                processing_plan=payload.processing_plan,
             )
         )
 
@@ -917,15 +937,19 @@ def queue_add_recordings(payload: QueueRecordingsRequest) -> dict:
         return queue_manager.add_files(queue_files)
     except RuntimeError as exc:
         raise_api_error(str(exc))
+    except ValueError as exc:
+        raise_api_error(str(exc))
 
 
 @app.post("/api/queue/add-urls")
 def queue_add_urls(payload: QueueUrlsRequest) -> dict:
     ensure_benchmark_inactive()
     try:
-        urls = [QueueUrl(source_url=url) for url in payload.urls if url.strip()]
+        urls = [QueueUrl(source_url=url, processing_plan=payload.processing_plan) for url in payload.urls if url.strip()]
         return queue_manager.add_urls(urls)
     except RuntimeError as exc:
+        raise_api_error(str(exc))
+    except ValueError as exc:
         raise_api_error(str(exc))
 
 
@@ -954,6 +978,7 @@ def queue_update_item(payload: QueueItemUpdateRequest) -> dict:
             payload.index,
             operations=payload.operations,
             frame_extraction=payload.frame_extraction,
+            processing_plan=payload.processing_plan,
         )
     except RuntimeError as exc:
         raise_api_error(str(exc))

@@ -62,6 +62,7 @@ const benchmarkOutput = document.querySelector("#benchmarkOutput");
 const transcriptText = document.querySelector("#transcriptText");
 const systemStatus = document.querySelector("#systemStatus");
 const modelBadge = document.querySelector("#modelBadge");
+const runtimeDetails = document.querySelector("#runtimeDetails");
 const runtimeModel = document.querySelector("#runtimeModel");
 const runtimeDevice = document.querySelector("#runtimeDevice");
 const runtimeCompute = document.querySelector("#runtimeCompute");
@@ -109,6 +110,10 @@ const queueUrlForm = document.querySelector("#queueUrlForm");
 const queueUrlInput = document.querySelector("#queueUrlInput");
 const queueUrlAddButton = document.querySelector("#queueUrlAddButton");
 const queueSettingsSummary = document.querySelector("#queueSettingsSummary");
+const defaultAudioEnabled = document.querySelector("#defaultAudioEnabled");
+const defaultFramesEnabled = document.querySelector("#defaultFramesEnabled");
+const defaultFrameRateSelect = document.querySelector("#defaultFrameRateSelect");
+const defaultJpegQualitySelect = document.querySelector("#defaultJpegQualitySelect");
 const diskFree = document.querySelector("#diskFree");
 const operationOverlay = document.querySelector("#operationOverlay");
 const operationOverlayTitle = document.querySelector("#operationOverlayTitle");
@@ -158,6 +163,8 @@ let videoMuxInFlight = false;
 let overlayOwner = null;
 let transcriptionPhase = null;
 let activeRuntimeModel = null;
+let latestTranscriptionStatus = null;
+let latestBenchmarkStatus = null;
 let lastLoadedQueueTranscriptPath = null;
 let activeMicDeviceValue = "";
 let activeOutputDeviceValue = "";
@@ -175,6 +182,8 @@ const dynamicOutputRenderers = new Map();
 const queueControlSelector = ".queue-item-card select, .queue-item-card input, .queue-item-card button";
 const terminalQueueStatuses = new Set(["completed", "error", "failed", "cancelled"]);
 const pendingAddKeys = new Set();
+const pendingQueueCancellationIds = new Set();
+const audioRuntimeStages = new Set(["transcribing_audio", "cancelling_transcription"]);
 
 function t(key, variables = {}) {
   return window.LATI18N?.t(key, variables) || key;
@@ -953,16 +962,11 @@ async function refreshStatus() {
     const runtime = transcription.runtime_device || transcription.configured_device || "auto";
     const compute = transcription.runtime_compute_type || transcription.configured_compute_type || "auto";
     const model = transcription.active_model || transcription.loaded_model || selectedModel() || status.whisper_model;
+    latestTranscriptionStatus = transcription;
     transcriptionPhase = transcription.phase || null;
     activeRuntimeModel = model;
 
     modelBadge.textContent = `Whisper ${model} · ${runtime}/${compute}`;
-    updateRuntimeDetails({
-      model,
-      device: runtime,
-      compute_type: compute,
-      realtime_factor: null,
-    });
 
     if (!whisperModelSelect.dataset.initialized && status.whisper_models?.includes(status.whisper_model)) {
       whisperModelSelect.value = status.whisper_model;
@@ -976,6 +980,7 @@ async function refreshStatus() {
     appVersion.textContent = `${t("version")}: ${status.app_version || "?"}`;
     syncRecordingTimer(status);
     isTranscribing = localTranscriptionActive || Boolean(transcription.in_progress);
+    renderRuntimeDetails();
     if (status.recording && status.recording_mode) {
       setSourcesFromMode(status.recording_mode);
       screenSourceCheckbox.checked = Boolean(status.screen_recording?.is_recording);
@@ -1221,17 +1226,90 @@ function formatBenchmark(benchmark, benchmarkPath) {
   ].join("\n");
 }
 
-function updateRuntimeDetails(benchmark) {
-  if (!benchmark) {
+function setRuntimeDetails({ model, device, compute, speed }, stateKey) {
+  runtimeModel.textContent = model;
+  runtimeDevice.textContent = device;
+  runtimeCompute.textContent = compute;
+  runtimeSpeed.textContent = speed;
+  runtimeDetails.dataset.state = stateKey;
+  runtimeDetails.setAttribute("aria-label", t(stateKey));
+  runtimeDetails.title = t(stateKey);
+}
+
+function renderRuntimeDetails() {
+  const transcription = latestTranscriptionStatus || {};
+  const unavailable = t("notAvailable");
+
+  if (queueActive) {
+    const current = latestQueueStatus?.current_item;
+    if (!current) {
+      const notApplicable = t("statusNotApplicable");
+      setRuntimeDetails({
+        model: notApplicable,
+        device: notApplicable,
+        compute: notApplicable,
+        speed: notApplicable,
+      }, "statusNotApplicable");
+      return;
+    }
+    const stage = latestQueueStatus.current_stage || current.stage;
+    if (!audioRuntimeStages.has(stage)) {
+      const notApplicable = t("statusNotApplicable");
+      setRuntimeDetails({
+        model: notApplicable,
+        device: notApplicable,
+        compute: notApplicable,
+        speed: notApplicable,
+      }, stage === "extracting_frames" ? "statusExtractingFrames" : "statusNotApplicable");
+      return;
+    }
+
+    const audioPlan = processingPlanForQueueItem(current).audio;
+    const runtimeMatchesItem = Boolean(
+      transcription.in_progress
+      && transcription.active_model === audioPlan.model
+      && transcription.loaded_model === audioPlan.model,
+    );
+    setRuntimeDetails({
+      model: audioPlan.model,
+      device: runtimeMatchesItem ? (transcription.runtime_device || audioPlan.device) : audioPlan.device,
+      compute: runtimeMatchesItem ? (transcription.runtime_compute_type || unavailable) : unavailable,
+      speed: current.realtime_factor !== null && current.realtime_factor !== undefined
+        ? `${current.realtime_factor}x`
+        : unavailable,
+    }, "statusTranscribingAudio");
     return;
   }
 
-  runtimeModel.textContent = benchmark.model || selectedModel();
-  runtimeDevice.textContent = benchmark.device || "auto";
-  runtimeCompute.textContent = benchmark.compute_type || "auto";
-  if (benchmark.realtime_factor !== null && benchmark.realtime_factor !== undefined) {
-    runtimeSpeed.textContent = `${benchmark.realtime_factor}x`;
+  if (benchmarkActive && latestBenchmarkStatus?.current) {
+    const current = latestBenchmarkStatus.current;
+    setRuntimeDetails({
+      model: current.model || transcription.active_model || unavailable,
+      device: transcription.runtime_device || current.device || unavailable,
+      compute: transcription.runtime_compute_type || unavailable,
+      speed: unavailable,
+    }, "statusTranscribingAudio");
+    return;
   }
+
+  if (latestQueueStatus && latestQueueStatus.status !== "empty" && !localTranscriptionActive) {
+    const idle = t("statusIdle");
+    setRuntimeDetails({ model: idle, device: idle, compute: idle, speed: idle }, "statusIdle");
+    return;
+  }
+
+  if (isTranscribing) {
+    setRuntimeDetails({
+      model: transcription.active_model || transcription.loaded_model || unavailable,
+      device: transcription.runtime_device || transcription.configured_device || unavailable,
+      compute: transcription.runtime_compute_type || transcription.configured_compute_type || unavailable,
+      speed: unavailable,
+    }, "statusTranscribingAudio");
+    return;
+  }
+
+  const idle = t("statusIdle");
+  setRuntimeDetails({ model: idle, device: idle, compute: idle, speed: idle }, "statusIdle");
 }
 
 function updateRecordingTranscribeActions(recordings) {
@@ -1287,6 +1365,7 @@ async function addRecordingsToQueue(recordings) {
           file_path: item.audio_file,
           source_type: item.source_type,
         })),
+        processing_plan: defaultProcessingPlanSnapshot(),
       }),
     });
     renderQueue(status);
@@ -1326,6 +1405,7 @@ async function addLocalFilesToQueue(files, input, pickerText, multiple = false) 
   for (const file of files) {
     formData.append("files", file);
   }
+  formData.append("processing_plan", JSON.stringify(defaultProcessingPlanSnapshot()));
   try {
     renderQueue(await requestJson("/api/queue/add-files", { method: "POST", body: formData }));
     resetFilePicker(input, pickerText, multiple);
@@ -1672,14 +1752,7 @@ async function refreshModelStatuses() {
 
 function applyModelStatuses(statuses) {
   modelStatusByName = new Map(statuses.map((item) => [item.name, item]));
-
-  for (const option of whisperModelSelect.options) {
-    const status = modelStatusByName.get(option.value);
-    if (!status) {
-      continue;
-    }
-    option.textContent = `${status.name} - ${modelOptionDescription(status.name)} (${isModelDownloaded(status) ? t("modelLocal") : t("modelNotDownloaded")})`;
-  }
+  populateModelSelect(whisperModelSelect, selectedModel());
 
   updateModelAvailabilityUi();
   renderModelManager();
@@ -1735,6 +1808,24 @@ function modelKeyPrefix(model) {
 
 function modelOptionDescription(model) {
   return t(`modelOption${modelKeyPrefix(model)}`);
+}
+
+function modelOptionLabel(model) {
+  return `${model} - ${modelOptionDescription(model)}`;
+}
+
+function populateModelSelect(select, selectedValue) {
+  select.innerHTML = "";
+  for (const model of ["tiny", "base", "small", "medium", "large-v3"]) {
+    const option = document.createElement("option");
+    option.value = model;
+    option.textContent = modelOptionLabel(model);
+    option.selected = model === selectedValue;
+    select.append(option);
+  }
+  if (!select.value) {
+    select.value = "small";
+  }
 }
 
 function modelSizeLabel(model) {
@@ -2360,6 +2451,112 @@ function frameRateFromValue(value) {
     : { mode: "interval", seconds: numeric };
 }
 
+function populateDefaultProcessingControls() {
+  populateModelSelect(whisperModelSelect, selectedModel());
+  const previousRate = defaultFrameRateSelect.value || "interval:30";
+  defaultFrameRateSelect.innerHTML = "";
+  for (const optionSpec of frameRateOptions()) {
+    const option = document.createElement("option");
+    option.value = optionSpec.value;
+    option.textContent = optionSpec.label;
+    option.selected = optionSpec.value === previousRate;
+    defaultFrameRateSelect.append(option);
+  }
+  if (![...defaultFrameRateSelect.options].some((option) => option.selected)) {
+    defaultFrameRateSelect.value = "interval:30";
+  }
+
+  const previousQuality = defaultJpegQualitySelect.value || "75";
+  defaultJpegQualitySelect.innerHTML = "";
+  for (const value of [75, 80, 85, 90, 95, 100]) {
+    const option = document.createElement("option");
+    option.value = String(value);
+    option.textContent = String(value);
+    option.selected = String(value) === previousQuality;
+    defaultJpegQualitySelect.append(option);
+  }
+}
+
+function processingPlanFromValues({ audioEnabled, model, device, framesEnabled, frameRate, jpegQuality }) {
+  return {
+    audio: {
+      enabled: Boolean(audioEnabled),
+      model: model || selectedModel(),
+      device: device || selectedDevice(),
+    },
+    frames: {
+      enabled: Boolean(framesEnabled),
+      rate: frameRate,
+      interval_sec: frameRate?.mode === "interval" ? frameRate.seconds : null,
+      jpeg_quality: Number(jpegQuality || 75),
+    },
+    ocr: {
+      enabled: false,
+      engine: "tesseract",
+      languages: ["rus", "eng"],
+      status: "coming_soon",
+    },
+    cv: {
+      enabled: false,
+      engine: "basic_opencv",
+      status: "coming_soon",
+    },
+  };
+}
+
+function defaultProcessingPlanSnapshot() {
+  return processingPlanFromValues({
+    audioEnabled: defaultAudioEnabled.checked,
+    model: selectedModel(),
+    device: selectedDevice(),
+    framesEnabled: defaultFramesEnabled.checked,
+    frameRate: frameRateFromValue(defaultFrameRateSelect.value || "interval:30"),
+    jpegQuality: defaultJpegQualitySelect.value || "75",
+  });
+}
+
+function processingPlanForQueueItem(queueItem) {
+  const operations = queueItem.operations || {};
+  const frameSettings = queueItem.frame_extraction || {};
+  const plan = queueItem.processing_plan || {};
+  const audio = plan.audio || {};
+  const frames = plan.frames || {};
+  return processingPlanFromValues({
+    audioEnabled: audio.enabled ?? operations.transcribe_audio ?? true,
+    model: audio.model || selectedModel(),
+    device: audio.device || selectedDevice(),
+    framesEnabled: frames.enabled ?? operations.extract_frames ?? false,
+    frameRate: frames.rate || frameSettings.rate || frameRateFromValue("interval:10"),
+    jpegQuality: frames.jpeg_quality || frameSettings.jpeg_quality || 90,
+  });
+}
+
+function deviceLabel(device) {
+  return {
+    auto: t("auto"),
+    cpu: "CPU",
+    cuda: "GPU / CUDA",
+  }[device] || device || t("auto");
+}
+
+function frameRateLabel(rate) {
+  const value = frameRateValue(rate);
+  return frameRateOptions().find((option) => option.value === value)?.label || value;
+}
+
+function createPlanSelect(values, selectedValue, datasetName, labeler = (value) => value) {
+  const select = document.createElement("select");
+  select.dataset[datasetName] = "true";
+  for (const value of values) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = labeler(value);
+    option.selected = value === selectedValue;
+    select.append(option);
+  }
+  return select;
+}
+
 function queueItemIsVideo(queueItem) {
   return queueItem.media_kind === "video"
     || queueItem.media_kind === "url"
@@ -2417,6 +2614,57 @@ function createComingSoonOption(key) {
   span.textContent = `${t(key)} ${t("comingSoon")}`;
   label.append(input, span);
   return label;
+}
+
+function createProcessingPlanSummary(queueItem) {
+  const plan = processingPlanForQueueItem(queueItem);
+  const wrapper = document.createElement("div");
+  wrapper.className = "queue-processing-plan-summary";
+  const heading = document.createElement("h4");
+  heading.textContent = t("processingPlan");
+  wrapper.append(heading);
+  wrapper.append(
+    textLine(t("processingPlanAudio", {
+      value: plan.audio.enabled ? `${plan.audio.model} / ${deviceLabel(plan.audio.device)}` : t("disabled"),
+    })),
+    textLine(t("processingPlanFrames", {
+      value: plan.frames.enabled ? `${frameRateLabel(plan.frames.rate)} / JPEG ${plan.frames.jpeg_quality}%` : t("disabled"),
+    })),
+    textLine(t("processingPlanOcr", { value: `${t("disabled")} / ${t("comingSoon")}` })),
+    textLine(t("processingPlanCv", { value: `${t("disabled")} / ${t("comingSoon")}` })),
+  );
+  return wrapper;
+}
+
+function createAudioPlanSettings(queueItem, disabled) {
+  const plan = processingPlanForQueueItem(queueItem);
+  const wrapper = document.createElement("div");
+  wrapper.className = "queue-audio-settings";
+
+  const audioToggle = createQueueCheckbox("audio", plan.audio.enabled, disabled, "transcribe_audio");
+  const modelLabel = document.createElement("label");
+  modelLabel.className = "queue-setting-field";
+  const modelText = document.createElement("span");
+  modelText.textContent = t("model");
+  const modelSelect = createPlanSelect(
+    ["tiny", "base", "small", "medium", "large-v3"],
+    plan.audio.model,
+    "queueAudioModel",
+    modelOptionLabel,
+  );
+  modelSelect.disabled = disabled || !plan.audio.enabled;
+  modelLabel.append(modelText, modelSelect);
+
+  const deviceLabelElement = document.createElement("label");
+  deviceLabelElement.className = "queue-setting-field";
+  const deviceText = document.createElement("span");
+  deviceText.textContent = t("device");
+  const deviceSelect = createPlanSelect(["auto", "cpu", "cuda"], plan.audio.device, "queueAudioDevice", deviceLabel);
+  deviceSelect.disabled = disabled || !plan.audio.enabled;
+  deviceLabelElement.append(deviceText, deviceSelect);
+
+  wrapper.append(audioToggle, modelLabel, deviceLabelElement);
+  return wrapper;
 }
 
 function createFrameSettings(queueItem, disabled) {
@@ -2630,8 +2878,13 @@ function createQueueItemElement(queueItem, status) {
 
   const isCurrent = status.current_item?.index === queueItem.index;
   const canRemove = queueItem.status === "pending";
-  const canCancelTranscription = isCurrent && ["extracting_audio", "transcribing"].includes(queueItem.status);
-  const canCancelFrameExtraction = isCurrent && queueItem.status === "extracting_frames";
+  const cancellationPending = Boolean(queueItem.cancel_requested)
+    || pendingQueueCancellationIds.has(queueItem.index)
+    || ["cancelling_transcription", "cancelling"].includes(queueItem.stage);
+  const canCancelTranscription = isCurrent
+    && !cancellationPending
+    && ["extracting_audio", "transcribing"].includes(queueItem.status);
+  const canCancelFrameExtraction = isCurrent && !cancellationPending && queueItem.status === "extracting_frames";
   const canCancel = canCancelTranscription || canCancelFrameExtraction;
   const currentButCannotCancel = isCurrent && !canCancel && status.status === "running";
   if (canRemove || canCancel || currentButCannotCancel) {
@@ -2642,12 +2895,16 @@ function createQueueItemElement(queueItem, status) {
       : "queue-item-remove";
     actionButton.textContent = canRemove
       ? "\u00d7"
+      : cancellationPending
+        ? t("cancelling")
       : canCancelTranscription
         ? t("cancelTranscription")
         : t("cancelCurrentShort");
-    actionButton.dataset.queueAction = canCancel ? "cancel" : "remove";
-    actionButton.disabled = currentButCannotCancel;
-    actionButton.title = canCancelTranscription
+    actionButton.dataset.queueAction = canRemove ? "remove" : "cancel";
+    actionButton.disabled = cancellationPending || currentButCannotCancel;
+    actionButton.title = cancellationPending
+      ? t("cancelling")
+      : canCancelTranscription
       ? t("transcriptionCancelAfterSegment")
       : canCancelFrameExtraction
         ? t("cancelCurrentItem")
@@ -2675,20 +2932,19 @@ function createQueueItemElement(queueItem, status) {
   const controlsDisabled = queueActive || queueItem.status !== "pending";
   const optionGroup = document.createElement("div");
   optionGroup.className = "queue-options";
+  const label = document.createElement("div");
+  label.className = "queue-options-label";
+  label.textContent = t("processingOptions");
+  optionGroup.append(label, createProcessingPlanSummary(queueItem), createAudioPlanSettings(queueItem, controlsDisabled));
   if (queueItemIsVideo(queueItem)) {
-    const label = document.createElement("div");
-    label.className = "queue-options-label";
-    label.textContent = t("processingOptions");
     optionGroup.append(
-      label,
-      createQueueCheckbox("transcribeAudio", options.transcribe_audio, controlsDisabled, "transcribe_audio"),
       createQueueCheckbox("extractFrames", options.extract_frames, controlsDisabled, "extract_frames"),
       createFrameSettings(queueItem, controlsDisabled),
       createComingSoonOption("ocr"),
       createComingSoonOption("cv"),
     );
   } else {
-    optionGroup.append(createQueueCheckbox("transcribeAudio", true, true, "transcribe_audio"));
+    optionGroup.append(createComingSoonOption("ocr"), createComingSoonOption("cv"));
   }
   item.append(optionGroup);
 
@@ -2728,6 +2984,12 @@ function createQueueItemElement(queueItem, status) {
 function renderQueue(status, options = {}) {
   latestQueueStatus = status;
   queueActive = status.status === "running";
+  for (const index of pendingQueueCancellationIds) {
+    const item = status.items?.find((candidate) => candidate.index === index);
+    if (!item || terminalQueueStatuses.has(item.status)) {
+      pendingQueueCancellationIds.delete(index);
+    }
+  }
   const total = Number(status.total_items || 0);
   const completed = Number(status.completed_items || 0);
   const failed = Number(status.failed_items || 0);
@@ -2749,6 +3011,7 @@ function renderQueue(status, options = {}) {
   queueProgress.value = progress;
   queueProgressText.textContent = t("queueProgress", { done: finished, total, value: Math.round(progress) });
   updateQueueStageStatus(status);
+  renderRuntimeDetails();
 
   const preserveQueueControls = options.preserveFocusedQueueControls
     && (queueControlsFocused || queueControlHasActiveFocus());
@@ -2774,8 +3037,8 @@ function renderQueue(status, options = {}) {
   queueStopButton.disabled = !queueActive || Boolean(status.stop_after_current);
   queueClearButton.disabled = queueActive || total === 0;
   queueRetryButton.disabled = queueActive || failed === 0;
-  whisperModelSelect.disabled = queueActive;
-  whisperDeviceSelect.disabled = queueActive;
+  whisperModelSelect.disabled = queueActive || !defaultAudioEnabled.checked;
+  whisperDeviceSelect.disabled = queueActive || !defaultAudioEnabled.checked;
   transcribeButton.disabled = queueActive || isTranscribing || hasAddingInProgress();
   setRecordingUi(isRecording);
   updateRecordingTranscribeActions(lastRecordings);
@@ -2813,18 +3076,6 @@ function renderQueue(status, options = {}) {
     showToast(t("queueStopped"), "warning");
   }
 
-  const latestCompletedItem = [...(status.items || [])]
-    .reverse()
-    .find((item) => item.status === "completed");
-  if (status.model) {
-    runtimeModel.textContent = status.model;
-  }
-  if (status.device_preference) {
-    runtimeDevice.textContent = status.device_preference;
-  }
-  if (latestCompletedItem?.realtime_factor !== null && latestCompletedItem?.realtime_factor !== undefined) {
-    runtimeSpeed.textContent = `${latestCompletedItem.realtime_factor}x`;
-  }
   const latestTechnicalItem = [...(status.items || [])]
     .reverse()
     .find((item) => item.technical_details);
@@ -2871,15 +3122,28 @@ function collectQueueItemPayload(card) {
     ocr: false,
     cv: false,
   };
+  const modelSelect = card.querySelector("[data-queue-audio-model]");
+  const deviceSelect = card.querySelector("[data-queue-audio-device]");
   const rateSelect = card.querySelector("[data-queue-frame-rate]");
   const qualitySelect = card.querySelector("[data-queue-jpeg-quality]");
+  const frameRate = frameRateFromValue(rateSelect?.value);
+  const jpegQuality = Number(qualitySelect?.value || 90);
+  const processingPlan = processingPlanFromValues({
+    audioEnabled: operations.transcribe_audio,
+    model: modelSelect?.value || selectedModel(),
+    device: deviceSelect?.value || selectedDevice(),
+    framesEnabled: operations.extract_frames,
+    frameRate,
+    jpegQuality,
+  });
   return {
     index: Number(card.dataset.queueIndex),
     operations,
     frame_extraction: {
-      rate: frameRateFromValue(rateSelect?.value),
-      jpeg_quality: Number(qualitySelect?.value || 90),
+      rate: frameRate,
+      jpeg_quality: jpegQuality,
     },
+    processing_plan: processingPlan,
   };
 }
 
@@ -2906,16 +3170,32 @@ async function removeOrCancelQueueItem(card, action) {
   }
   const index = Number(card.dataset.queueIndex);
   const url = action === "cancel" ? "/api/queue/cancel-item" : "/api/queue/remove-item";
+  if (action === "cancel") {
+    if (pendingQueueCancellationIds.has(index)) {
+      return;
+    }
+    pendingQueueCancellationIds.add(index);
+    const button = card.querySelector('[data-queue-action="cancel"]');
+    if (button) {
+      button.disabled = true;
+      button.textContent = t("cancelling");
+    }
+    setOutput(queueOutput, t("cancelRequestSent"), "warning");
+  }
   try {
     renderQueue(await requestJson(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ index }),
     }));
-    const message = action === "cancel" ? t("queueItemCancelRequested") : t("queueItemRemoved");
+    const message = action === "cancel" ? t("cancelRequestSent") : t("queueItemRemoved");
     setOutput(queueOutput, message, action === "cancel" ? "warning" : "success");
     showToast(message, action === "cancel" ? "warning" : "success");
   } catch (error) {
+    if (action === "cancel") {
+      pendingQueueCancellationIds.delete(index);
+      await refreshQueueStatus();
+    }
     setOutput(queueOutput, error.message, "error");
     showToast(error.message, "error");
   }
@@ -2925,14 +3205,18 @@ function validateQueueStartOptions() {
   const invalid = (latestQueueStatus?.items || []).find((item) => {
     const operations = item.operations || {};
     return item.status === "pending"
-      && queueItemIsVideo(item)
+      && (queueItemIsVideo(item) || item.media_kind === "audio")
       && !operations.transcribe_audio
       && !operations.extract_frames;
   });
   if (!invalid) {
     return true;
   }
-  const message = invalid.source_type === "url" ? t("selectAtLeastOneUrlOperation") : t("selectAtLeastOneVideoOperation");
+  const message = invalid.source_type === "url"
+    ? t("selectAtLeastOneUrlOperation")
+    : queueItemIsVideo(invalid)
+      ? t("selectAtLeastOneVideoOperation")
+      : t("selectAtLeastOneAudioOperation");
   setOutput(queueOutput, message, "error");
   showToast(message, "error");
   return false;
@@ -2942,8 +3226,8 @@ function updateLongOperationControls() {
   const active = isTranscribing || queueActive || benchmarkActive || videoMuxInFlight || hasAddingInProgress();
   const fileAddBlocked = active || isAddingFile;
   const urlAddBlocked = active || isAddingUrl;
-  whisperModelSelect.disabled = active;
-  whisperDeviceSelect.disabled = active;
+  whisperModelSelect.disabled = active || !defaultAudioEnabled.checked;
+  whisperDeviceSelect.disabled = active || !defaultAudioEnabled.checked;
   transcribeButton.disabled = fileAddBlocked;
   audioFileInput.disabled = fileAddBlocked;
   audioFilePickerButton.disabled = fileAddBlocked;
@@ -2952,6 +3236,10 @@ function updateLongOperationControls() {
   queueFilePickerButton.disabled = fileAddBlocked;
   queueUrlAddButton.disabled = urlAddBlocked;
   queueUrlInput.disabled = urlAddBlocked;
+  defaultAudioEnabled.disabled = active;
+  defaultFramesEnabled.disabled = active;
+  defaultFrameRateSelect.disabled = active || !defaultFramesEnabled.checked;
+  defaultJpegQualitySelect.disabled = active || !defaultFramesEnabled.checked;
   queueStartButton.disabled = active || Number(latestQueueStatus?.pending_items || 0) === 0;
   queueClearButton.disabled = active || Number(latestQueueStatus?.total_items || 0) === 0;
   queueRetryButton.disabled = active || Number(latestQueueStatus?.failed_items || 0) === 0;
@@ -2988,6 +3276,7 @@ function formatBenchmarkResult(result) {
 }
 
 function renderBenchmark(status) {
+  latestBenchmarkStatus = status;
   benchmarkActive = Boolean(status.running);
   benchmarkCpuResult.textContent = formatBenchmarkResult(status.results?.cpu);
   benchmarkCudaResult.textContent = formatBenchmarkResult(status.results?.cuda);
@@ -3006,6 +3295,7 @@ function renderBenchmark(status) {
       setOutput(benchmarkStatusOutput, status.last_error, "error");
     }
   }
+  renderRuntimeDetails();
   updateLongOperationControls();
 }
 
@@ -3114,11 +3404,17 @@ for (const checkbox of recordingSourceCheckboxes) {
 micDeviceSelect.addEventListener("change", handleMicDeviceChange);
 outputDeviceSelect.addEventListener("change", handleOutputDeviceChange);
 whisperModelSelect.addEventListener("change", () => {
-  runtimeModel.textContent = selectedModel();
   updateModelAvailabilityUi();
   updateQueueSettingsSummary();
+  renderRuntimeDetails();
 });
 whisperDeviceSelect.addEventListener("change", updateQueueSettingsSummary);
+for (const control of [defaultAudioEnabled, defaultFramesEnabled, defaultFrameRateSelect, defaultJpegQualitySelect]) {
+  control.addEventListener("change", () => {
+    updateLongOperationControls();
+    updateQueueSettingsSummary();
+  });
+}
 refreshModelsButton.addEventListener("click", async () => {
   refreshModelsButton.disabled = true;
   setModelManagerStatus(t("modelManagerLoading"), "info");
@@ -3173,7 +3469,7 @@ queueList.addEventListener("focusout", () => {
 });
 queueList.addEventListener("change", async (event) => {
   const target = event.target;
-  if (!target.matches("[data-queue-operation], [data-queue-frame-rate], [data-queue-jpeg-quality]")) {
+  if (!target.matches("[data-queue-operation], [data-queue-audio-model], [data-queue-audio-device], [data-queue-frame-rate], [data-queue-jpeg-quality]")) {
     return;
   }
   await updateQueueItemFromCard(queueCardFromTarget(target));
@@ -3220,7 +3516,7 @@ queueUrlForm.addEventListener("submit", async (event) => {
     renderQueue(await requestJson("/api/queue/add-urls", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ urls }),
+      body: JSON.stringify({ urls, processing_plan: defaultProcessingPlanSnapshot() }),
     }));
     queueUrlInput.value = "";
     const message = t("urlAdded", { count: urls.length });
@@ -3303,6 +3599,7 @@ transcribeForm.addEventListener("submit", async (event) => {
 });
 
 async function boot() {
+  populateDefaultProcessingControls();
   updateFilePickerText(audioFileInput, audioFilePickerText);
   updateFilePickerText(queueFileInput, queueFilePickerText, true);
   updateFilePickerText(benchmarkFileInput, benchmarkFilePickerText);
@@ -3331,6 +3628,7 @@ setInterval(refreshBenchmarkStatus, 1000);
 setInterval(refreshModelDownloadStatus, 1000);
 
 document.addEventListener("lat-language-change", () => {
+  populateDefaultProcessingControls();
   updateFilePickerText(audioFileInput, audioFilePickerText);
   updateFilePickerText(queueFileInput, queueFilePickerText, true);
   updateFilePickerText(benchmarkFileInput, benchmarkFilePickerText);
@@ -3356,6 +3654,7 @@ document.addEventListener("lat-language-change", () => {
   if (latestQueueStatus) {
     renderQueue(latestQueueStatus);
   }
+  renderRuntimeDetails();
   rerenderDynamicOutputs();
   refreshStatus();
   refreshBenchmarkStatus();

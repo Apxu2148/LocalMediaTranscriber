@@ -139,8 +139,10 @@ Queue usability:
 - Add buttons are disabled while a file, latest recording, or link is being added. If the laptop is slow, wait for the visible "Adding..." or stage message instead of clicking repeatedly.
 - Fast repeated clicks and active duplicate file/link adds are ignored before they can create duplicate queue items.
 - Queue stages include preparing source, downloading media/video, transcribing audio, cancelling transcription/frame extraction, extracting frames, completed, failed, and cancelled.
+- Default processing settings live near the queue controls. They define the audio model/device, frame extraction defaults, and OCR/CV placeholders for newly added items only.
+- Each queue item stores its own processing plan. Changing defaults later does not silently mutate existing items; pending item settings override defaults.
 - After an item completes, fails, or is cancelled, its card shows a "Created files" section with known artifacts: transcript TXT, diagnostic JSON, frame folder, `frames_index.json`, downloaded URL media, and uploaded temporary file when available. Cancelled transcription outputs are labelled as partial transcripts. If retention removed a file, the item says so instead of showing it as still present.
-- OCR/CV/media-index stage labels are reserved for future work, but OCR/CV processing is not implemented yet.
+- OCR/CV/media-index stage labels and plan entries are reserved for future work. OCR/CV controls are disabled/coming-soon placeholders and do not create OCR/CV output files.
 
 Storage panel:
 
