@@ -13,6 +13,7 @@ Implemented through Stage 1.1b:
 - runtime estimate/test-run;
 - URL download progress and cancellation;
 - cancellation for transcription and frame extraction;
+- URL download profiles plus media/extraction benchmark diagnostics;
 - OCR backend selector/readiness catalog for Tesseract, EasyOCR, PaddleOCR, and Windows OCR.
 
 OCR/CV processing is still disabled / coming soon.

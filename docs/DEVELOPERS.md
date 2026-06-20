@@ -635,6 +635,10 @@ Key behavior:
 
 Benchmarks are deliberately separate from the queue.
 
+### `app/url_download_manager.py`
+
+Persists the `url_download` section of `data\settings.json` and normalizes per-item snapshots. Unknown profiles and `custom` with an empty format string safely normalize to `auto`. Settings contain `format_profile`, `custom_format`, `log_media_probe`, and `log_extraction_benchmark`; queue plans add `status=pending`.
+
 ### `app/url_downloader.py`
 
 URL downloader/extractor.
@@ -644,6 +648,7 @@ Key behavior:
 - Detects direct media URLs by path extension; query strings are ignored.
 - Downloads direct `.mp4`, `.webm`, `.mkv`, `.avi`, and `.mov` URLs over HTTP(S) without `yt-dlp`.
 - Uses `yt-dlp` for webpage/video-platform URLs such as YouTube or VK.
+- Resolves stable profile IDs into yt-dlp format strings; it never shells out with the custom format string.
 - Accepts public HTTP(S) URLs.
 - Downloads direct media or extracts platform audio/video to `data\downloads`.
 - Accepts a cancellation event and progress callback for both direct and `yt-dlp` downloads.
@@ -652,6 +657,7 @@ Key behavior:
 - Cancellation raises `UrlDownloadCancelled`; the queue maps it to `download_cancelled` without creating a normal error artifact and continues to the next item.
 - Cancellation/failure cleanup only removes downloader-owned files inside the configured downloads directory. If a locked `yt-dlp` file cannot be deleted, cleanup attempts to quarantine it with a `.partial` suffix. Prefix cleanup never traverses or deletes outside that directory.
 - Returns source metadata to the queue and transcript store.
+- Returns `url_download_diagnostics` with profile/format, file size, elapsed download time, and media probe fields. `ffprobe` is invoked directly with a ten-second timeout when enabled and available; missing/failing probes do not fail downloads.
 - Keeps raw downloader failures in technical details while exposing readable queue errors for timeout and authorization/cookies cases.
 
 Progress callback schema:
@@ -669,6 +675,21 @@ Progress callback schema:
 ```
 
 Direct download behavior is tested with mocked HTTP responses. Platform downloads are best-effort and depend on the installed `yt-dlp` version and platform support; cookies/browser-auth support remains future work. This stage does not redesign model download progress; model lifecycle progress remains owned by `model_manager.py` and its existing UI.
+
+Profile mappings for video downloads:
+
+- `auto`: existing `bv*+ba/bestvideo+bestaudio/best` behavior with MKV merge output.
+- `best_for_extraction`: prefers MP4/M4A at `height<=720`, then other streams at 720p, then 1080p, then `best`; merge preference is `mp4/mkv`.
+- `best_quality`: `bv*+ba/best`.
+- `smallest_file`: `worstvideo+worstaudio/worst`.
+- `prefer_webm`: WebM streams/progressive WebM, then best fallback; merge preference is `webm/mkv`.
+- `prefer_mp4`: MP4/M4A streams/progressive MP4, then best fallback; merge preference is `mp4/mkv`.
+- `prefer_mkv`: best-effort MKV stream preference followed by best fallback, with MKV merge output.
+- `prefer_mov` and `prefer_avi`: best-effort progressive/container stream preferences followed by the normal fallback; no unsafe forced remux.
+- `audio_friendly`: existing video-capable Auto mapping when frames are requested. Transcription-only downloads keep the existing M4A/best-audio path.
+- `custom`: the normalized custom string is passed as yt-dlp's `format` option.
+
+Direct media URLs bypass these yt-dlp mappings and record `yt_dlp_format_string_used=direct_url`. Queue items snapshot the setting in `processing_plan.url_download`, so later global changes do not mutate pending/running item choices. Frame processing records `frame_extraction_time_sec`, `frames_extracted`, and `sec_per_frame` in `frame_extraction_result` and `url_download_diagnostics` when benchmark logging is enabled. No dependency was added.
 
 ## Frontend Files
 

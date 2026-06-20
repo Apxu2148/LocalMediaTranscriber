@@ -417,7 +417,15 @@ class VideoFrameExtractor:
             "requested_fps_exceeds_source_fps": False,
             "frames": [],
         }
-        for key in ("source_type", "source_url", "source_title", "source_platform", "downloaded_media_path", "downloaded_video_path"):
+        for key in (
+            "source_type",
+            "source_url",
+            "source_title",
+            "source_platform",
+            "downloaded_media_path",
+            "downloaded_video_path",
+            "url_download_diagnostics",
+        ):
             if source_metadata and source_metadata.get(key):
                 payload[key] = source_metadata[key]
         return payload

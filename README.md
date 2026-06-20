@@ -152,13 +152,22 @@ Queue usability:
 - Fast repeated clicks and active duplicate file/link adds are ignored before they can create duplicate queue items.
 - Queue stages include preparing source, downloading media/video, transcribing audio, cancelling transcription/frame extraction, extracting frames, completed, failed, and cancelled.
 - Active item cards show determinate stage progress for URL downloads and frame extraction when counts are known, or an indeterminate progress bar when the backend cannot provide a real percentage.
-- Default processing settings live near the queue controls. They define the audio model/device, frame extraction defaults, and OCR/CV placeholders for newly added items only.
+- Default processing settings live near the queue controls. They define the audio model/device, frame extraction defaults, URL download profile, and OCR/CV placeholders for newly added items only.
 - Each queue item stores its own processing plan. Changing defaults later does not silently mutate existing items; pending item settings override defaults.
 - Pending local items have an **Estimate time** action. It tests up to the first 60 seconds with that item's model/device and frame interval/JPEG quality, then shows separate and combined approximate runtimes.
 - Estimate samples use temporary clipped audio and temporary JPEGs. They do not create normal transcripts, frame folders, `frames_index.json`, or output artifacts, and the temporary workspace is removed after success or failure.
 - Pending URL items can be estimated only when a local downloaded media file is already available. Stage 0.96 does not download a URL solely for estimation.
 - After an item completes, fails, or is cancelled, its card shows a "Created files" section with known artifacts: transcript TXT, diagnostic JSON, frame folder, `frames_index.json`, downloaded URL media, and uploaded temporary file when available. Cancelled transcription outputs are labelled as partial transcripts. If retention removed a file, the item says so instead of showing it as still present.
 - OCR/CV/media-index stage labels and plan entries are reserved for future work. OCR/CV controls are disabled/coming-soon placeholders and do not create OCR/CV output files. Runtime estimates must be extended when OCR or CV becomes executable.
+
+URL download profiles:
+
+- New URL items snapshot the selected profile: Auto, best for frame extraction, best quality, smallest file, WebM/MP4/MKV/MOV/AVI preference, audio/transcription friendly, or an advanced custom yt-dlp format string.
+- Actual format availability depends on the source site and URL. Every built-in profile has a fallback; direct media URLs keep their source format because yt-dlp selection is not involved.
+- Best for frame extraction prefers MP4-compatible streams and resolutions at or below 720p, then 1080p, before falling back. MOV and AVI preferences are best-effort and do not force unsafe remuxing.
+- Audio/transcription friendly preserves the existing audio-only path for transcription-only jobs and remains video-capable when frame extraction is selected.
+- The custom field is passed only as yt-dlp's format option. An empty custom value safely falls back to Auto.
+- Optional media probing records container, codecs, resolution, FPS, file size, download time, selected profile, and format string. Frame jobs can additionally record elapsed extraction time, frames extracted, and seconds per frame in queue/job metadata and logs. Missing `ffprobe` is reported as unavailable without failing the job.
 
 Storage panel:
 
@@ -169,7 +178,7 @@ Storage panel:
 - Retention cleanup runs only after active download/transcription/frame work has stopped; it never deletes media still in use.
 - Retention cleanup never deletes `data\recordings`, `data\transcripts`, extracted frames, screen recordings, or `frames_index.json`.
 - The manual cleanup buttons clear only `data\downloads` or `data\uploads` after confirmation. They do not delete transcripts, recordings, frames, or original user files outside the project `data` folder.
-- Storage and OCR engine settings are persisted in `data\settings.json`.
+- Storage, URL download, and OCR engine settings are persisted in `data\settings.json`.
 
 OCR backend readiness:
 

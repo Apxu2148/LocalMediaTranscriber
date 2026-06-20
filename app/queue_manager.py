@@ -22,6 +22,7 @@ from .frame_extractor import (
     read_video_metadata,
 )
 from .transcript_store import safe_filename_part, source_stem_for
+from .url_download_manager import normalize_url_download_plan
 from .utils import audio_duration_seconds, timestamp_for_filename, write_json_file_atomic
 
 
@@ -142,18 +143,21 @@ class QueueManager:
         source_url: str,
         cancel_event: threading.Event,
         progress_callback: Callable[[dict], None],
+        download_settings: dict,
     ) -> dict:
         try:
             signature = inspect.signature(downloader)
         except (TypeError, ValueError):
-            return downloader(source_url, cancel_event, progress_callback)
+            return downloader(source_url, cancel_event, progress_callback, download_settings)
         parameters = signature.parameters
-        if "cancel_event" in parameters or "progress_callback" in parameters:
+        if "cancel_event" in parameters or "progress_callback" in parameters or "download_settings" in parameters:
             kwargs = {}
             if "cancel_event" in parameters:
                 kwargs["cancel_event"] = cancel_event
             if "progress_callback" in parameters:
                 kwargs["progress_callback"] = progress_callback
+            if "download_settings" in parameters:
+                kwargs["download_settings"] = download_settings
             return downloader(source_url, **kwargs)
         positional = [
             parameter
@@ -251,6 +255,7 @@ class QueueManager:
                     "downloaded_audio_path": None,
                     "downloaded_media_path": None,
                     "downloaded_video_path": None,
+                    "url_download_diagnostics": None,
                     "status": "pending",
                     "stage": "waiting_download",
                     "stage_label_key": STAGE_LABEL_KEYS["waiting_download"],
@@ -616,6 +621,7 @@ class QueueManager:
         frames_plan = plan.get("frames") if isinstance(plan.get("frames"), dict) else {}
         ocr_plan = plan.get("ocr") if isinstance(plan.get("ocr"), dict) else {}
         cv_plan = plan.get("cv") if isinstance(plan.get("cv"), dict) else {}
+        url_download_plan = normalize_url_download_plan(plan.get("url_download"))
         supports_frames = media_kind in {"video", "url"}
 
         model = str(audio_plan.get("model") or config.WHISPER_MODEL or "small").strip()
@@ -658,6 +664,7 @@ class QueueManager:
                 "interval_sec": interval_sec,
                 "jpeg_quality": normalize_jpeg_quality(frame_settings.get("jpeg_quality")),
             },
+            "url_download": url_download_plan,
             "ocr": {
                 "enabled": False,
                 "backend": ocr_backend,
@@ -1189,16 +1196,51 @@ class QueueManager:
                         cancel_event = threading.Event()
                         self._cancel_events[item["index"]] = cancel_event
                     try:
+                        frame_started_at = time.monotonic()
                         frame_result = self.frame_processor(
                             item_snapshot,
                             cancel_event,
                             self._frame_progress_callback(item["index"]),
                         )
                     finally:
+                        frame_elapsed_sec = round(max(0.0, time.monotonic() - frame_started_at), 3)
                         with self._lock:
                             self._cancel_events.pop(item["index"], None)
 
+                    url_download_plan = (item_snapshot.get("processing_plan") or {}).get("url_download") or {}
+                    if item_snapshot.get("source_type") == "url" and url_download_plan.get(
+                        "log_extraction_benchmark",
+                        True,
+                    ):
+                        frames_extracted = int(frame_result.get("extracted_frame_count") or 0)
+                        sec_per_frame = round(frame_elapsed_sec / frames_extracted, 4) if frames_extracted else None
+                        frame_result.update(
+                            {
+                                "frame_extraction_time_sec": frame_elapsed_sec,
+                                "frames_extracted": frames_extracted,
+                                "sec_per_frame": sec_per_frame,
+                            }
+                        )
+                        logger.info(
+                            "URL frame extraction benchmark: index=%s profile=%s elapsed_sec=%s frames=%s sec_per_frame=%s",
+                            item["index"],
+                            url_download_plan.get("format_profile", "auto"),
+                            frame_elapsed_sec,
+                            frames_extracted,
+                            sec_per_frame,
+                        )
+
                     with self._lock:
+                        if frame_result.get("frame_extraction_time_sec") is not None:
+                            diagnostics = dict(item.get("url_download_diagnostics") or {})
+                            diagnostics.update(
+                                {
+                                    "frame_extraction_time_sec": frame_result["frame_extraction_time_sec"],
+                                    "frames_extracted": frame_result["frames_extracted"],
+                                    "sec_per_frame": frame_result["sec_per_frame"],
+                                }
+                            )
+                            item["url_download_diagnostics"] = diagnostics
                         item["frame_extraction_result"] = frame_result
                         item["extracted_frame_count"] = frame_result.get("extracted_frame_count")
                         item["frames_dir"] = frame_result.get("frames_dir")
@@ -1498,6 +1540,7 @@ class QueueManager:
             item_snapshot["source_url"],
             active_cancel_event,
             self._download_progress_callback(item["index"]),
+            (item_snapshot.get("processing_plan") or {}).get("url_download") or {},
         )
         source_path = Path(metadata["source_path"])
         if not source_path.exists():
@@ -1511,6 +1554,7 @@ class QueueManager:
                     "downloaded_audio_path": str(source_path),
                     "downloaded_media_path": metadata.get("downloaded_media_path") or str(source_path),
                     "downloaded_video_path": metadata.get("downloaded_video_path") if needs_video else item.get("downloaded_video_path"),
+                    "url_download_diagnostics": metadata.get("url_download_diagnostics"),
                     "source_title": metadata.get("source_title"),
                     "source_platform": metadata.get("source_platform") or "unknown",
                     "source_filename": metadata.get("source_title") or item["source_filename"],

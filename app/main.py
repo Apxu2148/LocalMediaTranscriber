@@ -35,6 +35,7 @@ from .storage_manager import StorageManager
 from .system_audio_recorder import SystemAudioRecorder
 from .transcript_store import TranscriptStore, safe_filename_part, technical_details_for_exception
 from .transcriber import AudioTranscriber, ModelLoadError
+from .url_download_manager import UrlDownloadSettingsManager
 from .url_downloader import UrlDownloader
 from .utils import setup_logging, timestamp_for_filename, validate_media_for_transcription
 from .video_muxer import VideoMuxer, VideoMuxerDependencyError, VideoMuxerError, VideoMuxerValidationError
@@ -72,6 +73,7 @@ model_manager = WhisperModelManager()
 transcript_store = TranscriptStore()
 storage_manager = StorageManager()
 ocr_manager = OcrManager()
+url_download_settings_manager = UrlDownloadSettingsManager()
 recording_lock = threading.Lock()
 active_recording_mode: str | None = None
 active_recording_started_at: float | None = None
@@ -162,6 +164,13 @@ class StorageCleanupRequest(BaseModel):
     folder: str
 
 
+class UrlDownloadSettingsRequest(BaseModel):
+    format_profile: str | None = None
+    custom_format: str | None = None
+    log_media_probe: bool | None = None
+    log_extraction_benchmark: bool | None = None
+
+
 class OcrSettingsRequest(BaseModel):
     selected_backend: str | None = None
     tesseract_path: str | None = None
@@ -231,7 +240,15 @@ def process_queue_frame_extraction(item: dict, cancel_event: threading.Event, pr
     frame_settings = item.get("frame_extraction") or {}
     source_metadata = {
         key: item.get(key)
-        for key in ("source_type", "source_url", "source_title", "source_platform", "downloaded_media_path", "downloaded_video_path")
+        for key in (
+            "source_type",
+            "source_url",
+            "source_title",
+            "source_platform",
+            "downloaded_media_path",
+            "downloaded_video_path",
+            "url_download_diagnostics",
+        )
         if item.get(key)
     }
     return frame_extractor.extract_frames(
@@ -499,6 +516,16 @@ def storage_cleanup(payload: StorageCleanupRequest) -> dict:
         return storage_manager.cleanup_folder(payload.folder)
     except RuntimeError as exc:
         raise_api_error(str(exc))
+
+
+@app.get("/api/url-download/settings")
+def url_download_settings() -> dict:
+    return url_download_settings_manager.settings()
+
+
+@app.post("/api/url-download/settings")
+def url_download_settings_update(payload: UrlDownloadSettingsRequest) -> dict:
+    return url_download_settings_manager.update_settings(payload.model_dump(exclude_none=True))
 
 
 @app.get("/api/ocr/status")

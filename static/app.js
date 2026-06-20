@@ -114,6 +114,13 @@ const defaultAudioEnabled = document.querySelector("#defaultAudioEnabled");
 const defaultFramesEnabled = document.querySelector("#defaultFramesEnabled");
 const defaultFrameRateSelect = document.querySelector("#defaultFrameRateSelect");
 const defaultJpegQualitySelect = document.querySelector("#defaultJpegQualitySelect");
+const urlDownloadProfileSelect = document.querySelector("#urlDownloadProfileSelect");
+const urlDownloadCustomField = document.querySelector("#urlDownloadCustomField");
+const urlDownloadCustomFormatInput = document.querySelector("#urlDownloadCustomFormatInput");
+const urlDownloadLogMediaProbe = document.querySelector("#urlDownloadLogMediaProbe");
+const urlDownloadLogExtractionBenchmark = document.querySelector("#urlDownloadLogExtractionBenchmark");
+const urlDownloadSaveButton = document.querySelector("#urlDownloadSaveButton");
+const urlDownloadSettingsOutput = document.querySelector("#urlDownloadSettingsOutput");
 const ocrBackendSelect = document.querySelector("#ocrBackendSelect");
 const ocrStatusBadge = document.querySelector("#ocrStatusBadge");
 const ocrBackendType = document.querySelector("#ocrBackendType");
@@ -194,6 +201,12 @@ let latestRecordingFiles = [];
 let latestMicDevicesResult = null;
 let latestOutputDevicesResult = null;
 let latestOcrStatus = null;
+let latestUrlDownloadSettings = {
+  format_profile: "auto",
+  custom_format: "",
+  log_media_probe: true,
+  log_extraction_benchmark: true,
+};
 const dynamicOutputRenderers = new Map();
 const queueControlSelector = ".queue-item-card select, .queue-item-card input, .queue-item-card button";
 const terminalQueueStatuses = new Set(["completed", "error", "failed", "cancelled"]);
@@ -1587,6 +1600,57 @@ async function saveStorageSettings() {
   }
 }
 
+function syncUrlDownloadCustomField() {
+  urlDownloadCustomField.hidden = urlDownloadProfileSelect.value !== "custom";
+}
+
+function urlDownloadSettingsFromControls() {
+  return {
+    format_profile: urlDownloadProfileSelect.value || "auto",
+    custom_format: urlDownloadCustomFormatInput.value.trim(),
+    log_media_probe: urlDownloadLogMediaProbe.checked,
+    log_extraction_benchmark: urlDownloadLogExtractionBenchmark.checked,
+  };
+}
+
+function renderUrlDownloadSettings(settings) {
+  latestUrlDownloadSettings = { ...latestUrlDownloadSettings, ...settings };
+  urlDownloadProfileSelect.value = latestUrlDownloadSettings.format_profile || "auto";
+  urlDownloadCustomFormatInput.value = latestUrlDownloadSettings.custom_format || "";
+  urlDownloadLogMediaProbe.checked = Boolean(latestUrlDownloadSettings.log_media_probe);
+  urlDownloadLogExtractionBenchmark.checked = Boolean(latestUrlDownloadSettings.log_extraction_benchmark);
+  syncUrlDownloadCustomField();
+}
+
+async function refreshUrlDownloadSettings() {
+  try {
+    renderUrlDownloadSettings(await requestJson("/api/url-download/settings"));
+  } catch (error) {
+    setOutput(urlDownloadSettingsOutput, error.message, "error");
+  }
+}
+
+async function saveUrlDownloadSettings() {
+  const requested = urlDownloadSettingsFromControls();
+  const customFallback = requested.format_profile === "custom" && !requested.custom_format;
+  urlDownloadSaveButton.disabled = true;
+  try {
+    const settings = await requestJson("/api/url-download/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(requested),
+    });
+    renderUrlDownloadSettings(settings);
+    const key = customFallback ? "urlDownloadCustomFallback" : "urlDownloadSettingsSaved";
+    setLocalizedOutput(urlDownloadSettingsOutput, key, {}, customFallback ? "warning" : "success");
+    showToast(t(key), customFallback ? "warning" : "success");
+  } catch (error) {
+    setOutput(urlDownloadSettingsOutput, error.message, "error");
+  } finally {
+    urlDownloadSaveButton.disabled = false;
+  }
+}
+
 function ocrErrorMessageKey(errorCode) {
   return {
     invalid_configured_path: "ocrErrorInvalidPath",
@@ -2737,12 +2801,14 @@ function processingPlanFromValues({
   framesEnabled,
   frameRate,
   jpegQuality,
+  urlDownload,
   ocrBackend,
   ocrLanguages,
   ocrEngineAvailable,
 }) {
   const backend = ocrBackend || latestOcrStatus?.selected_backend || "tesseract";
   const backendStatus = latestOcrStatus?.backends?.[backend];
+  const downloadSettings = urlDownload || latestUrlDownloadSettings;
   return {
     audio: {
       enabled: Boolean(audioEnabled),
@@ -2754,6 +2820,13 @@ function processingPlanFromValues({
       rate: frameRate,
       interval_sec: frameRate?.mode === "interval" ? frameRate.seconds : null,
       jpeg_quality: Number(jpegQuality || 75),
+    },
+    url_download: {
+      format_profile: downloadSettings?.format_profile || "auto",
+      custom_format: downloadSettings?.custom_format || "",
+      log_media_probe: Boolean(downloadSettings?.log_media_probe ?? true),
+      log_extraction_benchmark: Boolean(downloadSettings?.log_extraction_benchmark ?? true),
+      status: "pending",
     },
     ocr: {
       enabled: false,
@@ -2779,6 +2852,7 @@ function defaultProcessingPlanSnapshot() {
     framesEnabled: defaultFramesEnabled.checked,
     frameRate: frameRateFromValue(defaultFrameRateSelect.value || "interval:30"),
     jpegQuality: defaultJpegQualitySelect.value || "75",
+    urlDownload: urlDownloadSettingsFromControls(),
     ocrBackend: ocrBackendSelect.value || latestOcrStatus?.selected_backend,
   });
 }
@@ -2796,6 +2870,7 @@ function processingPlanForQueueItem(queueItem) {
     framesEnabled: frames.enabled ?? operations.extract_frames ?? false,
     frameRate: frames.rate || frameSettings.rate || frameRateFromValue("interval:10"),
     jpegQuality: frames.jpeg_quality || frameSettings.jpeg_quality || 90,
+    urlDownload: plan.url_download,
     ocrBackend: plan.ocr?.backend || plan.ocr?.engine,
     ocrLanguages: plan.ocr?.languages,
     ocrEngineAvailable: plan.ocr?.engine_available,
@@ -2813,6 +2888,23 @@ function deviceLabel(device) {
 function frameRateLabel(rate) {
   const value = frameRateValue(rate);
   return frameRateOptions().find((option) => option.value === value)?.label || value;
+}
+
+function urlDownloadProfileLabel(profile) {
+  const key = {
+    auto: "urlDownloadProfileAuto",
+    best_for_extraction: "urlDownloadProfileBestForExtraction",
+    best_quality: "urlDownloadProfileBestQuality",
+    smallest_file: "urlDownloadProfileSmallestFile",
+    prefer_webm: "urlDownloadProfilePreferWebm",
+    prefer_mp4: "urlDownloadProfilePreferMp4",
+    prefer_mkv: "urlDownloadProfilePreferMkv",
+    prefer_mov: "urlDownloadProfilePreferMov",
+    prefer_avi: "urlDownloadProfilePreferAvi",
+    audio_friendly: "urlDownloadProfileAudioFriendly",
+    custom: "urlDownloadProfileCustom",
+  }[profile] || "urlDownloadProfileAuto";
+  return t(key);
 }
 
 function createPlanSelect(values, selectedValue, datasetName, labeler = (value) => value) {
@@ -2904,6 +2996,11 @@ function createProcessingPlanSummary(queueItem) {
     textLine(t("processingPlanOcr", { value: `${t("disabled")} / ${t("comingSoon")}` })),
     textLine(t("processingPlanCv", { value: `${t("disabled")} / ${t("comingSoon")}` })),
   );
+  if (queueItem.source_type === "url") {
+    wrapper.append(textLine(t("processingPlanUrlDownload", {
+      value: urlDownloadProfileLabel(plan.url_download.format_profile),
+    })));
+  }
   return wrapper;
 }
 
@@ -3255,7 +3352,8 @@ function formatQueueItemError(queueItem) {
 
 function createQueueItemElement(queueItem, status) {
   const item = document.createElement("li");
-  const itemOcrPlan = processingPlanForQueueItem(queueItem).ocr;
+  const itemPlan = processingPlanForQueueItem(queueItem);
+  const itemOcrPlan = itemPlan.ocr;
   item.className = "queue-item-card";
   item.dataset.queueIndex = String(queueItem.index);
   item.dataset.mediaKind = queueItem.media_kind || (queueItemIsVideo(queueItem) ? "video" : "audio");
@@ -3263,6 +3361,7 @@ function createQueueItemElement(queueItem, status) {
   item.dataset.ocrBackend = itemOcrPlan.backend;
   item.dataset.ocrLanguages = JSON.stringify(itemOcrPlan.languages);
   item.dataset.ocrEngineAvailable = String(itemOcrPlan.engine_available);
+  item.dataset.urlDownload = JSON.stringify(itemPlan.url_download);
 
   const header = document.createElement("div");
   header.className = "queue-item-header";
@@ -3569,6 +3668,7 @@ function collectQueueItemPayload(card) {
     framesEnabled: operations.extract_frames,
     frameRate,
     jpegQuality,
+    urlDownload: JSON.parse(card.dataset.urlDownload || "null") || undefined,
     ocrBackend: card.dataset.ocrBackend,
     ocrLanguages: JSON.parse(card.dataset.ocrLanguages || "null") || undefined,
     ocrEngineAvailable: card.dataset.ocrEngineAvailable === "true",
@@ -3931,6 +4031,8 @@ keepDownloadedMediaCheckbox.addEventListener("change", saveStorageSettings);
 keepUploadedTempCheckbox.addEventListener("change", saveStorageSettings);
 clearDownloadsButton.addEventListener("click", () => cleanupStorageFolder("downloads"));
 clearUploadsButton.addEventListener("click", () => cleanupStorageFolder("uploads"));
+urlDownloadProfileSelect.addEventListener("change", syncUrlDownloadCustomField);
+urlDownloadSaveButton.addEventListener("click", saveUrlDownloadSettings);
 ocrBackendSelect.addEventListener("change", () => {
   if (latestOcrStatus) {
     renderOcrStatus(latestOcrStatus);
@@ -4048,7 +4150,7 @@ queueStartButton.addEventListener("click", async () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ model: selectedModel(), device: selectedDevice() }),
     }));
-    setOutput(queueOutput, t("queueStarted"));
+    setLocalizedOutput(queueOutput, "queueStarted");
     showToast(t("queueStarted"), "info");
   } catch (error) {
     setOutput(queueOutput, error.message, "error");
@@ -4115,6 +4217,7 @@ async function boot() {
   await refreshModelDownloadStatus(true);
   await refreshStorage();
   await refreshStorageSettings();
+  await refreshUrlDownloadSettings();
   await refreshOcrStatus();
   await refreshQueueStatus();
   await refreshBenchmarkStatus();

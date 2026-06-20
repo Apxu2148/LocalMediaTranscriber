@@ -7,7 +7,15 @@ from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
 
-from app.url_downloader import UrlDownloadCancelled, UrlDownloader, get_direct_media_url_extension, is_direct_media_url
+from app.url_download_manager import UrlDownloadSettingsManager
+from app.url_downloader import (
+    DEFAULT_VIDEO_FORMAT,
+    UrlDownloadCancelled,
+    UrlDownloader,
+    get_direct_media_url_extension,
+    is_direct_media_url,
+    resolve_url_download_options,
+)
 
 
 PROJECT_TMP = Path(__file__).resolve().parents[1] / "tmp"
@@ -19,7 +27,7 @@ class FakeYoutubeDL:
     def __init__(self, options: dict) -> None:
         self.options = options
         FakeYoutubeDL.last_options = options
-        self.ext = options.get("merge_output_format") or "m4a"
+        self.ext = (options.get("merge_output_format") or "m4a").split("/", 1)[0]
         self.path = Path(options["outtmpl"].replace("%(ext)s", self.ext))
 
     def __enter__(self):
@@ -112,6 +120,84 @@ class UrlDownloaderTests(unittest.TestCase):
         self.assertEqual("mkv", FakeYoutubeDL.last_options["merge_output_format"])
         self.assertEqual(result["source_path"], result["downloaded_media_path"])
         self.assertEqual(result["source_path"], result["downloaded_video_path"])
+
+    def test_video_profiles_map_to_expected_ytdlp_formats(self) -> None:
+        fake_module = types.SimpleNamespace(YoutubeDL=FakeYoutubeDL)
+        expected = {
+            "prefer_webm": ("bv*[ext=webm]+ba[ext=webm]/b[ext=webm]/bv*+ba/best", "webm/mkv"),
+            "prefer_mp4": ("bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/best", "mp4/mkv"),
+        }
+        for profile, (format_string, merge_format) in expected.items():
+            with self.subTest(profile=profile), patch.dict(sys.modules, {"yt_dlp": fake_module}), patch(
+                "app.url_downloader.shutil.which",
+                return_value=None,
+            ):
+                result = UrlDownloader(self.root).download_video(
+                    f"https://example.test/{profile}",
+                    download_settings={"format_profile": profile},
+                )
+            self.assertEqual(format_string, FakeYoutubeDL.last_options["format"])
+            self.assertEqual(merge_format, FakeYoutubeDL.last_options["merge_output_format"])
+            self.assertEqual(profile, result["url_download_diagnostics"]["url_download_format_profile"])
+
+    def test_best_for_extraction_uses_bounded_resolution_format(self) -> None:
+        resolved = resolve_url_download_options({"format_profile": "best_for_extraction"}, needs_video=True)
+
+        self.assertIn("height<=720", resolved["format_string"])
+        self.assertIn("height<=1080", resolved["format_string"])
+
+    def test_custom_format_is_used_and_empty_custom_falls_back_to_auto(self) -> None:
+        custom = resolve_url_download_options(
+            {"format_profile": "custom", "custom_format": "bv*[height<=480]+ba/best"},
+            needs_video=True,
+        )
+        empty = resolve_url_download_options(
+            {"format_profile": "custom", "custom_format": "  "},
+            needs_video=True,
+        )
+
+        self.assertEqual("bv*[height<=480]+ba/best", custom["format_string"])
+        self.assertEqual("custom", custom["format_profile"])
+        self.assertEqual("auto", empty["format_profile"])
+        self.assertEqual(DEFAULT_VIDEO_FORMAT, empty["format_string"])
+
+    def test_url_download_settings_are_persisted(self) -> None:
+        settings_path = self.root / "settings.json"
+        manager = UrlDownloadSettingsManager(settings_path=settings_path)
+
+        manager.update_settings({
+            "format_profile": "prefer_webm",
+            "custom_format": "best[height<=720]",
+            "log_media_probe": False,
+            "log_extraction_benchmark": True,
+        })
+        reloaded = UrlDownloadSettingsManager(settings_path=settings_path).settings()
+
+        self.assertEqual("prefer_webm", reloaded["format_profile"])
+        self.assertEqual("best[height<=720]", reloaded["custom_format"])
+        self.assertFalse(reloaded["log_media_probe"])
+        self.assertTrue(reloaded["log_extraction_benchmark"])
+
+    def test_media_probe_parses_codecs_resolution_and_fps(self) -> None:
+        completed = types.SimpleNamespace(
+            returncode=0,
+            stdout=(
+                '{"streams":['
+                '{"codec_type":"video","codec_name":"h264","width":1280,"height":720,"r_frame_rate":"30000/1001"},'
+                '{"codec_type":"audio","codec_name":"aac"}]}'
+            ),
+        )
+        with patch("app.url_downloader.shutil.which", return_value="ffprobe"), patch(
+            "app.url_downloader.subprocess.run",
+            return_value=completed,
+        ):
+            probe = UrlDownloader._probe_media(self.root / "media.mp4")
+
+        self.assertEqual("available", probe["media_probe_status"])
+        self.assertEqual("h264", probe["video_codec"])
+        self.assertEqual("aac", probe["audio_codec"])
+        self.assertEqual("1280x720", probe["resolution"])
+        self.assertEqual(29.97, probe["fps"])
 
     def test_direct_video_download_bypasses_ytdlp_and_writes_downloaded_media(self) -> None:
         calls: list[tuple[str, int]] = []

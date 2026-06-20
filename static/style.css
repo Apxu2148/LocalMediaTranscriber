@@ -1148,6 +1148,7 @@ summary:focus-visible {
   margin: 0 0 6px;
 }
 
+.url-download-settings-panel,
 .ocr-settings-panel {
   display: grid;
   gap: 10px;
@@ -1155,6 +1156,7 @@ summary:focus-visible {
   padding-top: 10px;
 }
 
+.url-download-settings-heading,
 .ocr-settings-heading {
   display: flex;
   align-items: flex-start;
@@ -1162,9 +1164,25 @@ summary:focus-visible {
   gap: 12px;
 }
 
+.url-download-settings-heading h4,
+.url-download-settings-heading p,
 .ocr-settings-heading h4,
 .ocr-settings-heading p {
   margin: 0;
+}
+
+.url-download-log-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+#urlDownloadCustomField[hidden] {
+  display: none;
+}
+
+.url-download-settings-actions {
+  margin-top: 0;
 }
 
 .ocr-status-grid {

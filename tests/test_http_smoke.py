@@ -140,6 +140,29 @@ class HttpSmokeTests(unittest.TestCase):
         self.assertEqual(400, invalid_response.status_code)
         self.assertEqual([call(1), call(2), call(999)], estimate_item.call_args_list)
 
+    def test_url_download_settings_endpoints_persist_profile(self) -> None:
+        saved = {
+            "format_profile": "prefer_webm",
+            "custom_format": "",
+            "log_media_probe": True,
+            "log_extraction_benchmark": True,
+        }
+        with (
+            patch.object(main_module.url_download_settings_manager, "settings", return_value=saved),
+            patch.object(main_module.url_download_settings_manager, "update_settings", return_value=saved) as update,
+            TestClient(main_module.app) as client,
+        ):
+            get_response = client.get("/api/url-download/settings")
+            post_response = client.post(
+                "/api/url-download/settings",
+                json={"format_profile": "prefer_webm", "log_media_probe": True},
+            )
+
+        self.assertEqual(200, get_response.status_code)
+        self.assertEqual("prefer_webm", get_response.json()["format_profile"])
+        self.assertEqual(200, post_response.status_code)
+        update.assert_called_once_with({"format_profile": "prefer_webm", "log_media_probe": True})
+
     def test_ocr_status_settings_and_check_endpoints_are_non_crashing(self) -> None:
         tesseract = {
             "id": "tesseract", "available": True, "status": "available",

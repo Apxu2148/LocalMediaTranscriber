@@ -299,6 +299,7 @@ class QueueManagerTests(unittest.TestCase):
         self.assertFalse(item["operations"]["cv"])
         self.assertEqual({"mode": "interval", "seconds": 10}, item["frame_extraction"]["rate"])
         self.assertEqual(90, item["frame_extraction"]["jpeg_quality"])
+        self.assertEqual("auto", item["processing_plan"]["url_download"]["format_profile"])
 
     def test_new_item_receives_processing_plan_snapshot(self) -> None:
         manager = self.make_manager(
@@ -660,6 +661,7 @@ class QueueManagerTests(unittest.TestCase):
         video = self.make_file("downloaded_video.mkv")
         audio_downloads: list[str] = []
         video_downloads: list[str] = []
+        download_settings_seen: list[dict] = []
         frame_sources: list[str] = []
 
         def frame_processor(item: dict, _cancel_event: threading.Event, _progress) -> dict:
@@ -673,22 +675,40 @@ class QueueManagerTests(unittest.TestCase):
                 "extracted_frame_count": 2,
             }
 
-        manager = self.make_manager(
-            processor=lambda _item, _model, _device: {},
-            downloader=lambda url: audio_downloads.append(url) or {},
-            video_downloader=lambda url: video_downloads.append(url) or {
+        def video_downloader(url: str, download_settings: dict) -> dict:
+            video_downloads.append(url)
+            download_settings_seen.append(download_settings)
+            return {
                 "source_path": str(video.source_path),
                 "source_title": "Downloaded URL Video",
                 "source_platform": "youtube",
                 "audio_duration_sec": 10,
                 "downloaded_media_path": str(video.source_path),
                 "downloaded_video_path": str(video.source_path),
-            },
+                "url_download_diagnostics": {
+                    "url_download_format_profile": download_settings["format_profile"],
+                    "yt_dlp_format_string_used": "webm-format",
+                },
+            }
+
+        manager = self.make_manager(
+            processor=lambda _item, _model, _device: {},
+            downloader=lambda url: audio_downloads.append(url) or {},
+            video_downloader=video_downloader,
             frame_processor=frame_processor,
             duration_reader=lambda _path: 10,
             video_metadata_reader=lambda _path: {"duration_sec": 10, "fps": 30, "width": 100, "height": 50},
         )
-        status = self.track_job(manager.add_urls([QueueUrl("https://example.test/video")]))
+        status = self.track_job(manager.add_urls([QueueUrl(
+            "https://example.test/video",
+            processing_plan={
+                "url_download": {
+                    "format_profile": "prefer_webm",
+                    "log_media_probe": True,
+                    "log_extraction_benchmark": True,
+                }
+            },
+        )]))
         manager.update_item(
             status["items"][0]["index"],
             operations={"transcribe_audio": False, "extract_frames": True},
@@ -699,9 +719,14 @@ class QueueManagerTests(unittest.TestCase):
         item = manager.status()["items"][0]
         self.assertEqual([], audio_downloads)
         self.assertEqual(["https://example.test/video"], video_downloads)
+        self.assertEqual("prefer_webm", download_settings_seen[0]["format_profile"])
         self.assertEqual([str(video.source_path)], frame_sources)
         self.assertEqual(str(video.source_path), item["downloaded_media_path"])
         self.assertTrue(item["frames_index_path"].endswith("frames_index.json"))
+        self.assertEqual("prefer_webm", item["processing_plan"]["url_download"]["format_profile"])
+        self.assertEqual(2, item["url_download_diagnostics"]["frames_extracted"])
+        self.assertIn("frame_extraction_time_sec", item["url_download_diagnostics"])
+        self.assertIn("sec_per_frame", item["url_download_diagnostics"])
 
     def test_direct_mp4_url_extract_frames_downloads_directly_without_ytdlp(self) -> None:
         url_downloader = UrlDownloader(self.root / "downloads")

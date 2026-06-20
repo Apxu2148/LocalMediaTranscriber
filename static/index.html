@@ -330,6 +330,48 @@
                     </label>
                   </fieldset>
                 </div>
+                <section id="urlDownloadSettingsPanel" class="url-download-settings-panel" aria-labelledby="urlDownloadSettingsTitle">
+                  <div class="url-download-settings-heading">
+                    <div>
+                      <h4 id="urlDownloadSettingsTitle" data-i18n="urlDownloadSettingsTitle"></h4>
+                      <p class="section-note" data-i18n="urlDownloadSettingsHelp"></p>
+                    </div>
+                  </div>
+                  <label class="queue-setting-field" for="urlDownloadProfileSelect">
+                    <span data-i18n="urlDownloadProfileLabel"></span>
+                    <select id="urlDownloadProfileSelect">
+                      <option value="auto" data-i18n="urlDownloadProfileAuto"></option>
+                      <option value="best_for_extraction" data-i18n="urlDownloadProfileBestForExtraction"></option>
+                      <option value="best_quality" data-i18n="urlDownloadProfileBestQuality"></option>
+                      <option value="smallest_file" data-i18n="urlDownloadProfileSmallestFile"></option>
+                      <option value="prefer_webm" data-i18n="urlDownloadProfilePreferWebm"></option>
+                      <option value="prefer_mp4" data-i18n="urlDownloadProfilePreferMp4"></option>
+                      <option value="prefer_mkv" data-i18n="urlDownloadProfilePreferMkv"></option>
+                      <option value="prefer_mov" data-i18n="urlDownloadProfilePreferMov"></option>
+                      <option value="prefer_avi" data-i18n="urlDownloadProfilePreferAvi"></option>
+                      <option value="audio_friendly" data-i18n="urlDownloadProfileAudioFriendly"></option>
+                      <option value="custom" data-i18n="urlDownloadProfileCustom"></option>
+                    </select>
+                  </label>
+                  <label id="urlDownloadCustomField" class="queue-setting-field" for="urlDownloadCustomFormatInput" hidden>
+                    <span data-i18n="urlDownloadCustomFormatLabel"></span>
+                    <input id="urlDownloadCustomFormatInput" type="text" data-i18n-placeholder="urlDownloadCustomFormatPlaceholder" spellcheck="false" />
+                  </label>
+                  <div class="url-download-log-options">
+                    <label class="queue-option" for="urlDownloadLogMediaProbe">
+                      <input id="urlDownloadLogMediaProbe" type="checkbox" checked />
+                      <span data-i18n="urlDownloadLogMediaProbe"></span>
+                    </label>
+                    <label class="queue-option" for="urlDownloadLogExtractionBenchmark">
+                      <input id="urlDownloadLogExtractionBenchmark" type="checkbox" checked />
+                      <span data-i18n="urlDownloadLogExtractionBenchmark"></span>
+                    </label>
+                  </div>
+                  <div class="actions url-download-settings-actions">
+                    <button id="urlDownloadSaveButton" type="button" data-i18n="urlDownloadSaveButton"></button>
+                  </div>
+                  <output id="urlDownloadSettingsOutput" class="output compact"></output>
+                </section>
                 <section id="ocrSettingsPanel" class="ocr-settings-panel" aria-labelledby="ocrSettingsTitle">
                   <div class="ocr-settings-heading">
                     <div>

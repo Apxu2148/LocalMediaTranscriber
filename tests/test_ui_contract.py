@@ -49,6 +49,14 @@ class UiContractTests(unittest.TestCase):
             "defaultFramesEnabled",
             "defaultFrameRateSelect",
             "defaultJpegQualitySelect",
+            "urlDownloadSettingsPanel",
+            "urlDownloadProfileSelect",
+            "urlDownloadCustomField",
+            "urlDownloadCustomFormatInput",
+            "urlDownloadLogMediaProbe",
+            "urlDownloadLogExtractionBenchmark",
+            "urlDownloadSaveButton",
+            "urlDownloadSettingsOutput",
             "ocrSettingsPanel",
             "ocrBackendSelect",
             "ocrStatusBadge",
@@ -97,6 +105,7 @@ class UiContractTests(unittest.TestCase):
         self.assertIn('"/api/storage/summary"', app_js)
         self.assertIn('"/api/storage/settings"', app_js)
         self.assertIn('"/api/storage/cleanup"', app_js)
+        self.assertIn('"/api/url-download/settings"', app_js)
         self.assertIn('"/api/ocr/status"', app_js)
         self.assertIn('"/api/ocr/settings"', app_js)
         self.assertIn('"/api/ocr/check"', app_js)
@@ -273,6 +282,32 @@ class UiContractTests(unittest.TestCase):
         self.assertIn('enabled: false,', app_js)
         self.assertNotIn("frames_ocr.jsonl", html + app_js)
         self.assertNotIn("frames_ocr.txt", html + app_js)
+
+    def test_url_download_profile_ui_and_plan_snapshot_contract(self) -> None:
+        app_js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+
+        self.assertIn('id="urlDownloadSettingsPanel"', html)
+        for profile in (
+            "auto",
+            "best_for_extraction",
+            "best_quality",
+            "smallest_file",
+            "prefer_webm",
+            "prefer_mp4",
+            "prefer_mkv",
+            "prefer_mov",
+            "prefer_avi",
+            "audio_friendly",
+            "custom",
+        ):
+            self.assertIn(f'value="{profile}"', html)
+        self.assertIn('id="urlDownloadCustomField"', html)
+        self.assertIn("syncUrlDownloadCustomField", app_js)
+        self.assertIn("url_download:", app_js)
+        self.assertIn("item.dataset.urlDownload", app_js)
+        self.assertIn('setLocalizedOutput(queueOutput, "queueStarted")', app_js)
+        self.assertNotIn('setOutput(queueOutput, t("queueStarted"))', app_js)
 
     def test_runtime_estimate_action_and_result_contract_exist(self) -> None:
         app_js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")

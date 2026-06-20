@@ -398,6 +398,36 @@ class I18nTests(unittest.TestCase):
             dictionary_value(i18n, "en", "ocrNextStage"),
         )
 
+    def test_url_download_settings_copy_is_localized(self) -> None:
+        i18n = (STATIC_DIR / "i18n.js").read_text(encoding="utf-8")
+        ru_keys = dictionary_keys(i18n, "ru")
+        en_keys = dictionary_keys(i18n, "en")
+        for key in (
+            "urlDownloadSettingsTitle",
+            "urlDownloadSettingsHelp",
+            "urlDownloadProfileLabel",
+            "urlDownloadProfileAuto",
+            "urlDownloadProfileBestForExtraction",
+            "urlDownloadProfileBestQuality",
+            "urlDownloadProfileSmallestFile",
+            "urlDownloadProfilePreferWebm",
+            "urlDownloadProfilePreferMp4",
+            "urlDownloadProfilePreferMkv",
+            "urlDownloadProfilePreferMov",
+            "urlDownloadProfilePreferAvi",
+            "urlDownloadProfileAudioFriendly",
+            "urlDownloadProfileCustom",
+            "urlDownloadCustomFormatLabel",
+            "urlDownloadLogMediaProbe",
+            "urlDownloadLogExtractionBenchmark",
+            "urlDownloadSettingsSaved",
+            "urlDownloadCustomFallback",
+            "processingPlanUrlDownload",
+        ):
+            self.assertIn(key, ru_keys)
+            self.assertIn(key, en_keys)
+        self.assertEqual("Prefer WebM", dictionary_value(i18n, "en", "urlDownloadProfilePreferWebm"))
+
     def test_idle_level_messages_are_localized(self) -> None:
         i18n = (STATIC_DIR / "i18n.js").read_text(encoding="utf-8")
 

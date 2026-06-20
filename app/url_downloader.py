@@ -1,5 +1,8 @@
+import json
 import logging
+import shutil
 import socket
+import subprocess
 import threading
 import time
 from dataclasses import asdict, dataclass
@@ -12,6 +15,7 @@ from uuid import uuid4
 
 from . import config
 from .transcript_store import safe_filename_part
+from .url_download_manager import normalize_url_download_settings
 from .utils import timestamp_for_filename
 
 
@@ -22,6 +26,56 @@ DIRECT_AUDIO_EXTENSIONS = set(config.SUPPORTED_AUDIO_ONLY_EXTENSIONS)
 DIRECT_MEDIA_EXTENSIONS = DIRECT_VIDEO_EXTENSIONS | DIRECT_AUDIO_EXTENSIONS
 DIRECT_DOWNLOAD_TIMEOUT_SEC = 30
 DIRECT_DOWNLOAD_CHUNK_BYTES = 1024 * 1024
+DEFAULT_AUDIO_FORMAT = "m4a/bestaudio/best"
+DEFAULT_VIDEO_FORMAT = "bv*+ba/bestvideo+bestaudio/best"
+VIDEO_FORMAT_PROFILES = {
+    "auto": DEFAULT_VIDEO_FORMAT,
+    "best_for_extraction": (
+        "bv*[height<=720][ext=mp4]+ba[ext=m4a]/b[height<=720][ext=mp4]/"
+        "bv*[height<=720]+ba/b[height<=720]/bv*[height<=1080]+ba/b[height<=1080]/best"
+    ),
+    "best_quality": "bv*+ba/best",
+    "smallest_file": "worstvideo+worstaudio/worst",
+    "prefer_webm": "bv*[ext=webm]+ba[ext=webm]/b[ext=webm]/bv*+ba/best",
+    "prefer_mp4": "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/best",
+    "prefer_mkv": "bv*[ext=mkv]+ba/b[ext=mkv]/bv*+ba/best",
+    "prefer_mov": "b[ext=mov]/bv*[ext=mov]+ba/bv*+ba/best",
+    "prefer_avi": "b[ext=avi]/bv*[ext=avi]+ba/bv*+ba/best",
+    "audio_friendly": DEFAULT_VIDEO_FORMAT,
+}
+AUDIO_FORMAT_PROFILES = {
+    "auto": DEFAULT_AUDIO_FORMAT,
+    "best_for_extraction": DEFAULT_AUDIO_FORMAT,
+    "best_quality": "bestaudio/best",
+    "smallest_file": "worstaudio/worst",
+    "prefer_webm": "bestaudio[ext=webm]/bestaudio/best",
+    "prefer_mp4": DEFAULT_AUDIO_FORMAT,
+    "prefer_mkv": DEFAULT_AUDIO_FORMAT,
+    "prefer_mov": DEFAULT_AUDIO_FORMAT,
+    "prefer_avi": DEFAULT_AUDIO_FORMAT,
+    "audio_friendly": DEFAULT_AUDIO_FORMAT,
+}
+VIDEO_MERGE_FORMATS = {
+    "best_for_extraction": "mp4/mkv",
+    "prefer_webm": "webm/mkv",
+    "prefer_mp4": "mp4/mkv",
+    "prefer_mkv": "mkv",
+}
+
+
+def resolve_url_download_options(settings: dict | None, *, needs_video: bool) -> dict:
+    normalized = normalize_url_download_settings(settings)
+    profile = normalized["format_profile"]
+    if profile == "custom":
+        format_string = normalized["custom_format"]
+    else:
+        mapping = VIDEO_FORMAT_PROFILES if needs_video else AUDIO_FORMAT_PROFILES
+        format_string = mapping.get(profile, DEFAULT_VIDEO_FORMAT if needs_video else DEFAULT_AUDIO_FORMAT)
+    return {
+        **normalized,
+        "format_string": format_string,
+        "merge_output_format": VIDEO_MERGE_FORMATS.get(profile, "mkv") if needs_video else None,
+    }
 
 
 class UrlDownloadError(RuntimeError):
@@ -75,11 +129,21 @@ class UrlDownloader:
         source_url: str,
         cancel_event: threading.Event | None = None,
         progress_callback: Callable[[dict], None] | None = None,
+        download_settings: dict | None = None,
     ) -> dict:
         url = self._validate_url(source_url)
+        download_started_at = time.monotonic()
+        resolved_options = resolve_url_download_options(download_settings, needs_video=False)
         direct_extension = get_direct_media_url_extension(url)
         if direct_extension:
-            return self._download_direct_media(url, direct_extension, cancel_event, progress_callback)
+            return self._download_direct_media(
+                url,
+                direct_extension,
+                cancel_event,
+                progress_callback,
+                resolved_options=resolved_options,
+                download_started_at=download_started_at,
+            )
 
         self.downloads_dir.mkdir(parents=True, exist_ok=True)
         prefix = f"url__{timestamp_for_filename()}__{uuid4().hex[:8]}"
@@ -112,7 +176,7 @@ class UrlDownloader:
                 raise UrlDownloadCancelled()
 
         options = {
-            "format": "m4a/bestaudio/best",
+            "format": resolved_options["format_string"],
             "outtmpl": output_template,
             "noplaylist": True,
             "quiet": True,
@@ -164,18 +228,34 @@ class UrlDownloader:
             result.audio_duration_sec,
         )
         self._emit_progress(progress_callback, self._completed_progress(result.source_path.stat().st_size, "yt_dlp"))
-        return result.as_dict()
+        payload = result.as_dict()
+        payload["url_download_diagnostics"] = self._download_diagnostics(
+            result.source_path,
+            resolved_options,
+            download_started_at,
+        )
+        return payload
 
     def download_video(
         self,
         source_url: str,
         cancel_event: threading.Event | None = None,
         progress_callback: Callable[[dict], None] | None = None,
+        download_settings: dict | None = None,
     ) -> dict:
         url = self._validate_url(source_url)
+        download_started_at = time.monotonic()
+        resolved_options = resolve_url_download_options(download_settings, needs_video=True)
         direct_extension = get_direct_media_url_extension(url)
         if direct_extension:
-            return self._download_direct_media(url, direct_extension, cancel_event, progress_callback)
+            return self._download_direct_media(
+                url,
+                direct_extension,
+                cancel_event,
+                progress_callback,
+                resolved_options=resolved_options,
+                download_started_at=download_started_at,
+            )
 
         self.downloads_dir.mkdir(parents=True, exist_ok=True)
         prefix = f"url_video__{timestamp_for_filename()}__{uuid4().hex[:8]}"
@@ -205,9 +285,9 @@ class UrlDownloader:
                 raise UrlDownloadCancelled()
 
         options = {
-            "format": "bv*+ba/bestvideo+bestaudio/best",
+            "format": resolved_options["format_string"],
             "outtmpl": output_template,
-            "merge_output_format": "mkv",
+            "merge_output_format": resolved_options["merge_output_format"],
             "noplaylist": True,
             "quiet": True,
             "no_warnings": True,
@@ -245,6 +325,11 @@ class UrlDownloader:
         ).as_dict()
         result["downloaded_media_path"] = str(source_path)
         result["downloaded_video_path"] = str(source_path)
+        result["url_download_diagnostics"] = self._download_diagnostics(
+            source_path,
+            resolved_options,
+            download_started_at,
+        )
         logger.info(
             "URL video downloaded: url=%s file=%s platform=%s title=%s duration=%s",
             url,
@@ -262,7 +347,12 @@ class UrlDownloader:
         extension: str,
         cancel_event: threading.Event | None = None,
         progress_callback: Callable[[dict], None] | None = None,
+        *,
+        resolved_options: dict | None = None,
+        download_started_at: float | None = None,
     ) -> dict:
+        resolved_options = resolved_options or resolve_url_download_options(None, needs_video=extension in DIRECT_VIDEO_EXTENSIONS)
+        download_started_at = download_started_at or time.monotonic()
         self.downloads_dir.mkdir(parents=True, exist_ok=True)
         target_path = self._reserve_download_path(self._direct_media_filename(url, extension))
         partial_path = target_path.with_name(f"{target_path.name}.{uuid4().hex[:8]}.part")
@@ -332,9 +422,103 @@ class UrlDownloader:
         result["downloaded_media_path"] = str(target_path)
         if extension in DIRECT_VIDEO_EXTENSIONS:
             result["downloaded_video_path"] = str(target_path)
+        direct_options = {**resolved_options, "format_string": "direct_url"}
+        result["url_download_diagnostics"] = self._download_diagnostics(
+            target_path,
+            direct_options,
+            download_started_at,
+        )
         logger.info("Direct media downloaded: url=%s file=%s size=%s", url, target_path, target_path.stat().st_size)
         self._emit_progress(progress_callback, self._completed_progress(target_path.stat().st_size, "direct"))
         return result
+
+    def _download_diagnostics(self, path: Path, resolved_options: dict, started_at: float) -> dict:
+        diagnostics = {
+            "downloaded_container": path.suffix.lower().lstrip(".") or None,
+            "video_codec": None,
+            "audio_codec": None,
+            "resolution": None,
+            "fps": None,
+            "file_size_mb": round(path.stat().st_size / (1024 * 1024), 3),
+            "download_time_sec": round(max(0.0, time.monotonic() - started_at), 3),
+            "url_download_format_profile": resolved_options["format_profile"],
+            "yt_dlp_format_string_used": resolved_options["format_string"],
+            "media_probe_status": "disabled",
+        }
+        if resolved_options.get("log_media_probe", True):
+            diagnostics.update(self._probe_media(path))
+        logger.info(
+            "URL download diagnostics: file=%s profile=%s format=%s container=%s video_codec=%s "
+            "audio_codec=%s resolution=%s fps=%s size_mb=%s download_sec=%s probe=%s",
+            path,
+            diagnostics["url_download_format_profile"],
+            diagnostics["yt_dlp_format_string_used"],
+            diagnostics["downloaded_container"],
+            diagnostics["video_codec"],
+            diagnostics["audio_codec"],
+            diagnostics["resolution"],
+            diagnostics["fps"],
+            diagnostics["file_size_mb"],
+            diagnostics["download_time_sec"],
+            diagnostics["media_probe_status"],
+        )
+        return diagnostics
+
+    @staticmethod
+    def _probe_media(path: Path) -> dict:
+        ffprobe = shutil.which("ffprobe")
+        if not ffprobe:
+            return {"media_probe_status": "unavailable"}
+        try:
+            result = subprocess.run(
+                [
+                    ffprobe,
+                    "-v",
+                    "error",
+                    "-print_format",
+                    "json",
+                    "-show_entries",
+                    "format=format_name:stream=codec_type,codec_name,width,height,r_frame_rate",
+                    str(path),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=10,
+                check=False,
+            )
+            if result.returncode != 0:
+                return {"media_probe_status": "check_failed"}
+            payload = json.loads(result.stdout or "{}")
+            streams = payload.get("streams") if isinstance(payload.get("streams"), list) else []
+            video = next((stream for stream in streams if stream.get("codec_type") == "video"), {})
+            audio = next((stream for stream in streams if stream.get("codec_type") == "audio"), {})
+            width = video.get("width")
+            height = video.get("height")
+            return {
+                "media_probe_status": "available",
+                "video_codec": video.get("codec_name"),
+                "audio_codec": audio.get("codec_name"),
+                "resolution": f"{width}x{height}" if width and height else None,
+                "fps": UrlDownloader._parse_frame_rate(video.get("r_frame_rate")),
+            }
+        except (OSError, ValueError, subprocess.SubprocessError):
+            logger.warning("Could not probe downloaded URL media: path=%s", path, exc_info=True)
+            return {"media_probe_status": "check_failed"}
+
+    @staticmethod
+    def _parse_frame_rate(value) -> float | None:
+        text = str(value or "").strip()
+        try:
+            if "/" in text:
+                numerator, denominator = text.split("/", 1)
+                rate = float(numerator) / float(denominator)
+            else:
+                rate = float(text)
+            return round(rate, 3) if rate > 0 else None
+        except (TypeError, ValueError, ZeroDivisionError):
+            return None
 
     @staticmethod
     def _content_length(response) -> int | None:
