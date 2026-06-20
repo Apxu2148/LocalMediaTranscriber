@@ -915,8 +915,13 @@ class QueueManager:
     def _refresh_outputs_locked(self, item: dict, cleanup_result: dict | None = None) -> None:
         item["outputs"] = self._output_artifacts_locked(item, cleanup_result)
 
-    def _apply_success_retention_locked(self, item: dict) -> dict:
-        if self.retention_cleaner is None:
+    def _apply_terminal_retention_locked(self, item: dict) -> dict:
+        status = item.get("status")
+        if (
+            self.retention_cleaner is None
+            or status not in TERMINAL_STATUSES
+            or (status != "completed" and item.get("source_type") != "url")
+        ):
             return {}
         try:
             return self.retention_cleaner(copy.deepcopy(item))
@@ -1272,8 +1277,7 @@ class QueueManager:
                                 }
                             )
                             self._set_item_stage_locked(item, "completed", status="completed")
-                            cleanup_result = self._apply_success_retention_locked(item)
-                            self._refresh_outputs_locked(item, cleanup_result)
+                            self._refresh_outputs_locked(item)
                         self._persist_locked()
                         logger.info(
                             "Queue task completed: job_id=%s index=%s transcript=%s json=%s frames=%s duration=%s processing_time=%s realtime_factor=%s",
@@ -1338,6 +1342,10 @@ class QueueManager:
                         )
 
             with self._lock:
+                if item.get("status") in TERMINAL_STATUSES:
+                    cleanup_result = self._apply_terminal_retention_locked(item)
+                    self._refresh_outputs_locked(item, cleanup_result)
+                    self._persist_locked()
                 self._current_index = None
                 if self._stop_after_current:
                     for pending_item in self._items:

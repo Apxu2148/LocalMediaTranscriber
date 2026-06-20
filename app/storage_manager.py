@@ -112,7 +112,7 @@ class StorageManager:
     def apply_retention_cleanup(self, item: dict) -> dict:
         settings = self.settings()
         result: dict[str, Any] = {}
-        if not settings.get("keep_downloaded_url_media", True):
+        if item.get("source_type") == "url" and not settings.get("keep_downloaded_url_media", True):
             path = (
                 item.get("downloaded_video_path")
                 or item.get("downloaded_media_path")
@@ -120,7 +120,7 @@ class StorageManager:
             )
             result.update(self._delete_intermediate_file(path, "downloads", "downloaded_media"))
 
-        if not settings.get("keep_uploaded_temp_files", True):
+        if item.get("status") == "completed" and not settings.get("keep_uploaded_temp_files", True):
             path = item.get("source_path") if item.get("source_type") == "local_file" else None
             result.update(self._delete_intermediate_file(path, "uploads", "uploaded_temp"))
 

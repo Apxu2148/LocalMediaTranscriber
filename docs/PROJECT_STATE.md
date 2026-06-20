@@ -2,7 +2,14 @@
 
 ## Current milestone
 
-Stage 1.1b is implemented and validated in the working tree. The app now persists an OCR backend selection and reports readiness for Tesseract, EasyOCR, PaddleOCR, and Windows OCR. OCR execution remains intentionally disabled.
+Stage 1.1b is implemented and validated. A follow-up retention bugfix now removes app-owned URL downloads after completion, cancellation, or failure when `keep_downloaded_url_media=false`. OCR execution remains intentionally disabled.
+
+## URL download cleanup bugfix
+
+- Queue retention now runs from one terminal-item path after active processing has returned.
+- URL ownership requires `source_type=url`, the current item's recorded download path, and the existing `data/downloads` safety boundary.
+- Cleanup failures are recorded in `outputs` without replacing completed/cancelled/error status or the original processing error.
+- Uploaded-temp cleanup remains success-only, and local user files remain protected.
 
 ## Changed areas
 
@@ -11,10 +18,21 @@ Stage 1.1b is implemented and validated in the working tree. The app now persist
 - `app/queue_manager.py`: selected backend snapshot with OCR still normalized to a no-op.
 - `static/index.html`, `static/app.js`, `static/style.css`, `static/i18n.js`: compact selector, conditional Tesseract fields, readiness details, and RU/EN copy.
 - Focused OCR/API/i18n/UI/queue tests and OCR documentation.
+- `app/queue_manager.py`, `app/storage_manager.py`, focused retention tests, and retention documentation for the URL cleanup bugfix.
 
 ## Validation
 
 Passed on 2026-06-20:
+
+URL download cleanup bugfix:
+
+- `python -m compileall app`
+- `python -m unittest tests.test_queue_manager` (44 tests)
+- `python -m unittest tests.test_url_downloader` (13 tests)
+- `python -m unittest tests.test_storage_manager` (10 tests)
+- `python -m unittest tests.test_http_smoke` (12 tests)
+
+Stage 1.1b validation:
 
 - `python -m compileall app`
 - `python -m unittest tests.test_i18n tests.test_ui_contract` (25 tests)
@@ -31,6 +49,7 @@ Passed on 2026-06-20:
 - Confirm Tesseract path visibility and readiness on the local machine.
 - Confirm selection persists after refresh.
 - Smoke-test transcription, frame extraction, estimates, and URL cancellation.
+- With URL media retention disabled, cancel during frame extraction and confirm the owned download is removed; repeat with retention enabled and confirm it remains.
 
 ## Known limitations
 

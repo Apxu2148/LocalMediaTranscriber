@@ -104,14 +104,22 @@ class StorageManagerTests(unittest.TestCase):
         media_path.parent.mkdir(parents=True)
         media_path.write_bytes(b"media")
 
-        result = manager.apply_retention_cleanup({"downloaded_media_path": str(media_path)})
+        result = manager.apply_retention_cleanup({
+            "source_type": "url",
+            "status": "completed",
+            "downloaded_media_path": str(media_path),
+        })
 
         self.assertTrue(result["downloaded_media_deleted"])
         self.assertFalse(media_path.exists())
 
         outside_path = self.root / "outside.mp4"
         outside_path.write_bytes(b"outside")
-        result = manager.apply_retention_cleanup({"downloaded_media_path": str(outside_path)})
+        result = manager.apply_retention_cleanup({
+            "source_type": "url",
+            "status": "cancelled",
+            "downloaded_media_path": str(outside_path),
+        })
 
         self.assertFalse(result["downloaded_media_deleted"])
         self.assertTrue(result["downloaded_media_delete_error"])
@@ -124,18 +132,73 @@ class StorageManagerTests(unittest.TestCase):
         upload_path.parent.mkdir(parents=True)
         upload_path.write_bytes(b"upload")
 
-        result = manager.apply_retention_cleanup({"source_type": "local_file", "source_path": str(upload_path)})
+        result = manager.apply_retention_cleanup({
+            "source_type": "local_file",
+            "status": "completed",
+            "source_path": str(upload_path),
+        })
 
         self.assertTrue(result["uploaded_temp_deleted"])
         self.assertFalse(upload_path.exists())
 
         outside_path = self.root / "original.wav"
         outside_path.write_bytes(b"original")
-        result = manager.apply_retention_cleanup({"source_type": "local_file", "source_path": str(outside_path)})
+        result = manager.apply_retention_cleanup({
+            "source_type": "local_file",
+            "status": "completed",
+            "source_path": str(outside_path),
+        })
 
         self.assertFalse(result["uploaded_temp_deleted"])
         self.assertTrue(result["uploaded_temp_delete_error"])
         self.assertTrue(outside_path.exists())
+
+    def test_retention_cleanup_never_deletes_local_input_as_downloaded_media(self) -> None:
+        manager = self.make_manager()
+        manager.update_settings({"keep_downloaded_url_media": False})
+        media_path = self.data_dir / "downloads" / "local-input.mp4"
+        media_path.parent.mkdir(parents=True)
+        media_path.write_bytes(b"local")
+
+        result = manager.apply_retention_cleanup({
+            "source_type": "local_file",
+            "status": "error",
+            "downloaded_media_path": str(media_path),
+            "source_path": str(media_path),
+        })
+
+        self.assertNotIn("downloaded_media_deleted", result)
+        self.assertTrue(media_path.exists())
+
+    def test_retention_cleanup_missing_url_download_is_a_noop(self) -> None:
+        manager = self.make_manager()
+        manager.update_settings({"keep_downloaded_url_media": False})
+        missing_path = self.data_dir / "downloads" / "missing.mp4"
+
+        result = manager.apply_retention_cleanup({
+            "source_type": "url",
+            "status": "cancelled",
+            "downloaded_media_path": str(missing_path),
+        })
+
+        self.assertFalse(result["downloaded_media_deleted"])
+        self.assertIsNone(result["downloaded_media_delete_error"])
+
+    def test_cancelled_local_upload_remains_even_when_keep_is_disabled(self) -> None:
+        manager = self.make_manager()
+        manager.update_settings({"keep_uploaded_temp_files": False})
+        upload_path = self.data_dir / "uploads" / "cancelled.wav"
+        upload_path.parent.mkdir(parents=True)
+        upload_path.write_bytes(b"upload")
+
+        result = manager.apply_retention_cleanup({
+            "source_type": "local_file",
+            "status": "cancelled",
+            "source_path": str(upload_path),
+        })
+
+        self.assertNotIn("uploaded_temp_deleted", result)
+        self.assertTrue(upload_path.exists())
 
 
 if __name__ == "__main__":

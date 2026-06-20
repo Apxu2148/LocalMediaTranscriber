@@ -10,6 +10,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from app.queue_manager import QueueFile, QueueManager, QueueUrl
+from app.storage_manager import StorageManager
 from app.url_downloader import UrlDownloadCancelled, UrlDownloader
 
 
@@ -988,7 +989,166 @@ class QueueManagerTests(unittest.TestCase):
         self.assertTrue(outputs["downloaded_media_deleted"])
         self.assertFalse(outputs["downloaded_media_exists"])
 
-    def test_failed_and_cancelled_jobs_do_not_run_retention_cleanup(self) -> None:
+    def test_url_download_is_deleted_after_frame_extraction_cancellation(self) -> None:
+        storage = StorageManager(data_dir=self.root / "data")
+        storage.update_settings({"keep_downloaded_url_media": False})
+        downloaded = self.root / "data" / "downloads" / "cancel-frames.mp4"
+        downloaded.parent.mkdir(parents=True)
+        downloaded.write_bytes(b"video")
+
+        def frame_processor(_item: dict, _cancel_event: threading.Event, _progress) -> dict:
+            self.assertTrue(downloaded.exists())
+            return {"status": "cancelled", "cancelled": True, "extracted_frame_count": 1}
+
+        manager = self.make_manager(
+            processor=lambda _item, _model, _device: {},
+            video_downloader=lambda _url: {
+                "source_path": str(downloaded),
+                "downloaded_media_path": str(downloaded),
+                "downloaded_video_path": str(downloaded),
+                "source_title": "Cancel Frames",
+            },
+            frame_processor=frame_processor,
+            duration_reader=lambda _path: 1,
+            video_metadata_reader=lambda _path: {"duration_sec": 5, "fps": 30, "width": 100, "height": 50},
+            retention_cleaner=storage.apply_retention_cleanup,
+        )
+        status = self.track_job(manager.add_urls([QueueUrl("https://example.test/cancel-frames")]))
+        manager.update_item(
+            status["items"][0]["index"],
+            operations={"transcribe_audio": False, "extract_frames": True},
+        )
+
+        manager.start("small", "cpu")
+        manager.wait(timeout=3)
+
+        item = manager.status()["items"][0]
+        self.assertEqual("cancelled", item["status"])
+        self.assertFalse(downloaded.exists())
+        self.assertTrue(item["outputs"]["downloaded_media_deleted"])
+
+    def test_url_download_is_deleted_after_transcription_cancellation(self) -> None:
+        storage = StorageManager(data_dir=self.root / "data")
+        storage.update_settings({"keep_downloaded_url_media": False})
+        downloaded = self.root / "data" / "downloads" / "cancel-transcription.m4a"
+        downloaded.parent.mkdir(parents=True)
+        downloaded.write_bytes(b"audio")
+        started = threading.Event()
+
+        def processor(_item: dict, _model: str, _device: str, cancel_event: threading.Event) -> dict:
+            self.assertTrue(downloaded.exists())
+            started.set()
+            cancel_event.wait(timeout=3)
+            self.assertTrue(downloaded.exists())
+            return {"status": "cancelled", "cancellation_reason": "cancelled"}
+
+        manager = self.make_manager(
+            processor=processor,
+            downloader=lambda _url: {
+                "source_path": str(downloaded),
+                "downloaded_media_path": str(downloaded),
+                "downloaded_audio_path": str(downloaded),
+                "source_title": "Cancel Transcription",
+            },
+            duration_reader=lambda _path: 1,
+            retention_cleaner=storage.apply_retention_cleanup,
+        )
+        status = self.track_job(manager.add_urls([QueueUrl("https://example.test/cancel-transcription")]))
+
+        manager.start("small", "cpu")
+        self.assertTrue(started.wait(timeout=2))
+        manager.cancel_item(status["items"][0]["index"])
+        manager.wait(timeout=3)
+
+        item = manager.status()["items"][0]
+        self.assertEqual("cancelled", item["status"])
+        self.assertFalse(downloaded.exists())
+        self.assertTrue(item["outputs"]["downloaded_media_deleted"])
+
+    def test_cancelled_url_download_is_kept_when_setting_is_enabled(self) -> None:
+        storage = StorageManager(data_dir=self.root / "data")
+        downloaded = self.root / "data" / "downloads" / "keep-cancelled.m4a"
+        downloaded.parent.mkdir(parents=True)
+        downloaded.write_bytes(b"audio")
+
+        manager = self.make_manager(
+            processor=lambda _item, _model, _device: {"status": "cancelled"},
+            downloader=lambda _url: {
+                "source_path": str(downloaded),
+                "downloaded_media_path": str(downloaded),
+                "downloaded_audio_path": str(downloaded),
+                "source_title": "Keep Cancelled",
+            },
+            duration_reader=lambda _path: 1,
+            retention_cleaner=storage.apply_retention_cleanup,
+        )
+        self.track_job(manager.add_urls([QueueUrl("https://example.test/keep-cancelled")]))
+
+        manager.start("small", "cpu")
+        manager.wait(timeout=3)
+
+        self.assertEqual("cancelled", manager.status()["items"][0]["status"])
+        self.assertTrue(downloaded.exists())
+
+    def test_url_download_is_deleted_after_controlled_failure(self) -> None:
+        storage = StorageManager(data_dir=self.root / "data")
+        storage.update_settings({"keep_downloaded_url_media": False})
+        downloaded = self.root / "data" / "downloads" / "failed.m4a"
+        downloaded.parent.mkdir(parents=True)
+        downloaded.write_bytes(b"audio")
+
+        manager = self.make_manager(
+            processor=lambda _item, _model, _device: (_ for _ in ()).throw(RuntimeError("processing failed")),
+            downloader=lambda _url: {
+                "source_path": str(downloaded),
+                "downloaded_media_path": str(downloaded),
+                "downloaded_audio_path": str(downloaded),
+                "source_title": "Failed URL",
+            },
+            duration_reader=lambda _path: 1,
+            retention_cleaner=storage.apply_retention_cleanup,
+        )
+        self.track_job(manager.add_urls([QueueUrl("https://example.test/failed")]))
+
+        manager.start("small", "cpu")
+        manager.wait(timeout=3)
+
+        item = manager.status()["items"][0]
+        self.assertEqual("error", item["status"])
+        self.assertEqual("processing failed", item["error_message"])
+        self.assertFalse(downloaded.exists())
+        self.assertTrue(item["outputs"]["downloaded_media_deleted"])
+
+    def test_url_failure_cleanup_error_does_not_hide_original_status(self) -> None:
+        downloaded = self.root / "cleanup-failure.m4a"
+        downloaded.write_bytes(b"audio")
+
+        def retention_cleaner(_item: dict) -> dict:
+            raise OSError("cleanup failed")
+
+        manager = self.make_manager(
+            processor=lambda _item, _model, _device: (_ for _ in ()).throw(RuntimeError("original failure")),
+            downloader=lambda _url: {
+                "source_path": str(downloaded),
+                "downloaded_media_path": str(downloaded),
+                "downloaded_audio_path": str(downloaded),
+                "source_title": "Failure Cleanup",
+            },
+            duration_reader=lambda _path: 1,
+            retention_cleaner=retention_cleaner,
+        )
+        self.track_job(manager.add_urls([QueueUrl("https://example.test/failure-cleanup")]))
+
+        manager.start("small", "cpu")
+        manager.wait(timeout=3)
+
+        item = manager.status()["items"][0]
+        self.assertEqual("error", item["status"])
+        self.assertEqual("original failure", item["error_message"])
+        self.assertEqual("cleanup failed", item["outputs"]["retention_cleanup_error"])
+        self.assertTrue(downloaded.exists())
+
+    def test_failed_and_cancelled_local_jobs_do_not_run_retention_cleanup(self) -> None:
         cleanup_calls: list[str] = []
 
         def retention_cleaner(item: dict) -> dict:

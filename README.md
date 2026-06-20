@@ -164,8 +164,9 @@ Storage panel:
 
 - The Files section includes a Storage panel with folder sizes for `data\downloads`, `data\uploads`, `data\recordings`, `data\transcripts`, `data\logs`, `data\jobs`, and the total data size.
 - The refresh button recalculates sizes. Missing folders show size `0`.
-- Storage settings are conservative by default: downloaded URL media and uploaded temp files are kept after successful processing unless you explicitly disable the matching keep checkbox.
-- Retention cleanup runs only after successful processing. It does not run for failed, cancelled, partial-success, or running items.
+- Storage settings are conservative by default: downloaded URL media and uploaded temp files are kept unless you explicitly disable the matching keep checkbox.
+- When downloaded URL media retention is disabled, the app deletes the current item's owned file after completion, cancellation, or failure. Uploaded temporary files are still deleted only after successful processing when their keep setting is disabled.
+- Retention cleanup runs only after active download/transcription/frame work has stopped; it never deletes media still in use.
 - Retention cleanup never deletes `data\recordings`, `data\transcripts`, extracted frames, screen recordings, or `frames_index.json`.
 - The manual cleanup buttons clear only `data\downloads` or `data\uploads` after confirmation. They do not delete transcripts, recordings, frames, or original user files outside the project `data` folder.
 - Storage and OCR engine settings are persisted in `data\settings.json`.

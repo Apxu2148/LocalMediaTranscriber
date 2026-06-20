@@ -135,7 +135,7 @@ Key behavior:
 - `settings()` and `update_settings()` persist retention flags in `data\settings.json`.
 - Default retention is conservative: `keep_downloaded_url_media=true` and `keep_uploaded_temp_files=true`.
 - `cleanup_folder()` accepts only `downloads` and `uploads`. It deletes entries inside the known folder, ignores missing folders, catches per-entry deletion failures, and returns clear error strings instead of crashing the app.
-- `apply_retention_cleanup()` is called by `QueueManager` only after successful processing. It may delete downloaded URL media under `data\downloads` or uploaded temp files under `data\uploads` when the matching keep flag is disabled.
+- `apply_retention_cleanup()` is called by `QueueManager` after terminal URL items and successful local items. It may delete app-downloaded URL media under `data\downloads` after completion, cancellation, or failure, and uploaded temp files under `data\uploads` after success, when the matching keep flag is disabled.
 
 Safe deletion rules:
 
@@ -439,7 +439,7 @@ Key behavior:
 - Keeps OCR and CV as no-op placeholders in the backend. Incoming OCR/CV enabled flags are normalized back to disabled with `status=coming_soon`; OCR may additionally snapshot `engine_available` for readiness display without triggering work.
 - Stores per-item frame settings in `frame_extraction`: extraction rate, JPEG quality, estimates, warning flag, and latest extraction result.
 - Stores terminal output metadata in `outputs`: transcript path/existence, diagnostic JSON path/existence, frame folder path/existence, frame index path/existence, downloaded URL media path/existence/deleted marker, uploaded temp path/existence/deleted marker, and retention cleanup error markers.
-- Calls the optional `retention_cleaner` callback only after a fully successful item. Failed, cancelled, and partial-success items keep intermediate files for debugging.
+- Calls the optional `retention_cleaner` after active work stops for terminal URL items and fully successful local items. Failed/cancelled URL downloads follow the keep-download setting; failed/cancelled local items retain their inputs.
 - Uses callbacks supplied by `app/main.py` to download URLs, transcribe files, extract frames, estimate runtimes, and record errors.
 
 Future OCR/CV engines, media indexes, and RemoteBackend worker plans should extend `processing_plan` instead of adding another disconnected global selector. They must keep the compatibility fields stable until older job JSON and UI code no longer depend on them.
@@ -829,7 +829,7 @@ Audio files, screen videos, input event JSONL files, merged videos, and new scre
 16. A running item can be cancelled while its status is `downloading`, `extracting_audio`, `transcribing`, or `extracting_frames`; cancellation is cooperative and the worker continues to the next pending item.
 17. Transcription cancellation may wait for the current model-loading step or Whisper segment to finish. Partial transcripts are saved with a `__partial_cancelled__` marker and cancelled/partial JSON metadata. Frame extraction cancellation keeps partial frames and marks `frames_index.json` cancelled/incomplete.
 18. URL download cancellation signals the active downloader event, moves the item through `cancelling_download` to `download_cancelled`, cleans partial files, and continues the queue.
-19. On full success only, `StorageManager.apply_retention_cleanup()` may delete downloaded URL media or uploaded temp files when the user disabled the matching keep setting. It never deletes primary outputs.
+19. After active work stops, `StorageManager.apply_retention_cleanup()` may delete owned URL media for completed, cancelled, or failed URL items when the user disabled that keep setting. Uploaded temp files remain success-only cleanup. It never deletes local originals or primary outputs.
 20. Terminal queue items refresh `outputs` so the UI can show created artifacts, missing/deleted markers, and cleanup errors directly on the item card.
 21. Queue status shows counts, current item, current stage, elapsed time, ETA, progress, operation settings, estimates, downloaded media paths, transcript output paths, frame folder paths, frame counts, frame index paths, and output artifacts.
 22. `stop-after-current` completes the active item and cancels pending items.
