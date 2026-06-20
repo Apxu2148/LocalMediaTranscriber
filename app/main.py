@@ -163,11 +163,13 @@ class StorageCleanupRequest(BaseModel):
 
 
 class OcrSettingsRequest(BaseModel):
+    selected_backend: str | None = None
     tesseract_path: str | None = None
     default_languages: list[str] | None = None
 
 
 class OcrCheckRequest(BaseModel):
+    backend: str | None = None
     tesseract_path: str | None = None
 
 
@@ -509,17 +511,23 @@ def ocr_settings_update(payload: OcrSettingsRequest) -> dict:
     changes = {
         field: getattr(payload, field)
         for field in payload.model_fields_set
-        if field in {"tesseract_path", "default_languages"}
+        if field in {"selected_backend", "tesseract_path", "default_languages"}
     }
-    settings = ocr_manager.update_settings(changes)
+    try:
+        settings = ocr_manager.update_settings(changes)
+    except ValueError as exc:
+        raise_api_error(str(exc))
     return {"settings": settings, "status": ocr_manager.status()}
 
 
 @app.post("/api/ocr/check")
 def ocr_check(payload: OcrCheckRequest | None = Body(default=None)) -> dict:
-    if payload is None or "tesseract_path" not in payload.model_fields_set:
-        return ocr_manager.status()
-    return ocr_manager.status(payload.tesseract_path)
+    try:
+        if payload is None or "tesseract_path" not in payload.model_fields_set:
+            return ocr_manager.status(backend=payload.backend if payload else None)
+        return ocr_manager.status(payload.tesseract_path, backend=payload.backend)
+    except ValueError as exc:
+        raise_api_error(str(exc))
 
 
 @app.get("/api/transcripts/read")

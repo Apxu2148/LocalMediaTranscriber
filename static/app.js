@@ -114,16 +114,21 @@ const defaultAudioEnabled = document.querySelector("#defaultAudioEnabled");
 const defaultFramesEnabled = document.querySelector("#defaultFramesEnabled");
 const defaultFrameRateSelect = document.querySelector("#defaultFrameRateSelect");
 const defaultJpegQualitySelect = document.querySelector("#defaultJpegQualitySelect");
+const ocrBackendSelect = document.querySelector("#ocrBackendSelect");
 const ocrStatusBadge = document.querySelector("#ocrStatusBadge");
+const ocrBackendType = document.querySelector("#ocrBackendType");
+const ocrPathStatusRow = document.querySelector("#ocrPathStatusRow");
 const ocrDetectedPath = document.querySelector("#ocrDetectedPath");
 const ocrVersion = document.querySelector("#ocrVersion");
 const ocrLanguages = document.querySelector("#ocrLanguages");
 const ocrRusStatus = document.querySelector("#ocrRusStatus");
 const ocrEngStatus = document.querySelector("#ocrEngStatus");
+const ocrTesseractFields = document.querySelector("#ocrTesseractFields");
 const ocrPathInput = document.querySelector("#ocrPathInput");
 const ocrCheckButton = document.querySelector("#ocrCheckButton");
 const ocrSaveButton = document.querySelector("#ocrSaveButton");
 const ocrStatusMessage = document.querySelector("#ocrStatusMessage");
+const ocrBackendNotes = document.querySelector("#ocrBackendNotes");
 const diskFree = document.querySelector("#diskFree");
 const operationOverlay = document.querySelector("#operationOverlay");
 const operationOverlayTitle = document.querySelector("#operationOverlayTitle");
@@ -1592,33 +1597,101 @@ function ocrErrorMessageKey(errorCode) {
   }[errorCode] || "ocrErrorCheckFailed";
 }
 
-function renderOcrStatus(status, { syncConfiguredPath = false } = {}) {
-  latestOcrStatus = status;
-  if (syncConfiguredPath) {
-    ocrPathInput.value = status.configured_path || "";
+function ocrBackendTypeKey(type) {
+  return {
+    external_executable: "ocrTypeExternalExecutable",
+    python_optional: "ocrTypeIntegratedOptional",
+    python_optional_experimental: "ocrTypeOptionalExperimental",
+    windows_system_experimental: "ocrTypeWindowsExperimental",
+  }[type] || "ocrValueUnavailable";
+}
+
+function ocrBackendStatusKey(status) {
+  return {
+    available: "ocrStatusAvailable",
+    not_found: "ocrStatusNotFound",
+    not_installed: "ocrStatusNotInstalled",
+    unsupported_platform: "ocrStatusUnsupportedPlatform",
+    check_failed: "ocrStatusCheckFailed",
+  }[status] || "ocrStatusCheckFailed";
+}
+
+function ocrBackendNoteKeys(backend) {
+  if (backend.id === "easyocr" && backend.status === "not_installed") {
+    return ["ocrEasyOcrMissing"];
   }
-  const available = Boolean(status.available);
-  const missing = status.error === "not_found";
-  const statusKey = available ? "ocrStatusAvailable" : missing ? "ocrStatusNotFound" : "ocrStatusCheckFailed";
-  ocrStatusBadge.textContent = t(statusKey);
-  ocrStatusBadge.dataset.status = available ? "success" : missing ? "warning" : "error";
-  ocrDetectedPath.textContent = status.path || t("ocrValueUnavailable");
-  ocrVersion.textContent = status.version || t("ocrValueUnavailable");
-  ocrLanguages.textContent = status.languages?.length ? status.languages.join(", ") : t("ocrLanguagesNone");
-  ocrRusStatus.textContent = t(status.has_rus ? "ocrHasRus" : "ocrMissingRus");
-  ocrEngStatus.textContent = t(status.has_eng ? "ocrHasEng" : "ocrMissingEng");
+  if (backend.id === "windows_ocr") {
+    const keys = ["ocrWindowsExperimentalNote"];
+    if (backend.status === "unsupported_platform") {
+      keys.push("ocrWindowsOnlyNote");
+    } else if (backend.status === "not_installed") {
+      keys.push("ocrOptionalDependenciesMissing");
+    }
+    return keys;
+  }
+  const keys = [];
+  for (const note of backend.notes || []) {
+    const key = {
+      external_path_required: "ocrInstallHint",
+      optional_dependency_missing: "ocrOptionalDependenciesMissing",
+      experimental: "ocrExperimentalNote",
+      windows_only: "ocrWindowsOnlyNote",
+      import_check_failed: "ocrImportCheckFailed",
+    }[note];
+    if (key && !keys.includes(key)) {
+      keys.push(key);
+    }
+  }
+  return keys;
+}
+
+function renderOcrStatus(status, { syncConfiguredPath = false, syncSelectedBackend = false } = {}) {
+  latestOcrStatus = status;
+  if (syncSelectedBackend) {
+    ocrBackendSelect.value = status.selected_backend || "tesseract";
+  }
+  const selectedBackend = ocrBackendSelect.value || status.selected_backend || "tesseract";
+  const backend = status.backends?.[selectedBackend] || status.backends?.tesseract || {};
+  const tesseract = status.backends?.tesseract || {};
+  if (syncConfiguredPath) {
+    ocrPathInput.value = tesseract.configured_path || "";
+  }
+  const available = Boolean(backend.available);
+  const warningStatuses = new Set(["not_found", "not_installed", "unsupported_platform"]);
+  ocrStatusBadge.textContent = t(ocrBackendStatusKey(backend.status));
+  ocrStatusBadge.dataset.status = available ? "success" : warningStatuses.has(backend.status) ? "warning" : "error";
+  ocrBackendType.textContent = t(ocrBackendTypeKey(backend.type));
+  ocrDetectedPath.textContent = backend.path || t("ocrValueUnavailable");
+  ocrVersion.textContent = backend.version || t("ocrValueUnavailable");
+  ocrLanguages.textContent = backend.languages?.length ? backend.languages.join(", ") : t("ocrLanguagesNone");
+  ocrRusStatus.textContent = t(backend.has_rus ? "ocrHasRus" : "ocrMissingRus");
+  ocrEngStatus.textContent = t(backend.has_eng ? "ocrHasEng" : "ocrMissingEng");
+  const showTesseractFields = selectedBackend === "tesseract";
+  ocrPathStatusRow.hidden = !showTesseractFields;
+  ocrTesseractFields.hidden = !showTesseractFields;
+  ocrBackendNotes.textContent = ocrBackendNoteKeys(backend).map((key) => t(key)).join(" ");
   if (available) {
     setLocalizedOutput(ocrStatusMessage, "ocrNextStage", {}, "info");
-  } else if (missing) {
+  } else if (backend.id === "tesseract" && backend.status === "not_found") {
     setLocalizedOutput(ocrStatusMessage, "ocrInstallHint", {}, "warning");
+  } else if (warningStatuses.has(backend.status)) {
+    setLocalizedOutput(ocrStatusMessage, "ocrBackendNotAvailable", {}, "warning");
   } else {
-    setLocalizedOutput(ocrStatusMessage, ocrErrorMessageKey(status.error), {}, "error");
+    setLocalizedOutput(
+      ocrStatusMessage,
+      backend.id === "tesseract" ? ocrErrorMessageKey(backend.error) : "ocrImportCheckFailed",
+      {},
+      "error",
+    );
   }
 }
 
 async function refreshOcrStatus() {
   try {
-    renderOcrStatus(await requestJson("/api/ocr/status"), { syncConfiguredPath: true });
+    renderOcrStatus(await requestJson("/api/ocr/status"), {
+      syncConfiguredPath: true,
+      syncSelectedBackend: true,
+    });
   } catch (error) {
     setOutput(ocrStatusMessage, error.message, "error");
   }
@@ -1632,9 +1705,13 @@ async function checkOcrStatus() {
     const status = await requestJson("/api/ocr/check", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tesseract_path: ocrPathInput.value.trim() || null }),
+      body: JSON.stringify({
+        backend: ocrBackendSelect.value,
+        tesseract_path: ocrPathInput.value.trim() || null,
+      }),
     });
     renderOcrStatus(status);
+    showToast(t("ocrEnginesChecked"), "success");
   } catch (error) {
     setOutput(ocrStatusMessage, error.message, "error");
   } finally {
@@ -1651,12 +1728,13 @@ async function saveOcrSettings() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        selected_backend: ocrBackendSelect.value,
         tesseract_path: ocrPathInput.value.trim() || null,
         default_languages: ["rus", "eng"],
       }),
     });
-    renderOcrStatus(result.status, { syncConfiguredPath: true });
-    showToast(t("ocrPathSaved"), "success");
+    renderOcrStatus(result.status, { syncConfiguredPath: true, syncSelectedBackend: true });
+    showToast(t("ocrSettingsSaved"), "success");
   } catch (error) {
     setOutput(ocrStatusMessage, error.message, "error");
   } finally {
@@ -2652,7 +2730,19 @@ function populateDefaultProcessingControls() {
   }
 }
 
-function processingPlanFromValues({ audioEnabled, model, device, framesEnabled, frameRate, jpegQuality, ocrEngineAvailable }) {
+function processingPlanFromValues({
+  audioEnabled,
+  model,
+  device,
+  framesEnabled,
+  frameRate,
+  jpegQuality,
+  ocrBackend,
+  ocrLanguages,
+  ocrEngineAvailable,
+}) {
+  const backend = ocrBackend || latestOcrStatus?.selected_backend || "tesseract";
+  const backendStatus = latestOcrStatus?.backends?.[backend];
   return {
     audio: {
       enabled: Boolean(audioEnabled),
@@ -2667,10 +2757,11 @@ function processingPlanFromValues({ audioEnabled, model, device, framesEnabled, 
     },
     ocr: {
       enabled: false,
-      engine: "tesseract",
-      languages: ["rus", "eng"],
+      backend,
+      engine: backend,
+      languages: ocrLanguages || (backend === "tesseract" ? ["rus", "eng"] : ["ru", "en"]),
       status: "coming_soon",
-      engine_available: Boolean(ocrEngineAvailable ?? latestOcrStatus?.available),
+      engine_available: Boolean(ocrEngineAvailable ?? backendStatus?.available),
     },
     cv: {
       enabled: false,
@@ -2688,6 +2779,7 @@ function defaultProcessingPlanSnapshot() {
     framesEnabled: defaultFramesEnabled.checked,
     frameRate: frameRateFromValue(defaultFrameRateSelect.value || "interval:30"),
     jpegQuality: defaultJpegQualitySelect.value || "75",
+    ocrBackend: ocrBackendSelect.value || latestOcrStatus?.selected_backend,
   });
 }
 
@@ -2704,6 +2796,8 @@ function processingPlanForQueueItem(queueItem) {
     framesEnabled: frames.enabled ?? operations.extract_frames ?? false,
     frameRate: frames.rate || frameSettings.rate || frameRateFromValue("interval:10"),
     jpegQuality: frames.jpeg_quality || frameSettings.jpeg_quality || 90,
+    ocrBackend: plan.ocr?.backend || plan.ocr?.engine,
+    ocrLanguages: plan.ocr?.languages,
     ocrEngineAvailable: plan.ocr?.engine_available,
   });
 }
@@ -3161,10 +3255,14 @@ function formatQueueItemError(queueItem) {
 
 function createQueueItemElement(queueItem, status) {
   const item = document.createElement("li");
+  const itemOcrPlan = processingPlanForQueueItem(queueItem).ocr;
   item.className = "queue-item-card";
   item.dataset.queueIndex = String(queueItem.index);
   item.dataset.mediaKind = queueItem.media_kind || (queueItemIsVideo(queueItem) ? "video" : "audio");
   item.dataset.queueStage = queueItem.stage || queueStageFromStatus(queueItem.status);
+  item.dataset.ocrBackend = itemOcrPlan.backend;
+  item.dataset.ocrLanguages = JSON.stringify(itemOcrPlan.languages);
+  item.dataset.ocrEngineAvailable = String(itemOcrPlan.engine_available);
 
   const header = document.createElement("div");
   header.className = "queue-item-header";
@@ -3471,6 +3569,9 @@ function collectQueueItemPayload(card) {
     framesEnabled: operations.extract_frames,
     frameRate,
     jpegQuality,
+    ocrBackend: card.dataset.ocrBackend,
+    ocrLanguages: JSON.parse(card.dataset.ocrLanguages || "null") || undefined,
+    ocrEngineAvailable: card.dataset.ocrEngineAvailable === "true",
   });
   return {
     index: Number(card.dataset.queueIndex),
@@ -3830,6 +3931,11 @@ keepDownloadedMediaCheckbox.addEventListener("change", saveStorageSettings);
 keepUploadedTempCheckbox.addEventListener("change", saveStorageSettings);
 clearDownloadsButton.addEventListener("click", () => cleanupStorageFolder("downloads"));
 clearUploadsButton.addEventListener("click", () => cleanupStorageFolder("uploads"));
+ocrBackendSelect.addEventListener("change", () => {
+  if (latestOcrStatus) {
+    renderOcrStatus(latestOcrStatus);
+  }
+});
 ocrCheckButton.addEventListener("click", checkOcrStatus);
 ocrSaveButton.addEventListener("click", saveOcrSettings);
 videoMuxForm.addEventListener("submit", async (event) => {

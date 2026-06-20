@@ -50,16 +50,21 @@ class UiContractTests(unittest.TestCase):
             "defaultFrameRateSelect",
             "defaultJpegQualitySelect",
             "ocrSettingsPanel",
+            "ocrBackendSelect",
             "ocrStatusBadge",
+            "ocrBackendType",
+            "ocrPathStatusRow",
             "ocrDetectedPath",
             "ocrVersion",
             "ocrLanguages",
             "ocrRusStatus",
             "ocrEngStatus",
+            "ocrTesseractFields",
             "ocrPathInput",
             "ocrCheckButton",
             "ocrSaveButton",
             "ocrStatusMessage",
+            "ocrBackendNotes",
             "queueStageStatus",
             "queueMetrics",
             "queueProgress",
@@ -213,6 +218,9 @@ class UiContractTests(unittest.TestCase):
         self.assertEqual(1, html.count('id="whisperModelSelect"'))
         self.assertEqual(1, html.count('id="whisperDeviceSelect"'))
         self.assertLess(html.index('id="queueRetryButton"'), html.index('id="defaultProcessingSettings"'))
+        default_settings_html = html[
+            html.index('id="defaultProcessingSettings"'):html.index('id="ocrSettingsPanel"')
+        ]
         for element_id in (
             "defaultProcessingSettings",
             "defaultAudioEnabled",
@@ -232,16 +240,16 @@ class UiContractTests(unittest.TestCase):
             "processingPlanCv",
             "disabled",
             "comingSoon",
-            "computerVision",
-            "ocrEngineComingSoon",
-            "cvEngineComingSoon",
         ):
             self.assertIn(key, html + app_js)
+        self.assertNotIn("placeholder-fieldset", default_settings_html)
+        self.assertNotIn('data-i18n="ocr"', default_settings_html)
+        self.assertNotIn('data-i18n="computerVision"', default_settings_html)
         self.assertIn("defaultProcessingPlanSnapshot", app_js)
         self.assertIn("processingPlanForQueueItem", app_js)
         self.assertIn("processing_plan", app_js)
         self.assertIn('status: "coming_soon"', app_js)
-        self.assertIn('disabled>', html)
+        self.assertIn("input.disabled = true", app_js)
         self.assertNotIn("Tesseract OCR (coming soon)", app_js)
         self.assertNotIn("Basic OpenCV (coming soon)", app_js)
 
@@ -250,9 +258,18 @@ class UiContractTests(unittest.TestCase):
         html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
 
         self.assertIn('id="ocrSettingsPanel"', html)
+        self.assertIn('id="ocrBackendSelect"', html)
+        for backend in ("tesseract", "easyocr", "paddleocr", "windows_ocr"):
+            self.assertIn(f'value="{backend}"', html)
+        self.assertIn('id="ocrPathInput"', html)
         self.assertIn('data-i18n="ocrNextStage"', html)
-        self.assertIn('fieldset class="placeholder-fieldset" disabled', html)
+        self.assertIn('createComingSoonOption("ocr")', app_js)
+        self.assertIn('createComingSoonOption("cv")', app_js)
         self.assertIn('engine_available: Boolean(', app_js)
+        self.assertIn("status.backends?.[selectedBackend]", app_js)
+        self.assertIn("ocrTesseractFields.hidden", app_js)
+        self.assertIn("selected_backend: ocrBackendSelect.value", app_js)
+        self.assertIn("backend,", app_js)
         self.assertIn('enabled: false,', app_js)
         self.assertNotIn("frames_ocr.jsonl", html + app_js)
         self.assertNotIn("frames_ocr.txt", html + app_js)

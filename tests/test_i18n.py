@@ -351,6 +351,15 @@ class I18nTests(unittest.TestCase):
             "ocrSettingsTitle",
             "ocrEngineLabel",
             "ocrEngineTesseract",
+            "ocrEngineEasyOcr",
+            "ocrEnginePaddleOcr",
+            "ocrEngineWindowsOcr",
+            "ocrSelectedBackend",
+            "ocrBackendTypeLabel",
+            "ocrTypeExternalExecutable",
+            "ocrTypeIntegratedOptional",
+            "ocrTypeOptionalExperimental",
+            "ocrTypeWindowsExperimental",
             "ocrPathLabel",
             "ocrVersionLabel",
             "ocrLanguagesLabel",
@@ -361,12 +370,23 @@ class I18nTests(unittest.TestCase):
             "ocrChecking",
             "ocrStatusAvailable",
             "ocrStatusNotFound",
+            "ocrStatusNotInstalled",
+            "ocrStatusUnsupportedPlatform",
             "ocrStatusCheckFailed",
+            "ocrBackendAvailable",
+            "ocrBackendNotAvailable",
             "ocrHasRus",
             "ocrMissingRus",
             "ocrHasEng",
             "ocrMissingEng",
             "ocrInstallHint",
+            "ocrOptionalDependenciesMissing",
+            "ocrEasyOcrMissing",
+            "ocrExperimentalNote",
+            "ocrWindowsOnlyNote",
+            "ocrWindowsExperimentalNote",
+            "ocrEnginesChecked",
+            "ocrSettingsSaved",
             "ocrNextStage",
             "ocrErrorInvalidPath",
         ):
@@ -374,7 +394,7 @@ class I18nTests(unittest.TestCase):
             self.assertIn(key, en_keys)
         self.assertEqual("OCR / text recognition", dictionary_value(i18n, "en", "ocrSettingsTitle"))
         self.assertEqual(
-            "OCR processing will be added in the next stage.",
+            "At this stage the app only checks OCR engines. Text recognition on frames will be added in the next stage.",
             dictionary_value(i18n, "en", "ocrNextStage"),
         )
 

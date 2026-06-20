@@ -143,7 +143,7 @@ If Git reports `.git/index.lock` before commit, run `cleanup-dev.bat`.
 
 ## Stored Files
 
-The queue is now a media processing queue. Its main action is "Start processing". Video files and supported video URLs can currently be transcribed, split into frames, or both. Tesseract availability can be checked in OCR settings, but OCR processing and CV/VLM options remain disabled coming-soon operations.
+The queue is now a media processing queue. Its main action is "Start processing". Video files and supported video URLs can currently be transcribed, split into frames, or both. OCR settings can check and select a backend, but OCR processing and CV/VLM options remain disabled coming-soon operations.
 
 Queue usability:
 
@@ -169,6 +169,15 @@ Storage panel:
 - Retention cleanup never deletes `data\recordings`, `data\transcripts`, extracted frames, screen recordings, or `frames_index.json`.
 - The manual cleanup buttons clear only `data\downloads` or `data\uploads` after confirmation. They do not delete transcripts, recordings, frames, or original user files outside the project `data` folder.
 - Storage and OCR engine settings are persisted in `data\settings.json`.
+
+OCR backend readiness:
+
+- **Tesseract OCR** is an external executable. The app checks a configured path, `PATH`, common Windows install locations, its version, and installed `rus`/`eng` language data.
+- **EasyOCR** is an optional integrated Python backend. This stage only checks whether its module is importable and does not initialize a reader or download models.
+- **PaddleOCR** is an optional experimental Python backend. This stage only checks whether its module is importable.
+- **Windows OCR** is an experimental Windows-only system backend. The app performs a lightweight WinRT import check on Windows.
+- EasyOCR, PaddleOCR, and WinRT dependencies are not installed automatically and are not part of the main requirements files.
+- The selected backend is saved for future processing plans. At this stage no backend reads extracted frames or creates OCR output; frame OCR is planned for Stage 1.1c.
 
 Recordings:
 
@@ -274,6 +283,6 @@ This is a temporary blue-violet SVG icon. To replace it later, keep the same fil
 
 ## Notes
 
-For `.mp3`, `.m4a`, `.mp4`, `.webm`, `.mkv`, `.avi`, and `.mov`, make sure `ffmpeg` is installed and available in `PATH`. FFmpeg is also required for the "Merge video with audio" workflow. Video queue items can extract audio for transcription and/or save JPEG frames. OCR and CV/VLM analysis are still unimplemented; the UI shows them as disabled coming-soon options.
+For `.mp3`, `.m4a`, `.mp4`, `.webm`, `.mkv`, `.avi`, and `.mov`, make sure `ffmpeg` is installed and available in `PATH`. FFmpeg is also required for the "Merge video with audio" workflow. Video queue items can extract audio for transcription and/or save JPEG frames. OCR backend selection is readiness-only; OCR and CV/VLM processing remain disabled coming-soon options.
 
 Use the app only with audio, video, and files you are allowed to record, download, process, and transcribe.

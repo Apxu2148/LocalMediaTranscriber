@@ -141,45 +141,76 @@ class HttpSmokeTests(unittest.TestCase):
         self.assertEqual([call(1), call(2), call(999)], estimate_item.call_args_list)
 
     def test_ocr_status_settings_and_check_endpoints_are_non_crashing(self) -> None:
-        available = {
-            "engine": "tesseract",
-            "available": True,
-            "path": r"C:\Tesseract-OCR\tesseract.exe",
-            "version": "5.3.0",
-            "languages": ["eng", "rus"],
-            "has_eng": True,
-            "has_rus": True,
-            "configured_path": None,
-            "error": None,
+        tesseract = {
+            "id": "tesseract", "available": True, "status": "available",
+            "path": r"C:\Tesseract-OCR\tesseract.exe", "version": "5.3.0",
         }
-        invalid = {**available, "available": False, "path": r"C:\bad\tesseract.exe", "error": "invalid_configured_path"}
+        backends = {
+            "tesseract": tesseract,
+            "easyocr": {"id": "easyocr", "available": False, "status": "not_installed"},
+            "paddleocr": {"id": "paddleocr", "available": False, "status": "not_installed"},
+            "windows_ocr": {"id": "windows_ocr", "available": False, "status": "not_installed"},
+        }
+        available = {"selected_backend": "easyocr", "backends": backends, "processing_enabled": False}
+        invalid_tesseract = {
+            **tesseract,
+            "available": False,
+            "status": "check_failed",
+            "path": r"C:\bad\tesseract.exe",
+            "error": "invalid_configured_path",
+        }
+        invalid = {**available, "backends": {**backends, "tesseract": invalid_tesseract}}
         with (
             patch.object(main_module.ocr_manager, "status", side_effect=[available, available, invalid]) as status,
             patch.object(
                 main_module.ocr_manager,
                 "update_settings",
-                return_value={"tesseract_path": r"C:\Tesseract-OCR\tesseract.exe", "default_languages": ["rus", "eng"]},
+                return_value={
+                    "selected_backend": "easyocr",
+                    "tesseract_path": r"C:\Tesseract-OCR\tesseract.exe",
+                    "default_languages": ["rus", "eng"],
+                },
             ) as update_settings,
             TestClient(main_module.app) as client,
         ):
             status_response = client.get("/api/ocr/status")
             settings_response = client.post(
                 "/api/ocr/settings",
-                json={"tesseract_path": r"C:\Tesseract-OCR\tesseract.exe", "default_languages": ["rus", "eng"]},
+                json={
+                    "selected_backend": "easyocr",
+                    "tesseract_path": r"C:\Tesseract-OCR\tesseract.exe",
+                    "default_languages": ["rus", "eng"],
+                },
             )
-            check_response = client.post("/api/ocr/check", json={"tesseract_path": r"C:\bad\tesseract.exe"})
+            check_response = client.post(
+                "/api/ocr/check",
+                json={"backend": "tesseract", "tesseract_path": r"C:\bad\tesseract.exe"},
+            )
 
         self.assertEqual(200, status_response.status_code)
-        self.assertTrue(status_response.json()["available"])
+        self.assertEqual({"tesseract", "easyocr", "paddleocr", "windows_ocr"}, set(status_response.json()["backends"]))
+        self.assertEqual("easyocr", status_response.json()["selected_backend"])
         self.assertEqual(200, settings_response.status_code)
-        self.assertEqual("5.3.0", settings_response.json()["status"]["version"])
+        self.assertEqual("5.3.0", settings_response.json()["status"]["backends"]["tesseract"]["version"])
         update_settings.assert_called_once_with({
+            "selected_backend": "easyocr",
             "tesseract_path": r"C:\Tesseract-OCR\tesseract.exe",
             "default_languages": ["rus", "eng"],
         })
         self.assertEqual(200, check_response.status_code)
-        self.assertEqual("invalid_configured_path", check_response.json()["error"])
+        self.assertEqual("invalid_configured_path", check_response.json()["backends"]["tesseract"]["error"])
         self.assertEqual(r"C:\bad\tesseract.exe", status.call_args_list[-1].args[0])
+        self.assertEqual("tesseract", status.call_args_list[-1].kwargs["backend"])
+
+    def test_ocr_settings_reject_invalid_backend(self) -> None:
+        with (
+            patch.object(main_module.ocr_manager, "update_settings", side_effect=ValueError("invalid_ocr_backend")),
+            TestClient(main_module.app) as client,
+        ):
+            response = client.post("/api/ocr/settings", json={"selected_backend": "unknown"})
+
+        self.assertEqual(400, response.status_code)
+        self.assertEqual("invalid_ocr_backend", response.json()["detail"]["message"])
 
     def test_recording_queue_and_transcript_reader_are_path_constrained(self) -> None:
         with TemporaryDirectory(dir=PROJECT_TMP) as temp_dir:

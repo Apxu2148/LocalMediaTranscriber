@@ -1201,6 +1201,15 @@ summary:focus-visible {
   font-size: 13px;
 }
 
+#ocrBackendNotes {
+  margin: 0;
+}
+
+#ocrTesseractFields[hidden],
+#ocrPathStatusRow[hidden] {
+  display: none;
+}
+
 .ocr-settings-actions {
   margin-top: 0;
 }

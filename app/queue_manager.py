@@ -641,6 +641,10 @@ class QueueManager:
             if operations is not None
             else frames_plan.get("enabled", operation_defaults.get("extract_frames", False))
         )
+        ocr_backend = str(ocr_plan.get("backend") or ocr_plan.get("engine") or "tesseract")
+        if ocr_backend not in {"tesseract", "easyocr", "paddleocr", "windows_ocr"}:
+            ocr_backend = "tesseract"
+        default_ocr_languages = ["rus", "eng"] if ocr_backend == "tesseract" else ["ru", "en"]
 
         return {
             "audio": {
@@ -656,8 +660,9 @@ class QueueManager:
             },
             "ocr": {
                 "enabled": False,
-                "engine": str(ocr_plan.get("engine") or "tesseract"),
-                "languages": list(ocr_plan.get("languages") or ["rus", "eng"]),
+                "backend": ocr_backend,
+                "engine": ocr_backend,
+                "languages": list(ocr_plan.get("languages") or default_ocr_languages),
                 "status": "coming_soon",
                 "engine_available": bool(ocr_plan.get("engine_available", False)),
             },

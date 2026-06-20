@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import importlib
 import json
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -12,7 +14,9 @@ from . import config
 from .utils import write_json_file_atomic
 
 
+OCR_BACKEND_IDS = ("tesseract", "easyocr", "paddleocr", "windows_ocr")
 DEFAULT_OCR_SETTINGS = {
+    "selected_backend": "tesseract",
     "tesseract_path": None,
     "default_languages": ["rus", "eng"],
 }
@@ -33,14 +37,23 @@ class OcrManager:
         stored = raw.get("ocr") if isinstance(raw.get("ocr"), dict) else {}
         path_value = stored.get("tesseract_path")
         configured_path = str(path_value).strip() if path_value else None
+        selected_backend = str(stored.get("selected_backend") or "").strip()
+        if selected_backend not in OCR_BACKEND_IDS:
+            selected_backend = DEFAULT_OCR_SETTINGS["selected_backend"]
         languages = self._normalize_default_languages(stored.get("default_languages"))
         return {
+            "selected_backend": selected_backend,
             "tesseract_path": configured_path,
             "default_languages": languages,
         }
 
     def update_settings(self, changes: dict[str, Any]) -> dict:
         settings = self.settings()
+        if "selected_backend" in changes:
+            selected_backend = str(changes.get("selected_backend") or "").strip()
+            if selected_backend not in OCR_BACKEND_IDS:
+                raise ValueError("invalid_ocr_backend")
+            settings["selected_backend"] = selected_backend
         if "tesseract_path" in changes:
             value = changes.get("tesseract_path")
             settings["tesseract_path"] = str(value).strip() if value and str(value).strip() else None
@@ -52,7 +65,27 @@ class OcrManager:
         write_json_file_atomic(self.settings_path, raw)
         return settings
 
-    def status(self, configured_path: str | None | object = _USE_SAVED_PATH) -> dict:
+    def status(
+        self,
+        configured_path: str | None | object = _USE_SAVED_PATH,
+        *,
+        backend: str | None = None,
+    ) -> dict:
+        if backend is not None and backend not in OCR_BACKEND_IDS:
+            raise ValueError("invalid_ocr_backend")
+        settings = self.settings()
+        return {
+            "selected_backend": settings["selected_backend"],
+            "backends": {
+                "tesseract": self.tesseract_status(configured_path),
+                "easyocr": self.easyocr_status(),
+                "paddleocr": self.paddleocr_status(),
+                "windows_ocr": self.windows_ocr_status(),
+            },
+            "processing_enabled": False,
+        }
+
+    def tesseract_status(self, configured_path: str | None | object = _USE_SAVED_PATH) -> dict:
         settings = self.settings()
         if configured_path is _USE_SAVED_PATH:
             selected_path = settings["tesseract_path"]
@@ -62,8 +95,12 @@ class OcrManager:
         if selected_path:
             candidate = Path(selected_path).expanduser()
             if not self._is_candidate_file(candidate):
-                return self._unavailable_status(selected_path, "invalid_configured_path", configured_path=selected_path)
-            return self._check_candidate(candidate, configured_path=selected_path)
+                return self._unavailable_tesseract_status(
+                    selected_path,
+                    "invalid_configured_path",
+                    configured_path=selected_path,
+                )
+            return self._check_tesseract_candidate(candidate, configured_path=selected_path)
 
         candidates: list[Path] = []
         path_candidate = shutil.which("tesseract")
@@ -80,15 +117,98 @@ class OcrManager:
             seen.add(candidate_key)
             if not self._is_candidate_file(candidate):
                 continue
-            result = self._check_candidate(candidate, configured_path=None)
+            result = self._check_tesseract_candidate(candidate, configured_path=None)
             if result["available"]:
                 return result
             first_error = first_error or result
 
-        return first_error or self._unavailable_status(None, "not_found", configured_path=None)
+        return first_error or self._unavailable_tesseract_status(None, "not_found", configured_path=None)
 
-    def _check_candidate(self, path: Path, *, configured_path: str | None) -> dict:
-        base = self._unavailable_status(str(path), None, configured_path=configured_path)
+    def easyocr_status(self) -> dict:
+        return self._python_backend_status(
+            backend_id="easyocr",
+            name="EasyOCR",
+            module_name="easyocr",
+            backend_type="python_optional",
+            languages=["ru", "en"],
+            notes=[],
+        )
+
+    def paddleocr_status(self) -> dict:
+        return self._python_backend_status(
+            backend_id="paddleocr",
+            name="PaddleOCR",
+            module_name="paddleocr",
+            backend_type="python_optional_experimental",
+            languages=[],
+            notes=["experimental"],
+        )
+
+    def windows_ocr_status(self) -> dict:
+        base = {
+            "id": "windows_ocr",
+            "name": "Windows OCR",
+            "type": "windows_system_experimental",
+            "available": False,
+            "status": "unsupported_platform",
+            "version": None,
+            "languages": [],
+            "notes": ["windows_only", "experimental"],
+        }
+        if platform.system() != "Windows":
+            return base
+        try:
+            module = importlib.import_module("winrt.windows.media.ocr")
+        except (ImportError, ModuleNotFoundError):
+            return {
+                **base,
+                "status": "not_installed",
+                "notes": [*base["notes"], "optional_dependency_missing"],
+            }
+        except Exception:
+            return {**base, "status": "check_failed", "notes": [*base["notes"], "import_check_failed"]}
+        return {
+            **base,
+            "available": True,
+            "status": "available",
+            "version": self._module_version(module),
+        }
+
+    def _python_backend_status(
+        self,
+        *,
+        backend_id: str,
+        name: str,
+        module_name: str,
+        backend_type: str,
+        languages: list[str],
+        notes: list[str],
+    ) -> dict:
+        base = {
+            "id": backend_id,
+            "name": name,
+            "type": backend_type,
+            "available": False,
+            "status": "not_installed",
+            "version": None,
+            "languages": list(languages),
+            "notes": list(notes),
+        }
+        try:
+            module = importlib.import_module(module_name)
+        except (ImportError, ModuleNotFoundError):
+            return {**base, "notes": [*notes, "optional_dependency_missing"]}
+        except Exception:
+            return {**base, "status": "check_failed", "notes": [*notes, "import_check_failed"]}
+        return {
+            **base,
+            "available": True,
+            "status": "available",
+            "version": self._module_version(module),
+        }
+
+    def _check_tesseract_candidate(self, path: Path, *, configured_path: str | None) -> dict:
+        base = self._unavailable_tesseract_status(str(path), None, configured_path=configured_path)
         try:
             version_result = self._run(path, "--version")
         except subprocess.TimeoutExpired:
@@ -114,9 +234,11 @@ class OcrManager:
         return {
             **base,
             "available": True,
+            "status": "available",
             "languages": languages,
             "has_eng": "eng" in languages,
             "has_rus": "rus" in languages,
+            "notes": [],
             "error": None,
         }
 
@@ -160,6 +282,11 @@ class OcrManager:
         return languages
 
     @staticmethod
+    def _module_version(module: Any) -> str | None:
+        value = getattr(module, "__version__", None)
+        return str(value) if value is not None else None
+
+    @staticmethod
     def _normalize_default_languages(value: Any) -> list[str]:
         if not isinstance(value, list):
             return list(DEFAULT_OCR_SETTINGS["default_languages"])
@@ -181,15 +308,21 @@ class OcrManager:
         return {}
 
     @staticmethod
-    def _unavailable_status(path: str | None, error: str | None, *, configured_path: str | None) -> dict:
+    def _unavailable_tesseract_status(path: str | None, error: str | None, *, configured_path: str | None) -> dict:
+        status = "not_found" if error == "not_found" else "check_failed"
+        notes = ["external_path_required"] if error in {"not_found", "invalid_configured_path"} else []
         return {
-            "engine": "tesseract",
+            "id": "tesseract",
+            "name": "Tesseract OCR",
+            "type": "external_executable",
             "available": False,
+            "status": status,
             "path": path,
             "version": None,
             "languages": [],
             "has_eng": False,
             "has_rus": False,
             "configured_path": configured_path,
+            "notes": notes,
             "error": error,
         }

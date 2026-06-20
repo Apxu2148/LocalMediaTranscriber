@@ -328,6 +328,7 @@ class QueueManagerTests(unittest.TestCase):
         self.assertEqual({"mode": "interval", "seconds": 30}, item["processing_plan"]["frames"]["rate"])
         self.assertEqual(75, item["processing_plan"]["frames"]["jpeg_quality"])
         self.assertFalse(item["processing_plan"]["ocr"]["enabled"])
+        self.assertEqual("tesseract", item["processing_plan"]["ocr"]["backend"])
         self.assertTrue(item["processing_plan"]["ocr"]["engine_available"])
         self.assertFalse(item["operations"]["ocr"])
         self.assertTrue(item["operations"]["extract_frames"])
@@ -428,13 +429,16 @@ class QueueManagerTests(unittest.TestCase):
             source_filename="placeholder.wav",
             processing_plan={
                 "audio": {"enabled": True, "model": "small", "device": "auto"},
-                "ocr": {"enabled": True, "engine": "tesseract"},
+                "ocr": {"enabled": True, "backend": "easyocr", "engine_available": True},
                 "cv": {"enabled": True, "engine": "basic_opencv"},
             },
         )])
 
         item = status["items"][0]
         self.assertFalse(item["processing_plan"]["ocr"]["enabled"])
+        self.assertEqual("easyocr", item["processing_plan"]["ocr"]["backend"])
+        self.assertEqual(["ru", "en"], item["processing_plan"]["ocr"]["languages"])
+        self.assertTrue(item["processing_plan"]["ocr"]["engine_available"])
         self.assertEqual("coming_soon", item["processing_plan"]["ocr"]["status"])
         self.assertFalse(item["processing_plan"]["cv"]["enabled"])
         self.assertFalse(item["operations"]["ocr"])
