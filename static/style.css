@@ -1316,6 +1316,14 @@ summary:focus-visible {
   padding: 8px 0 2px 23px;
 }
 
+.queue-url-settings {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr);
+  gap: 8px;
+  padding: 4px 0 2px 23px;
+}
+
+.queue-url-settings[hidden],
 .queue-frame-settings[hidden] {
   display: none;
 }
@@ -1899,6 +1907,7 @@ textarea {
   }
 
   .queue-item-header,
+  .queue-url-settings,
   .queue-frame-settings {
     grid-template-columns: 1fr;
   }

@@ -328,6 +328,11 @@
                       <span data-i18n="jpegQuality"></span>
                       <select id="defaultJpegQualitySelect"></select>
                     </label>
+                    <label class="queue-setting-field" for="defaultFrameMaxSizeSelect">
+                      <span data-i18n="maxFrameSize"></span>
+                      <select id="defaultFrameMaxSizeSelect"></select>
+                    </label>
+                    <p class="section-note" data-i18n="maxFrameSizeHelp"></p>
                   </fieldset>
                 </div>
                 <section id="urlDownloadSettingsPanel" class="url-download-settings-panel" aria-labelledby="urlDownloadSettingsTitle">
@@ -353,6 +358,18 @@
                       <option value="custom" data-i18n="urlDownloadProfileCustom"></option>
                     </select>
                   </label>
+                  <label class="queue-setting-field" for="urlDownloadMaxVideoHeightSelect">
+                    <span data-i18n="urlDownloadMaxVideoHeightLabel"></span>
+                    <select id="urlDownloadMaxVideoHeightSelect">
+                      <option value="auto" data-i18n="urlDownloadMaxVideoHeightAuto"></option>
+                      <option value="480" data-i18n="urlDownloadMaxVideoHeight480"></option>
+                      <option value="720" data-i18n="urlDownloadMaxVideoHeight720"></option>
+                      <option value="1080" data-i18n="urlDownloadMaxVideoHeight1080"></option>
+                      <option value="1440" data-i18n="urlDownloadMaxVideoHeight1440"></option>
+                      <option value="2160" data-i18n="urlDownloadMaxVideoHeight2160"></option>
+                    </select>
+                  </label>
+                  <p class="section-note" data-i18n="urlDownloadMaxVideoHeightHelp"></p>
                   <label id="urlDownloadCustomField" class="queue-setting-field" for="urlDownloadCustomFormatInput" hidden>
                     <span data-i18n="urlDownloadCustomFormatLabel"></span>
                     <input id="urlDownloadCustomFormatInput" type="text" data-i18n-placeholder="urlDownloadCustomFormatPlaceholder" spellcheck="false" />

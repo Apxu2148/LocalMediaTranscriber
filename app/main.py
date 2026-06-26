@@ -19,6 +19,7 @@ from . import config
 from .audio_recorder import AudioRecorder
 from .benchmark_service import BenchmarkService
 from .frame_extractor import VideoFrameExtractor
+from .frame_settings_manager import FrameSettingsManager
 from .model_manager import WhisperModelManager
 from .ocr_manager import OcrManager
 from .queue_manager import QueueFile, QueueManager, QueueUrl
@@ -74,6 +75,7 @@ transcript_store = TranscriptStore()
 storage_manager = StorageManager()
 ocr_manager = OcrManager()
 url_download_settings_manager = UrlDownloadSettingsManager()
+frame_settings_manager = FrameSettingsManager()
 recording_lock = threading.Lock()
 active_recording_mode: str | None = None
 active_recording_started_at: float | None = None
@@ -167,8 +169,13 @@ class StorageCleanupRequest(BaseModel):
 class UrlDownloadSettingsRequest(BaseModel):
     format_profile: str | None = None
     custom_format: str | None = None
+    max_video_height: str | None = None
     log_media_probe: bool | None = None
     log_extraction_benchmark: bool | None = None
+
+
+class FrameSettingsRequest(BaseModel):
+    max_frame_size: str | None = None
 
 
 class OcrSettingsRequest(BaseModel):
@@ -257,6 +264,7 @@ def process_queue_frame_extraction(item: dict, cancel_event: threading.Event, pr
         output_base=item.get("output_base"),
         rate=frame_settings.get("rate"),
         jpeg_quality=frame_settings.get("jpeg_quality"),
+        max_frame_size=frame_settings.get("max_frame_size"),
         cancel_event=cancel_event,
         progress_callback=progress_callback,
         source_metadata=source_metadata,
@@ -278,6 +286,7 @@ def process_runtime_estimate_frames(
     sample_duration_sec: float,
     rate: dict,
     jpeg_quality: int,
+    max_frame_size: str,
 ) -> dict:
     return frame_extractor.extract_sample(
         source_path=source_path,
@@ -285,6 +294,7 @@ def process_runtime_estimate_frames(
         sample_duration_sec=sample_duration_sec,
         rate=rate,
         jpeg_quality=jpeg_quality,
+        max_frame_size=max_frame_size,
     )
 
 
@@ -526,6 +536,16 @@ def url_download_settings() -> dict:
 @app.post("/api/url-download/settings")
 def url_download_settings_update(payload: UrlDownloadSettingsRequest) -> dict:
     return url_download_settings_manager.update_settings(payload.model_dump(exclude_none=True))
+
+
+@app.get("/api/frames/settings")
+def frame_settings() -> dict:
+    return frame_settings_manager.settings()
+
+
+@app.post("/api/frames/settings")
+def frame_settings_update(payload: FrameSettingsRequest) -> dict:
+    return frame_settings_manager.update_settings(payload.model_dump(exclude_none=True))
 
 
 @app.get("/api/ocr/status")

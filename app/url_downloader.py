@@ -63,14 +63,54 @@ VIDEO_MERGE_FORMATS = {
 }
 
 
+def bounded_video_format(profile: str, max_video_height: str) -> str:
+    base = VIDEO_FORMAT_PROFILES.get(profile, DEFAULT_VIDEO_FORMAT)
+    if max_video_height == "auto":
+        return base
+    height_filter = f"height<={max_video_height}"
+    bounded_profiles = {
+        "auto": f"bv*[{height_filter}]+ba/b[{height_filter}]/best[{height_filter}]/{base}",
+        "best_for_extraction": (
+            f"bv*[{height_filter}][ext=mp4]+ba[ext=m4a]/b[{height_filter}][ext=mp4]/"
+            f"bv*[{height_filter}]+ba/b[{height_filter}]/best[{height_filter}]/{base}"
+        ),
+        "best_quality": f"bv*[{height_filter}]+ba/b[{height_filter}]/best[{height_filter}]/{base}",
+        "smallest_file": f"worstvideo[{height_filter}]+worstaudio/worst[{height_filter}]/{base}",
+        "prefer_webm": (
+            f"bv*[{height_filter}][ext=webm]+ba[ext=webm]/b[{height_filter}][ext=webm]/"
+            f"bv*[{height_filter}]+ba/b[{height_filter}]/best[{height_filter}]/{base}"
+        ),
+        "prefer_mp4": (
+            f"bv*[{height_filter}][ext=mp4]+ba[ext=m4a]/b[{height_filter}][ext=mp4]/"
+            f"bv*[{height_filter}]+ba/b[{height_filter}]/best[{height_filter}]/{base}"
+        ),
+        "prefer_mkv": (
+            f"bv*[{height_filter}][ext=mkv]+ba/b[{height_filter}][ext=mkv]/"
+            f"bv*[{height_filter}]+ba/b[{height_filter}]/best[{height_filter}]/{base}"
+        ),
+        "prefer_mov": (
+            f"b[{height_filter}][ext=mov]/bv*[{height_filter}][ext=mov]+ba/"
+            f"bv*[{height_filter}]+ba/b[{height_filter}]/best[{height_filter}]/{base}"
+        ),
+        "prefer_avi": (
+            f"b[{height_filter}][ext=avi]/bv*[{height_filter}][ext=avi]+ba/"
+            f"bv*[{height_filter}]+ba/b[{height_filter}]/best[{height_filter}]/{base}"
+        ),
+        "audio_friendly": f"bv*[{height_filter}]+ba/b[{height_filter}]/best[{height_filter}]/{base}",
+    }
+    return bounded_profiles.get(profile, f"bv*[{height_filter}]+ba/b[{height_filter}]/best[{height_filter}]/{base}")
+
+
 def resolve_url_download_options(settings: dict | None, *, needs_video: bool) -> dict:
     normalized = normalize_url_download_settings(settings)
     profile = normalized["format_profile"]
     if profile == "custom":
         format_string = normalized["custom_format"]
     else:
-        mapping = VIDEO_FORMAT_PROFILES if needs_video else AUDIO_FORMAT_PROFILES
-        format_string = mapping.get(profile, DEFAULT_VIDEO_FORMAT if needs_video else DEFAULT_AUDIO_FORMAT)
+        if needs_video:
+            format_string = bounded_video_format(profile, normalized["max_video_height"])
+        else:
+            format_string = AUDIO_FORMAT_PROFILES.get(profile, DEFAULT_AUDIO_FORMAT)
     return {
         **normalized,
         "format_string": format_string,
@@ -442,6 +482,7 @@ class UrlDownloader:
             "file_size_mb": round(path.stat().st_size / (1024 * 1024), 3),
             "download_time_sec": round(max(0.0, time.monotonic() - started_at), 3),
             "url_download_format_profile": resolved_options["format_profile"],
+            "url_download_max_video_height": resolved_options["max_video_height"],
             "yt_dlp_format_string_used": resolved_options["format_string"],
             "media_probe_status": "disabled",
         }

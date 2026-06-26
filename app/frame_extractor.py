@@ -15,9 +15,17 @@ logger = logging.getLogger(__name__)
 VIDEO_EXTENSIONS = config.SUPPORTED_VIDEO_EXTENSIONS
 DEFAULT_FRAME_RATE = {"mode": "interval", "seconds": 10}
 DEFAULT_JPEG_QUALITY = 90
+DEFAULT_MAX_FRAME_SIZE = "original"
 ALLOWED_INTERVAL_SECONDS = (30, 20, 15, 10, 5, 3, 2, 1)
 ALLOWED_EXTRACTION_FPS = (2, 3, 5, 10, 15, 20, 30)
 ALLOWED_JPEG_QUALITIES = (75, 80, 85, 90, 95, 100)
+MAX_FRAME_SIZE_WIDTHS = {
+    "width_1920": 1920,
+    "width_1280": 1280,
+    "width_960": 960,
+    "width_640": 640,
+}
+ALLOWED_MAX_FRAME_SIZES = (DEFAULT_MAX_FRAME_SIZE, *MAX_FRAME_SIZE_WIDTHS.keys())
 
 
 class FrameExtractionError(RuntimeError):
@@ -77,11 +85,17 @@ def normalize_jpeg_quality(value: int | str | None) -> int:
     return quality
 
 
+def normalize_max_frame_size(value: str | None) -> str:
+    text = str(value or DEFAULT_MAX_FRAME_SIZE).strip().lower()
+    return text if text in ALLOWED_MAX_FRAME_SIZES else DEFAULT_MAX_FRAME_SIZE
+
+
 def normalize_frame_extraction_settings(settings: dict | None) -> dict:
     settings = settings or {}
     return {
         "rate": normalize_frame_rate(settings.get("rate")),
         "jpeg_quality": normalize_jpeg_quality(settings.get("jpeg_quality")),
+        "max_frame_size": normalize_max_frame_size(settings.get("max_frame_size")),
     }
 
 
@@ -115,9 +129,11 @@ def estimate_disk_usage_bytes(
     width: int | None,
     height: int | None,
     jpeg_quality: int | None,
+    max_frame_size: str | None = None,
 ) -> dict | None:
     if not frame_count or not width or not height:
         return None
+    width, height = output_dimensions_for_frame_size(width, height, max_frame_size)
     quality_factor = max(0.75, min(1.2, (jpeg_quality or DEFAULT_JPEG_QUALITY) / DEFAULT_JPEG_QUALITY))
     pixels = int(width) * int(height)
     min_bytes = int(frame_count * pixels * 0.045 * quality_factor)
@@ -126,6 +142,18 @@ def estimate_disk_usage_bytes(
         "min_bytes": max(1, min_bytes),
         "max_bytes": max(1, max_bytes),
     }
+
+
+def output_dimensions_for_frame_size(width: int, height: int, max_frame_size: str | None) -> tuple[int, int]:
+    source_width = max(1, int(width))
+    source_height = max(1, int(height))
+    max_width = MAX_FRAME_SIZE_WIDTHS.get(normalize_max_frame_size(max_frame_size))
+    if not max_width or source_width <= max_width:
+        return source_width, source_height
+    scaled_height = max(1, int(round(source_height * max_width / source_width)))
+    if scaled_height > 1 and scaled_height % 2:
+        scaled_height -= 1
+    return int(max_width), scaled_height
 
 
 def read_video_metadata(video_path: Path) -> dict:
@@ -207,6 +235,7 @@ class VideoFrameExtractor:
                 metadata.get("width"),
                 metadata.get("height"),
                 normalized["jpeg_quality"],
+                normalized["max_frame_size"],
             ),
             "estimated_frames_warning": bool(frame_count and frame_count > 1000),
         }
@@ -219,8 +248,13 @@ class VideoFrameExtractor:
         sample_duration_sec: float,
         rate: dict | None = None,
         jpeg_quality: int | str | None = None,
+        max_frame_size: str | None = None,
     ) -> dict:
-        settings = normalize_frame_extraction_settings({"rate": rate, "jpeg_quality": jpeg_quality})
+        settings = normalize_frame_extraction_settings({
+            "rate": rate,
+            "jpeg_quality": jpeg_quality,
+            "max_frame_size": max_frame_size,
+        })
         metadata = read_video_metadata(source_path)
         source_duration = metadata.get("duration_sec")
         bounded_duration = min(float(sample_duration_sec), float(source_duration or sample_duration_sec))
@@ -241,6 +275,7 @@ class VideoFrameExtractor:
                         raise FrameExtractionError("Could not decode the first video frame.")
                     break
                 frame_name = f"sample_{frame_index:06d}.jpg"
+                frame = self._resize_frame_for_output(cv2, frame, settings["max_frame_size"])
                 self._write_jpeg_frame(cv2, output_dir / frame_name, frame, encode_params, frame_name)
                 extracted += 1
         finally:
@@ -259,11 +294,16 @@ class VideoFrameExtractor:
         output_base: str | None = None,
         rate: dict | None = None,
         jpeg_quality: int | str | None = None,
+        max_frame_size: str | None = None,
         cancel_event: threading.Event | None = None,
         progress_callback: Callable[[dict], None] | None = None,
         source_metadata: dict | None = None,
     ) -> dict:
-        settings = normalize_frame_extraction_settings({"rate": rate, "jpeg_quality": jpeg_quality})
+        settings = normalize_frame_extraction_settings({
+            "rate": rate,
+            "jpeg_quality": jpeg_quality,
+            "max_frame_size": max_frame_size,
+        })
         source_name = source_filename or source_path.name
         source_stem = source_stem_for(source_name)
         base = safe_filename_part(output_base or f"{source_stem}_{timestamp_for_filename()}", max_length=72)
@@ -323,6 +363,7 @@ class VideoFrameExtractor:
 
                     frame_name = f"frame_{frame_index:06d}__{frame_timestamp_label(timestamp_sec)}.jpg"
                     frame_path = frames_dir / frame_name
+                    frame = self._resize_frame_for_output(cv2, frame, settings["max_frame_size"])
                     self._write_jpeg_frame(cv2, frame_path, frame, encode_params, frame_name)
 
                     height, width = frame.shape[:2]
@@ -397,6 +438,7 @@ class VideoFrameExtractor:
             "seconds": rate.get("seconds"),
             "requested_fps": rate.get("fps"),
             "jpeg_quality": settings["jpeg_quality"],
+            "max_frame_size": settings["max_frame_size"],
         }
         payload = {
             "schema_version": 1,
@@ -444,6 +486,17 @@ class VideoFrameExtractor:
             capture.set(cv2.CAP_PROP_POS_MSEC, max(0.0, timestamp_sec) * 1000.0)
         ok, frame = capture.read()
         return frame if ok else None
+
+    @staticmethod
+    def _resize_frame_for_output(cv2, frame, max_frame_size: str):
+        max_width = MAX_FRAME_SIZE_WIDTHS.get(normalize_max_frame_size(max_frame_size))
+        if not max_width:
+            return frame
+        height, width = frame.shape[:2]
+        target_width, target_height = output_dimensions_for_frame_size(width, height, max_frame_size)
+        if target_width == width and target_height == height:
+            return frame
+        return cv2.resize(frame, (target_width, target_height), interpolation=cv2.INTER_AREA)
 
     @staticmethod
     def _write_jpeg_frame(cv2, frame_path: Path, frame, encode_params: list[int], frame_name: str) -> None:

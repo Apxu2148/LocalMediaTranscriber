@@ -13,12 +13,14 @@ from . import config
 from .frame_extractor import (
     DEFAULT_FRAME_RATE,
     DEFAULT_JPEG_QUALITY,
+    DEFAULT_MAX_FRAME_SIZE,
     estimate_disk_usage_bytes,
     estimate_frame_count,
     is_video_path,
     normalize_frame_extraction_settings,
     normalize_frame_rate,
     normalize_jpeg_quality,
+    normalize_max_frame_size,
     read_video_metadata,
 )
 from .transcript_store import safe_filename_part, source_stem_for
@@ -663,6 +665,7 @@ class QueueManager:
                 "rate": rate,
                 "interval_sec": interval_sec,
                 "jpeg_quality": normalize_jpeg_quality(frame_settings.get("jpeg_quality")),
+                "max_frame_size": normalize_max_frame_size(frame_settings.get("max_frame_size")),
             },
             "url_download": url_download_plan,
             "ocr": {
@@ -702,7 +705,11 @@ class QueueManager:
         if self._item_supports_frame_extraction(item):
             item["frame_extraction"] = self._frame_extraction_payload(
                 item,
-                {"rate": plan["frames"]["rate"], "jpeg_quality": plan["frames"]["jpeg_quality"]},
+                {
+                    "rate": plan["frames"]["rate"],
+                    "jpeg_quality": plan["frames"]["jpeg_quality"],
+                    "max_frame_size": plan["frames"]["max_frame_size"],
+                },
             )
         else:
             item["frame_extraction"] = None
@@ -721,6 +728,7 @@ class QueueManager:
             {
                 "rate": normalize_frame_rate(settings.get("rate")),
                 "jpeg_quality": normalize_jpeg_quality(settings.get("jpeg_quality")),
+                "max_frame_size": normalize_max_frame_size(settings.get("max_frame_size")),
                 "estimated_frame_count": None,
                 "estimated_disk_usage": None,
                 "estimated_frames_warning": False,
@@ -762,6 +770,7 @@ class QueueManager:
             metadata.get("width"),
             metadata.get("height"),
             frame_settings.get("jpeg_quality"),
+            frame_settings.get("max_frame_size"),
         )
         frame_settings["estimated_frames_warning"] = bool(estimated_count and estimated_count > 1000)
 
@@ -1079,7 +1088,11 @@ class QueueManager:
                     if item["media_kind"] == "video" and item.get("frame_extraction") is None:
                         item["frame_extraction"] = self._frame_extraction_payload(
                             item,
-                            {"rate": DEFAULT_FRAME_RATE, "jpeg_quality": DEFAULT_JPEG_QUALITY},
+                            {
+                                "rate": DEFAULT_FRAME_RATE,
+                                "jpeg_quality": DEFAULT_JPEG_QUALITY,
+                                "max_frame_size": DEFAULT_MAX_FRAME_SIZE,
+                            },
                         )
                     self._refresh_video_analysis_locked(item)
                     self._set_item_stage_locked(item, "preparing_source", status="analyzing")

@@ -144,6 +144,7 @@ class HttpSmokeTests(unittest.TestCase):
         saved = {
             "format_profile": "prefer_webm",
             "custom_format": "",
+            "max_video_height": "720",
             "log_media_probe": True,
             "log_extraction_benchmark": True,
         }
@@ -155,13 +156,33 @@ class HttpSmokeTests(unittest.TestCase):
             get_response = client.get("/api/url-download/settings")
             post_response = client.post(
                 "/api/url-download/settings",
-                json={"format_profile": "prefer_webm", "log_media_probe": True},
+                json={"format_profile": "prefer_webm", "max_video_height": "720", "log_media_probe": True},
             )
 
         self.assertEqual(200, get_response.status_code)
         self.assertEqual("prefer_webm", get_response.json()["format_profile"])
+        self.assertEqual("720", get_response.json()["max_video_height"])
         self.assertEqual(200, post_response.status_code)
-        update.assert_called_once_with({"format_profile": "prefer_webm", "log_media_probe": True})
+        update.assert_called_once_with({
+            "format_profile": "prefer_webm",
+            "max_video_height": "720",
+            "log_media_probe": True,
+        })
+
+    def test_frame_settings_endpoints_persist_max_size(self) -> None:
+        saved = {"max_frame_size": "width_1280"}
+        with (
+            patch.object(main_module.frame_settings_manager, "settings", return_value=saved),
+            patch.object(main_module.frame_settings_manager, "update_settings", return_value=saved) as update,
+            TestClient(main_module.app) as client,
+        ):
+            get_response = client.get("/api/frames/settings")
+            post_response = client.post("/api/frames/settings", json={"max_frame_size": "width_1280"})
+
+        self.assertEqual(200, get_response.status_code)
+        self.assertEqual("width_1280", get_response.json()["max_frame_size"])
+        self.assertEqual(200, post_response.status_code)
+        update.assert_called_once_with({"max_frame_size": "width_1280"})
 
     def test_ocr_status_settings_and_check_endpoints_are_non_crashing(self) -> None:
         tesseract = {

@@ -3,16 +3,22 @@ import shutil
 import threading
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from uuid import uuid4
 
 from app.frame_extractor import (
     ALLOWED_JPEG_QUALITIES,
+    ALLOWED_MAX_FRAME_SIZES,
     VideoFrameExtractor,
+    estimate_disk_usage_bytes,
     estimate_frame_count,
     frame_timestamps,
     normalize_jpeg_quality,
+    normalize_max_frame_size,
+    output_dimensions_for_frame_size,
     read_video_metadata,
 )
+from app.frame_settings_manager import FrameSettingsManager
 
 
 PROJECT_TMP = Path(__file__).resolve().parents[1] / "tmp"
@@ -35,6 +41,28 @@ class FrameExtractorSettingsTests(unittest.TestCase):
         self.assertEqual(90, normalize_jpeg_quality(""))
         self.assertEqual(80, normalize_jpeg_quality(80))
         self.assertEqual(100, normalize_jpeg_quality(100))
+
+    def test_max_frame_size_values_default_to_original(self) -> None:
+        self.assertEqual(("original", "width_1920", "width_1280", "width_960", "width_640"), ALLOWED_MAX_FRAME_SIZES)
+        self.assertEqual("original", normalize_max_frame_size(None))
+        self.assertEqual("original", normalize_max_frame_size("bad"))
+        self.assertEqual("width_1280", normalize_max_frame_size("width_1280"))
+        self.assertEqual((640, 360), output_dimensions_for_frame_size(1280, 720, "width_640"))
+        self.assertEqual((320, 180), output_dimensions_for_frame_size(320, 180, "width_640"))
+        original = estimate_disk_usage_bytes(10, 1280, 720, 90, "original")
+        bounded = estimate_disk_usage_bytes(10, 1280, 720, 90, "width_640")
+        self.assertLess(bounded["max_bytes"], original["max_bytes"])
+
+    def test_frame_settings_are_persisted_and_invalid_values_fallback(self) -> None:
+        with TemporaryDirectory(dir=PROJECT_TMP) as temp_dir:
+            settings_path = Path(temp_dir) / "settings.json"
+            manager = FrameSettingsManager(settings_path=settings_path)
+
+            self.assertEqual({"max_frame_size": "original"}, manager.settings())
+            manager.update_settings({"max_frame_size": "width_1280"})
+            self.assertEqual("width_1280", FrameSettingsManager(settings_path=settings_path).settings()["max_frame_size"])
+            manager.update_settings({"max_frame_size": "giant"})
+            self.assertEqual("original", FrameSettingsManager(settings_path=settings_path).settings()["max_frame_size"])
 
 
 @unittest.skipUnless(cv2 is not None and np is not None, "opencv-python is required for frame extractor fixtures")
@@ -97,10 +125,45 @@ class FrameExtractorTests(unittest.TestCase):
         payload = json.loads(index_path.read_text(encoding="utf-8"))
         self.assertTrue(payload["completed"])
         self.assertEqual(85, payload["extraction"]["jpeg_quality"])
+        self.assertEqual("original", payload["extraction"]["max_frame_size"])
         self.assertGreaterEqual(payload["extracted_frame_count"], 1)
         self.assertEqual(0.0, payload["frames"][0]["t"])
+        self.assertEqual(64, payload["frames"][0]["width"])
+        self.assertEqual(48, payload["frames"][0]["height"])
         self.assertTrue((frames_dir / payload["frames"][0]["file"]).is_file())
         self.assertEqual(payload["extracted_frame_count"], len(list(frames_dir.glob("*.jpg"))))
+
+    def test_max_frame_size_downscales_without_upscaling(self) -> None:
+        path = self.make_video("downscale.avi", fps=5, frames=5, size=(800, 450))
+        result = self.extractor.extract_frames(
+            source_path=path,
+            source_filename="downscale.avi",
+            output_base="downscale",
+            rate={"mode": "interval", "seconds": 1},
+            jpeg_quality=85,
+            max_frame_size="width_640",
+        )
+
+        payload = json.loads((self.recordings_dir / result["frames_dir"] / "frames_index.json").read_text(encoding="utf-8"))
+        first = payload["frames"][0]
+        self.assertEqual("width_640", payload["extraction"]["max_frame_size"])
+        self.assertEqual(640, first["width"])
+        self.assertEqual(360, first["height"])
+        image = cv2.imread(str(self.recordings_dir / result["frames_dir"] / first["file"]))
+        self.assertEqual((360, 640), image.shape[:2])
+
+        small = self.make_video("small.avi", fps=5, frames=5, size=(320, 180))
+        small_result = self.extractor.extract_frames(
+            source_path=small,
+            source_filename="small.avi",
+            output_base="small",
+            rate={"mode": "interval", "seconds": 1},
+            jpeg_quality=85,
+            max_frame_size="width_640",
+        )
+        small_payload = json.loads((self.recordings_dir / small_result["frames_dir"] / "frames_index.json").read_text(encoding="utf-8"))
+        self.assertEqual(320, small_payload["frames"][0]["width"])
+        self.assertEqual(180, small_payload["frames"][0]["height"])
 
     def test_extract_sample_writes_only_to_requested_temporary_directory(self) -> None:
         path = self.make_video("sample.avi", fps=5, frames=15)

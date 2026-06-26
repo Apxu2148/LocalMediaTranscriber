@@ -24,10 +24,12 @@ This project is a separate fork of `LocalAudioTranscriber`. The current version 
 - Extract and transcribe the audio track from supported video files.
 - Choose per-video queue operations: transcribe audio, extract frames, or both.
 - Choose URL queue operations: transcribe audio, extract frames from a downloaded video-readable file, or both.
+- Optionally cap built-in `yt-dlp` URL video downloads at 480p, 720p, 1080p, 1440p, or 2160p; Auto preserves the previous behavior.
 - See direct URL download bytes, total size, speed, ETA, and percentage when the server provides a size; unknown-size and platform downloads show an active indeterminate state.
 - Cancel an active direct or `yt-dlp` URL download without stopping the app; partial download files are removed and the queue continues.
 - Extract video frames to a per-source folder with a `frames_index.json` manifest.
 - Choose JPEG quality `75`, `80`, `85`, `90`, `95`, or `100` for frame extraction; `90` is the default.
+- Optionally downscale saved extracted frames to a maximum width of 1920, 1280, 960, or 640 pixels; Original preserves the previous behavior.
 - Run a 60-second runtime estimate for a pending item's enabled transcription and frame extraction operations before full processing.
 - Detect a local Tesseract OCR installation, show its version and languages, and save a custom executable path.
 - Remove pending queue items, or cancel a running frame extraction item and continue with the rest of the queue.
@@ -152,9 +154,9 @@ Queue usability:
 - Fast repeated clicks and active duplicate file/link adds are ignored before they can create duplicate queue items.
 - Queue stages include preparing source, downloading media/video, transcribing audio, cancelling transcription/frame extraction, extracting frames, completed, failed, and cancelled.
 - Active item cards show determinate stage progress for URL downloads and frame extraction when counts are known, or an indeterminate progress bar when the backend cannot provide a real percentage.
-- Default processing settings live near the queue controls. They define the audio model/device, frame extraction defaults, URL download profile, and OCR/CV placeholders for newly added items only.
+- Default processing settings live near the queue controls. They define the audio model/device, frame extraction defaults, URL download profile/resolution, and OCR/CV placeholders for newly added items only.
 - Each queue item stores its own processing plan. Changing defaults later does not silently mutate existing items; pending item settings override defaults.
-- Pending local items have an **Estimate time** action. It tests up to the first 60 seconds with that item's model/device and frame interval/JPEG quality, then shows separate and combined approximate runtimes.
+- Pending local items have an **Estimate time** action. It tests up to the first 60 seconds with that item's model/device and frame interval/JPEG quality/max frame size, then shows separate and combined approximate runtimes.
 - Estimate samples use temporary clipped audio and temporary JPEGs. They do not create normal transcripts, frame folders, `frames_index.json`, or output artifacts, and the temporary workspace is removed after success or failure.
 - Pending URL items can be estimated only when a local downloaded media file is already available. Stage 0.96 does not download a URL solely for estimation.
 - After an item completes, fails, or is cancelled, its card shows a "Created files" section with known artifacts: transcript TXT, diagnostic JSON, frame folder, `frames_index.json`, downloaded URL media, and uploaded temporary file when available. Cancelled transcription outputs are labelled as partial transcripts. If retention removed a file, the item says so instead of showing it as still present.
@@ -163,11 +165,12 @@ Queue usability:
 URL download profiles:
 
 - New URL items snapshot the selected profile: Auto, best for frame extraction, best quality, smallest file, WebM/MP4/MKV/MOV/AVI preference, audio/transcription friendly, or an advanced custom yt-dlp format string.
-- Actual format availability depends on the source site and URL. Every built-in profile has a fallback; direct media URLs keep their source format because yt-dlp selection is not involved.
+- New URL items also snapshot the selected maximum video height: Auto, 480p, 720p, 1080p, 1440p, or 2160p. Auto preserves the previous unbounded profile behavior.
+- Actual format availability depends on the source site and URL. Every built-in profile has bounded choices followed by its original fallback; direct media URLs keep their source format because yt-dlp selection is not involved.
 - Best for frame extraction prefers MP4-compatible streams and resolutions at or below 720p, then 1080p, before falling back. MOV and AVI preferences are best-effort and do not force unsafe remuxing.
 - Audio/transcription friendly preserves the existing audio-only path for transcription-only jobs and remains video-capable when frame extraction is selected.
-- The custom field is passed only as yt-dlp's format option. An empty custom value safely falls back to Auto.
-- Optional media probing records container, codecs, resolution, FPS, file size, download time, selected profile, and format string. Frame jobs can additionally record elapsed extraction time, frames extracted, and seconds per frame in queue/job metadata and logs. Missing `ffprobe` is reported as unavailable without failing the job.
+- The custom field is passed only as yt-dlp's format option. The max-height selector is ignored for custom strings, and an empty custom value safely falls back to Auto.
+- Optional media probing records container, codecs, resolution, FPS, file size, download time, selected profile, max video height, and format string. Frame jobs can additionally record elapsed extraction time, frames extracted, and seconds per frame in queue/job metadata and logs. Missing `ffprobe` is reported as unavailable without failing the job.
 
 Storage panel:
 
@@ -178,7 +181,7 @@ Storage panel:
 - Retention cleanup runs only after active download/transcription/frame work has stopped; it never deletes media still in use.
 - Retention cleanup never deletes `data\recordings`, `data\transcripts`, extracted frames, screen recordings, or `frames_index.json`.
 - The manual cleanup buttons clear only `data\downloads` or `data\uploads` after confirmation. They do not delete transcripts, recordings, frames, or original user files outside the project `data` folder.
-- Storage, URL download, and OCR engine settings are persisted in `data\settings.json`.
+- Storage, URL download, frame extraction, and OCR engine settings are persisted in `data\settings.json`.
 
 OCR backend readiness:
 
@@ -229,7 +232,7 @@ The frame index is saved at:
 C:\Python\LocalMediaTranscriber\data\recordings\<base>__frames\frames_index.json
 ```
 
-The folder contains JPEG files named like `frame_000001__t000000.000.jpg` and a `frames_index.json` file with source details, frame extraction settings, video metadata, extracted frame records, status, and cancellation/error information. The default extraction setting is one frame every 10 seconds with JPEG quality `90`. Available JPEG quality options are `75`, `80`, `85`, `90`, `95`, and `100`. Quality `100` can significantly increase file size and usually is not necessary for OCR/CV. The queue UI estimates the frame count and approximate disk usage before processing, and warns when a setting is expected to create more than 1000 images.
+The folder contains JPEG files named like `frame_000001__t000000.000.jpg` and a `frames_index.json` file with source details, frame extraction settings, video metadata, extracted frame records, status, and cancellation/error information. The default extraction setting is one frame every 10 seconds with JPEG quality `90` and original frame dimensions. Available JPEG quality options are `75`, `80`, `85`, `90`, `95`, and `100`; available max frame sizes are Original, width up to 1920, 1280, 960, or 640 pixels. Downscaling preserves aspect ratio and never upscales smaller videos. Quality `100` can significantly increase file size and usually is not necessary for OCR/CV. The queue UI estimates the frame count and approximate disk usage before processing, and warns when a setting is expected to create more than 1000 images.
 
 Downloads from public URLs:
 
@@ -237,9 +240,9 @@ Downloads from public URLs:
 C:\Python\LocalMediaTranscriber\data\downloads
 ```
 
-For URL items, direct media file links ending in `.mp4`, `.webm`, `.mkv`, `.avi`, or `.mov` are downloaded directly over HTTP(S) into `data\downloads` without `yt-dlp`; query strings are ignored for extension detection. YouTube, VK, and other webpage/video-platform URLs still use `yt-dlp`. For audio-only URL transcription, direct media URLs use the downloaded media file, while non-direct URLs keep the existing audio extraction path. If frame extraction is selected, the downloaded video-readable media file uses the same frame extraction settings as local video files: extraction rate and JPEG quality. URL media downloads are kept under `data\downloads`; transcripts are saved under `data\transcripts`; frames are saved under `data\recordings\<base>__frames`; and `frames_index.json` is saved inside that frames folder.
+For URL items, direct media file links ending in `.mp4`, `.webm`, `.mkv`, `.avi`, or `.mov` are downloaded directly over HTTP(S) into `data\downloads` without `yt-dlp`; query strings are ignored for extension detection, and the URL max-height selector does not alter direct downloads. YouTube, VK, and other webpage/video-platform URLs still use `yt-dlp`. For audio-only URL transcription, direct media URLs use the downloaded media file, while non-direct URLs keep the existing audio extraction path. If frame extraction is selected, the downloaded video-readable media file uses the same frame extraction settings as local video files: extraction rate, JPEG quality, and max frame size. URL media downloads are kept under `data\downloads`; transcripts are saved under `data\transcripts`; frames are saved under `data\recordings\<base>__frames`; and `frames_index.json` is saved inside that frames folder.
 
-Some sites, streams, or codecs may fail depending on `yt-dlp`, FFmpeg, OpenCV, and the locally available decoders. Direct `.mp4`, `.webm`, `.mkv`, `.avi`, or `.mov` URLs are the simplest test path. Cookies, authenticated/private videos, playlists, and video quality selection are not part of this iteration, so some YouTube/VK URLs can still fail with a readable authorization/cookies message.
+Some sites, streams, or codecs may fail depending on `yt-dlp`, FFmpeg, OpenCV, and the locally available decoders. Direct `.mp4`, `.webm`, `.mkv`, `.avi`, or `.mov` URLs are the simplest test path. Cookies, authenticated/private videos, playlists, and per-URL format listing are not part of this iteration, so some YouTube/VK URLs can still fail with a readable authorization/cookies message. The URL max-height selector is best-effort and can fall back to a higher source format if no bounded format is available.
 
 Uploaded temporary files:
 

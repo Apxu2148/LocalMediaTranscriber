@@ -120,6 +120,7 @@ class UrlDownloaderTests(unittest.TestCase):
         self.assertEqual("mkv", FakeYoutubeDL.last_options["merge_output_format"])
         self.assertEqual(result["source_path"], result["downloaded_media_path"])
         self.assertEqual(result["source_path"], result["downloaded_video_path"])
+        self.assertEqual("auto", result["url_download_diagnostics"]["url_download_max_video_height"])
 
     def test_video_profiles_map_to_expected_ytdlp_formats(self) -> None:
         fake_module = types.SimpleNamespace(YoutubeDL=FakeYoutubeDL)
@@ -146,9 +147,25 @@ class UrlDownloaderTests(unittest.TestCase):
         self.assertIn("height<=720", resolved["format_string"])
         self.assertIn("height<=1080", resolved["format_string"])
 
+    def test_max_video_height_adds_bounded_preferences_for_builtin_profiles(self) -> None:
+        auto = resolve_url_download_options({"format_profile": "auto", "max_video_height": "720"}, needs_video=True)
+        mp4 = resolve_url_download_options({"format_profile": "prefer_mp4", "max_video_height": "1080"}, needs_video=True)
+
+        self.assertIn("bv*[height<=720]+ba", auto["format_string"])
+        self.assertTrue(auto["format_string"].endswith(DEFAULT_VIDEO_FORMAT))
+        self.assertIn("bv*[height<=1080][ext=mp4]+ba[ext=m4a]", mp4["format_string"])
+        self.assertIn("b[height<=1080][ext=mp4]", mp4["format_string"])
+        self.assertTrue(mp4["format_string"].endswith("bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/best"))
+
+    def test_invalid_max_video_height_falls_back_to_auto(self) -> None:
+        resolved = resolve_url_download_options({"format_profile": "auto", "max_video_height": "999"}, needs_video=True)
+
+        self.assertEqual("auto", resolved["max_video_height"])
+        self.assertEqual(DEFAULT_VIDEO_FORMAT, resolved["format_string"])
+
     def test_custom_format_is_used_and_empty_custom_falls_back_to_auto(self) -> None:
         custom = resolve_url_download_options(
-            {"format_profile": "custom", "custom_format": "bv*[height<=480]+ba/best"},
+            {"format_profile": "custom", "custom_format": "bv*[height<=480]+ba/best", "max_video_height": "720"},
             needs_video=True,
         )
         empty = resolve_url_download_options(
@@ -158,6 +175,7 @@ class UrlDownloaderTests(unittest.TestCase):
 
         self.assertEqual("bv*[height<=480]+ba/best", custom["format_string"])
         self.assertEqual("custom", custom["format_profile"])
+        self.assertEqual("720", custom["max_video_height"])
         self.assertEqual("auto", empty["format_profile"])
         self.assertEqual(DEFAULT_VIDEO_FORMAT, empty["format_string"])
 
@@ -168,6 +186,7 @@ class UrlDownloaderTests(unittest.TestCase):
         manager.update_settings({
             "format_profile": "prefer_webm",
             "custom_format": "best[height<=720]",
+            "max_video_height": "720",
             "log_media_probe": False,
             "log_extraction_benchmark": True,
         })
@@ -175,6 +194,7 @@ class UrlDownloaderTests(unittest.TestCase):
 
         self.assertEqual("prefer_webm", reloaded["format_profile"])
         self.assertEqual("best[height<=720]", reloaded["custom_format"])
+        self.assertEqual("720", reloaded["max_video_height"])
         self.assertFalse(reloaded["log_media_probe"])
         self.assertTrue(reloaded["log_extraction_benchmark"])
 
@@ -219,6 +239,7 @@ class UrlDownloaderTests(unittest.TestCase):
         self.assertEqual("direct", result["source_platform"])
         self.assertEqual(result["source_path"], result["downloaded_media_path"])
         self.assertEqual(result["source_path"], result["downloaded_video_path"])
+        self.assertEqual("auto", result["url_download_diagnostics"]["url_download_max_video_height"])
 
     def test_direct_video_audio_only_download_also_bypasses_ytdlp(self) -> None:
         fake_module = types.SimpleNamespace(YoutubeDL=lambda _options: self.fail("yt-dlp should not be used"))

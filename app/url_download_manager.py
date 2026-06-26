@@ -21,9 +21,11 @@ URL_DOWNLOAD_PROFILE_IDS = (
     "audio_friendly",
     "custom",
 )
+URL_DOWNLOAD_MAX_VIDEO_HEIGHTS = ("auto", "480", "720", "1080", "1440", "2160")
 DEFAULT_URL_DOWNLOAD_SETTINGS = {
     "format_profile": "auto",
     "custom_format": "",
+    "max_video_height": "auto",
     "log_media_probe": True,
     "log_extraction_benchmark": True,
 }
@@ -37,9 +39,13 @@ def normalize_url_download_settings(value: Any) -> dict:
     custom_format = str(source.get("custom_format") or "").strip()[:1000]
     if profile == "custom" and not custom_format:
         profile = "auto"
+    max_video_height = str(source.get("max_video_height") or "auto").strip().lower()
+    if max_video_height not in URL_DOWNLOAD_MAX_VIDEO_HEIGHTS:
+        max_video_height = "auto"
     return {
         "format_profile": profile,
         "custom_format": custom_format,
+        "max_video_height": max_video_height,
         "log_media_probe": bool(source.get("log_media_probe", True)),
         "log_extraction_benchmark": bool(source.get("log_extraction_benchmark", True)),
     }

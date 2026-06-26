@@ -49,8 +49,10 @@ class UiContractTests(unittest.TestCase):
             "defaultFramesEnabled",
             "defaultFrameRateSelect",
             "defaultJpegQualitySelect",
+            "defaultFrameMaxSizeSelect",
             "urlDownloadSettingsPanel",
             "urlDownloadProfileSelect",
+            "urlDownloadMaxVideoHeightSelect",
             "urlDownloadCustomField",
             "urlDownloadCustomFormatInput",
             "urlDownloadLogMediaProbe",
@@ -106,6 +108,7 @@ class UiContractTests(unittest.TestCase):
         self.assertIn('"/api/storage/settings"', app_js)
         self.assertIn('"/api/storage/cleanup"', app_js)
         self.assertIn('"/api/url-download/settings"', app_js)
+        self.assertIn('"/api/frames/settings"', app_js)
         self.assertIn('"/api/ocr/status"', app_js)
         self.assertIn('"/api/ocr/settings"', app_js)
         self.assertIn('"/api/ocr/check"', app_js)
@@ -131,7 +134,13 @@ class UiContractTests(unittest.TestCase):
         self.assertIn("data-queue-operation", app_js)
         self.assertIn("data-queue-frame-rate", app_js)
         self.assertIn("data-queue-jpeg-quality", app_js)
+        self.assertIn("data-queue-frame-size", app_js)
+        self.assertIn("data-queue-url-max-height", app_js)
         self.assertIn("75, 80, 85, 90, 95, 100", app_js)
+        self.assertIn("frameMaxSizeOptions", app_js)
+        self.assertIn("urlDownloadMaxVideoHeightOptions", app_js)
+        self.assertIn("max_frame_size", app_js)
+        self.assertIn("max_video_height", app_js)
         self.assertIn('t("downloadedMediaResultPath"', app_js)
         self.assertIn('t("transcriptResultPath"', app_js)
         self.assertIn('t("framesResultFolder"', app_js)
@@ -236,6 +245,7 @@ class UiContractTests(unittest.TestCase):
             "defaultFramesEnabled",
             "defaultFrameRateSelect",
             "defaultJpegQualitySelect",
+            "defaultFrameMaxSizeSelect",
         ):
             self.assertIn(f'id="{element_id}"', html)
         for key in (
@@ -257,6 +267,7 @@ class UiContractTests(unittest.TestCase):
         self.assertIn("defaultProcessingPlanSnapshot", app_js)
         self.assertIn("processingPlanForQueueItem", app_js)
         self.assertIn("processing_plan", app_js)
+        self.assertIn("frameMaxSizeLabel(plan.frames.max_frame_size)", app_js)
         self.assertIn('status: "coming_soon"', app_js)
         self.assertIn("input.disabled = true", app_js)
         self.assertNotIn("Tesseract OCR (coming soon)", app_js)
@@ -303,7 +314,15 @@ class UiContractTests(unittest.TestCase):
         ):
             self.assertIn(f'value="{profile}"', html)
         self.assertIn('id="urlDownloadCustomField"', html)
+        self.assertIn('id="urlDownloadMaxVideoHeightSelect"', html)
+        for height in ("auto", "480", "720", "1080", "1440", "2160"):
+            self.assertIn(f'value="{height}"', html)
         self.assertIn("syncUrlDownloadCustomField", app_js)
+        self.assertIn("urlDownloadMaxVideoHeightLabel", app_js)
+        self.assertIn("createUrlDownloadSettings", app_js)
+        self.assertIn("queue-url-settings", app_js)
+        self.assertIn('wrapper.hidden = queueItem.source_type !== "url" && queueItem.media_kind !== "url"', app_js)
+        self.assertIn("urlDownloadPlan.max_video_height = urlMaxHeightSelect.value", app_js)
         self.assertIn("url_download:", app_js)
         self.assertIn("item.dataset.urlDownload", app_js)
         self.assertIn('setLocalizedOutput(queueOutput, "queueStarted")', app_js)

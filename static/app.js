@@ -114,7 +114,9 @@ const defaultAudioEnabled = document.querySelector("#defaultAudioEnabled");
 const defaultFramesEnabled = document.querySelector("#defaultFramesEnabled");
 const defaultFrameRateSelect = document.querySelector("#defaultFrameRateSelect");
 const defaultJpegQualitySelect = document.querySelector("#defaultJpegQualitySelect");
+const defaultFrameMaxSizeSelect = document.querySelector("#defaultFrameMaxSizeSelect");
 const urlDownloadProfileSelect = document.querySelector("#urlDownloadProfileSelect");
+const urlDownloadMaxVideoHeightSelect = document.querySelector("#urlDownloadMaxVideoHeightSelect");
 const urlDownloadCustomField = document.querySelector("#urlDownloadCustomField");
 const urlDownloadCustomFormatInput = document.querySelector("#urlDownloadCustomFormatInput");
 const urlDownloadLogMediaProbe = document.querySelector("#urlDownloadLogMediaProbe");
@@ -204,8 +206,12 @@ let latestOcrStatus = null;
 let latestUrlDownloadSettings = {
   format_profile: "auto",
   custom_format: "",
+  max_video_height: "auto",
   log_media_probe: true,
   log_extraction_benchmark: true,
+};
+let latestFrameSettings = {
+  max_frame_size: "original",
 };
 const dynamicOutputRenderers = new Map();
 const queueControlSelector = ".queue-item-card select, .queue-item-card input, .queue-item-card button";
@@ -1600,6 +1606,34 @@ async function saveStorageSettings() {
   }
 }
 
+function renderFrameSettings(settings) {
+  latestFrameSettings = { ...latestFrameSettings, ...settings };
+  defaultFrameMaxSizeSelect.value = latestFrameSettings.max_frame_size || "original";
+  updateQueueSettingsSummary();
+}
+
+async function refreshFrameSettings() {
+  try {
+    renderFrameSettings(await requestJson("/api/frames/settings"));
+  } catch (error) {
+    setOutput(queueOutput, error.message, "error");
+  }
+}
+
+async function saveFrameSettings() {
+  try {
+    renderFrameSettings(await requestJson("/api/frames/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ max_frame_size: defaultFrameMaxSizeSelect.value || "original" }),
+    }));
+    setLocalizedOutput(queueOutput, "frameSettingsSaved", {}, "success");
+  } catch (error) {
+    setOutput(queueOutput, error.message, "error");
+    await refreshFrameSettings();
+  }
+}
+
 function syncUrlDownloadCustomField() {
   urlDownloadCustomField.hidden = urlDownloadProfileSelect.value !== "custom";
 }
@@ -1608,6 +1642,7 @@ function urlDownloadSettingsFromControls() {
   return {
     format_profile: urlDownloadProfileSelect.value || "auto",
     custom_format: urlDownloadCustomFormatInput.value.trim(),
+    max_video_height: urlDownloadMaxVideoHeightSelect.value || "auto",
     log_media_probe: urlDownloadLogMediaProbe.checked,
     log_extraction_benchmark: urlDownloadLogExtractionBenchmark.checked,
   };
@@ -1617,6 +1652,7 @@ function renderUrlDownloadSettings(settings) {
   latestUrlDownloadSettings = { ...latestUrlDownloadSettings, ...settings };
   urlDownloadProfileSelect.value = latestUrlDownloadSettings.format_profile || "auto";
   urlDownloadCustomFormatInput.value = latestUrlDownloadSettings.custom_format || "";
+  urlDownloadMaxVideoHeightSelect.value = latestUrlDownloadSettings.max_video_height || "auto";
   urlDownloadLogMediaProbe.checked = Boolean(latestUrlDownloadSettings.log_media_probe);
   urlDownloadLogExtractionBenchmark.checked = Boolean(latestUrlDownloadSettings.log_extraction_benchmark);
   syncUrlDownloadCustomField();
@@ -2753,6 +2789,38 @@ function frameRateOptions() {
   ];
 }
 
+function frameMaxSizeOptions() {
+  return [
+    { value: "original", label: t("maxFrameSizeOriginal") },
+    { value: "width_1920", label: t("maxFrameSizeWidth1920") },
+    { value: "width_1280", label: t("maxFrameSizeWidth1280") },
+    { value: "width_960", label: t("maxFrameSizeWidth960") },
+    { value: "width_640", label: t("maxFrameSizeWidth640") },
+  ];
+}
+
+function frameMaxSizeLabel(value) {
+  return frameMaxSizeOptions().find((option) => option.value === value)?.label || t("maxFrameSizeOriginal");
+}
+
+function urlDownloadMaxVideoHeightLabel(value) {
+  return {
+    auto: t("urlDownloadMaxVideoHeightAuto"),
+    480: t("urlDownloadMaxVideoHeight480"),
+    720: t("urlDownloadMaxVideoHeight720"),
+    1080: t("urlDownloadMaxVideoHeight1080"),
+    1440: t("urlDownloadMaxVideoHeight1440"),
+    2160: t("urlDownloadMaxVideoHeight2160"),
+  }[String(value || "auto")] || t("urlDownloadMaxVideoHeightAuto");
+}
+
+function urlDownloadMaxVideoHeightOptions() {
+  return ["auto", "480", "720", "1080", "1440", "2160"].map((value) => ({
+    value,
+    label: urlDownloadMaxVideoHeightLabel(value),
+  }));
+}
+
 function frameRateValue(rate) {
   if (rate?.mode === "fps") {
     return `fps:${rate.fps || 10}`;
@@ -2792,6 +2860,19 @@ function populateDefaultProcessingControls() {
     option.selected = String(value) === previousQuality;
     defaultJpegQualitySelect.append(option);
   }
+
+  const previousMaxSize = defaultFrameMaxSizeSelect.value || latestFrameSettings.max_frame_size || "original";
+  defaultFrameMaxSizeSelect.innerHTML = "";
+  for (const optionSpec of frameMaxSizeOptions()) {
+    const option = document.createElement("option");
+    option.value = optionSpec.value;
+    option.textContent = optionSpec.label;
+    option.selected = optionSpec.value === previousMaxSize;
+    defaultFrameMaxSizeSelect.append(option);
+  }
+  if (![...defaultFrameMaxSizeSelect.options].some((option) => option.selected)) {
+    defaultFrameMaxSizeSelect.value = "original";
+  }
 }
 
 function processingPlanFromValues({
@@ -2801,6 +2882,7 @@ function processingPlanFromValues({
   framesEnabled,
   frameRate,
   jpegQuality,
+  maxFrameSize,
   urlDownload,
   ocrBackend,
   ocrLanguages,
@@ -2820,10 +2902,12 @@ function processingPlanFromValues({
       rate: frameRate,
       interval_sec: frameRate?.mode === "interval" ? frameRate.seconds : null,
       jpeg_quality: Number(jpegQuality || 75),
+      max_frame_size: maxFrameSize || "original",
     },
     url_download: {
       format_profile: downloadSettings?.format_profile || "auto",
       custom_format: downloadSettings?.custom_format || "",
+      max_video_height: downloadSettings?.max_video_height || "auto",
       log_media_probe: Boolean(downloadSettings?.log_media_probe ?? true),
       log_extraction_benchmark: Boolean(downloadSettings?.log_extraction_benchmark ?? true),
       status: "pending",
@@ -2852,6 +2936,7 @@ function defaultProcessingPlanSnapshot() {
     framesEnabled: defaultFramesEnabled.checked,
     frameRate: frameRateFromValue(defaultFrameRateSelect.value || "interval:30"),
     jpegQuality: defaultJpegQualitySelect.value || "75",
+    maxFrameSize: defaultFrameMaxSizeSelect.value || latestFrameSettings.max_frame_size || "original",
     urlDownload: urlDownloadSettingsFromControls(),
     ocrBackend: ocrBackendSelect.value || latestOcrStatus?.selected_backend,
   });
@@ -2870,6 +2955,7 @@ function processingPlanForQueueItem(queueItem) {
     framesEnabled: frames.enabled ?? operations.extract_frames ?? false,
     frameRate: frames.rate || frameSettings.rate || frameRateFromValue("interval:10"),
     jpegQuality: frames.jpeg_quality || frameSettings.jpeg_quality || 90,
+    maxFrameSize: frames.max_frame_size || frameSettings.max_frame_size || "original",
     urlDownload: plan.url_download,
     ocrBackend: plan.ocr?.backend || plan.ocr?.engine,
     ocrLanguages: plan.ocr?.languages,
@@ -2991,14 +3077,16 @@ function createProcessingPlanSummary(queueItem) {
       value: plan.audio.enabled ? `${plan.audio.model} / ${deviceLabel(plan.audio.device)}` : t("disabled"),
     })),
     textLine(t("processingPlanFrames", {
-      value: plan.frames.enabled ? `${frameRateLabel(plan.frames.rate)} / JPEG ${plan.frames.jpeg_quality}%` : t("disabled"),
+      value: plan.frames.enabled
+        ? `${frameRateLabel(plan.frames.rate)} / JPEG ${plan.frames.jpeg_quality}% / ${frameMaxSizeLabel(plan.frames.max_frame_size)}`
+        : t("disabled"),
     })),
     textLine(t("processingPlanOcr", { value: `${t("disabled")} / ${t("comingSoon")}` })),
     textLine(t("processingPlanCv", { value: `${t("disabled")} / ${t("comingSoon")}` })),
   );
   if (queueItem.source_type === "url") {
     wrapper.append(textLine(t("processingPlanUrlDownload", {
-      value: urlDownloadProfileLabel(plan.url_download.format_profile),
+      value: `${urlDownloadProfileLabel(plan.url_download.format_profile)} / ${urlDownloadMaxVideoHeightLabel(plan.url_download.max_video_height)}`,
     })));
   }
   return wrapper;
@@ -3134,6 +3222,7 @@ function createRuntimeEstimate(queueItem, status) {
       textLine(t("estimateFramesConfig", {
         rate: frameRateLabel(frames.rate),
         quality: frames.jpeg_quality,
+        size: frameMaxSizeLabel(frames.max_frame_size),
       })),
       textLine(t("sampleFrames", { count: frames.sample_frames })),
       textLine(t("estimatedTotalFrames", { count: frames.estimated_total_frames })),
@@ -3177,6 +3266,32 @@ function createAudioPlanSettings(queueItem, disabled) {
   return wrapper;
 }
 
+function createUrlDownloadSettings(queueItem, disabled) {
+  const plan = processingPlanForQueueItem(queueItem);
+  const wrapper = document.createElement("div");
+  wrapper.className = "queue-url-settings";
+  wrapper.hidden = queueItem.source_type !== "url" && queueItem.media_kind !== "url";
+
+  const maxHeightLabel = document.createElement("label");
+  maxHeightLabel.className = "queue-setting-field";
+  const maxHeightText = document.createElement("span");
+  maxHeightText.textContent = t("urlDownloadMaxVideoHeightLabel");
+  const maxHeightSelect = document.createElement("select");
+  maxHeightSelect.dataset.queueUrlMaxHeight = "true";
+  maxHeightSelect.disabled = disabled;
+  const selectedMaxHeight = plan.url_download.max_video_height || "auto";
+  for (const optionSpec of urlDownloadMaxVideoHeightOptions()) {
+    const option = document.createElement("option");
+    option.value = optionSpec.value;
+    option.textContent = optionSpec.label;
+    option.selected = optionSpec.value === selectedMaxHeight;
+    maxHeightSelect.append(option);
+  }
+  maxHeightLabel.append(maxHeightText, maxHeightSelect);
+  wrapper.append(maxHeightLabel);
+  return wrapper;
+}
+
 function createFrameSettings(queueItem, disabled) {
   const settings = queueItem.frame_extraction || {};
   const operations = queueItem.operations || {};
@@ -3217,6 +3332,23 @@ function createFrameSettings(queueItem, disabled) {
   }
   qualityLabel.append(qualityText, qualitySelect);
 
+  const maxSizeLabel = document.createElement("label");
+  maxSizeLabel.className = "queue-setting-field";
+  const maxSizeText = document.createElement("span");
+  maxSizeText.textContent = t("maxFrameSize");
+  const maxSizeSelect = document.createElement("select");
+  maxSizeSelect.dataset.queueFrameSize = "true";
+  maxSizeSelect.disabled = disabled || !operations.extract_frames;
+  const selectedMaxSize = settings.max_frame_size || "original";
+  for (const optionSpec of frameMaxSizeOptions()) {
+    const option = document.createElement("option");
+    option.value = optionSpec.value;
+    option.textContent = optionSpec.label;
+    option.selected = optionSpec.value === selectedMaxSize;
+    maxSizeSelect.append(option);
+  }
+  maxSizeLabel.append(maxSizeText, maxSizeSelect);
+
   const estimate = document.createElement("div");
   estimate.className = "queue-frame-estimate";
   const count = settings.estimated_frame_count;
@@ -3239,7 +3371,7 @@ function createFrameSettings(queueItem, disabled) {
     estimate.append(metadataWarning);
   }
 
-  wrapper.append(rateLabel, qualityLabel, estimate);
+  wrapper.append(rateLabel, qualityLabel, maxSizeLabel, estimate);
   return wrapper;
 }
 
@@ -3461,7 +3593,12 @@ function createQueueItemElement(queueItem, status) {
   const label = document.createElement("div");
   label.className = "queue-options-label";
   label.textContent = t("processingOptions");
-  optionGroup.append(label, createProcessingPlanSummary(queueItem), createAudioPlanSettings(queueItem, controlsDisabled));
+  optionGroup.append(
+    label,
+    createProcessingPlanSummary(queueItem),
+    createAudioPlanSettings(queueItem, controlsDisabled),
+    createUrlDownloadSettings(queueItem, controlsDisabled),
+  );
   if (queueItemIsVideo(queueItem)) {
     optionGroup.append(
       createQueueCheckbox("extractFrames", options.extract_frames, controlsDisabled, "extract_frames"),
@@ -3659,8 +3796,15 @@ function collectQueueItemPayload(card) {
   const deviceSelect = card.querySelector("[data-queue-audio-device]");
   const rateSelect = card.querySelector("[data-queue-frame-rate]");
   const qualitySelect = card.querySelector("[data-queue-jpeg-quality]");
+  const maxSizeSelect = card.querySelector("[data-queue-frame-size]");
+  const urlMaxHeightSelect = card.querySelector("[data-queue-url-max-height]");
   const frameRate = frameRateFromValue(rateSelect?.value);
   const jpegQuality = Number(qualitySelect?.value || 90);
+  const maxFrameSize = maxSizeSelect?.value || "original";
+  const urlDownloadPlan = JSON.parse(card.dataset.urlDownload || "null") || undefined;
+  if (urlDownloadPlan && urlMaxHeightSelect) {
+    urlDownloadPlan.max_video_height = urlMaxHeightSelect.value || "auto";
+  }
   const processingPlan = processingPlanFromValues({
     audioEnabled: operations.transcribe_audio,
     model: modelSelect?.value || selectedModel(),
@@ -3668,7 +3812,8 @@ function collectQueueItemPayload(card) {
     framesEnabled: operations.extract_frames,
     frameRate,
     jpegQuality,
-    urlDownload: JSON.parse(card.dataset.urlDownload || "null") || undefined,
+    maxFrameSize,
+    urlDownload: urlDownloadPlan,
     ocrBackend: card.dataset.ocrBackend,
     ocrLanguages: JSON.parse(card.dataset.ocrLanguages || "null") || undefined,
     ocrEngineAvailable: card.dataset.ocrEngineAvailable === "true",
@@ -3679,6 +3824,7 @@ function collectQueueItemPayload(card) {
     frame_extraction: {
       rate: frameRate,
       jpeg_quality: jpegQuality,
+      max_frame_size: maxFrameSize,
     },
     processing_plan: processingPlan,
   };
@@ -3833,6 +3979,7 @@ function updateLongOperationControls() {
   defaultFramesEnabled.disabled = active;
   defaultFrameRateSelect.disabled = active || !defaultFramesEnabled.checked;
   defaultJpegQualitySelect.disabled = active || !defaultFramesEnabled.checked;
+  defaultFrameMaxSizeSelect.disabled = active || !defaultFramesEnabled.checked;
   queueStartButton.disabled = active || Number(latestQueueStatus?.pending_items || 0) === 0;
   queueClearButton.disabled = active || Number(latestQueueStatus?.total_items || 0) === 0;
   queueRetryButton.disabled = active || Number(latestQueueStatus?.failed_items || 0) === 0;
@@ -4002,10 +4149,13 @@ whisperModelSelect.addEventListener("change", () => {
   renderRuntimeDetails();
 });
 whisperDeviceSelect.addEventListener("change", updateQueueSettingsSummary);
-for (const control of [defaultAudioEnabled, defaultFramesEnabled, defaultFrameRateSelect, defaultJpegQualitySelect]) {
+for (const control of [defaultAudioEnabled, defaultFramesEnabled, defaultFrameRateSelect, defaultJpegQualitySelect, defaultFrameMaxSizeSelect]) {
   control.addEventListener("change", () => {
     updateLongOperationControls();
     updateQueueSettingsSummary();
+    if (control === defaultFrameMaxSizeSelect) {
+      void saveFrameSettings();
+    }
   });
 }
 refreshModelsButton.addEventListener("click", async () => {
@@ -4071,7 +4221,7 @@ queueList.addEventListener("focusout", () => {
 });
 queueList.addEventListener("change", async (event) => {
   const target = event.target;
-  if (!target.matches("[data-queue-operation], [data-queue-audio-model], [data-queue-audio-device], [data-queue-frame-rate], [data-queue-jpeg-quality]")) {
+  if (!target.matches("[data-queue-operation], [data-queue-audio-model], [data-queue-audio-device], [data-queue-frame-rate], [data-queue-jpeg-quality], [data-queue-frame-size], [data-queue-url-max-height]")) {
     return;
   }
   await updateQueueItemFromCard(queueCardFromTarget(target));
@@ -4217,6 +4367,7 @@ async function boot() {
   await refreshModelDownloadStatus(true);
   await refreshStorage();
   await refreshStorageSettings();
+  await refreshFrameSettings();
   await refreshUrlDownloadSettings();
   await refreshOcrStatus();
   await refreshQueueStatus();

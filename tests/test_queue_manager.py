@@ -299,7 +299,9 @@ class QueueManagerTests(unittest.TestCase):
         self.assertFalse(item["operations"]["cv"])
         self.assertEqual({"mode": "interval", "seconds": 10}, item["frame_extraction"]["rate"])
         self.assertEqual(90, item["frame_extraction"]["jpeg_quality"])
+        self.assertEqual("original", item["frame_extraction"]["max_frame_size"])
         self.assertEqual("auto", item["processing_plan"]["url_download"]["format_profile"])
+        self.assertEqual("auto", item["processing_plan"]["url_download"]["max_video_height"])
 
     def test_new_item_receives_processing_plan_snapshot(self) -> None:
         manager = self.make_manager(
@@ -312,7 +314,9 @@ class QueueManagerTests(unittest.TestCase):
                 "enabled": True,
                 "rate": {"mode": "interval", "seconds": 30},
                 "jpeg_quality": 75,
+                "max_frame_size": "width_1280",
             },
+            "url_download": {"format_profile": "prefer_mp4", "max_video_height": "720"},
             "ocr": {"enabled": True, "engine": "tesseract", "languages": ["rus", "eng"], "status": "coming_soon", "engine_available": True},
             "cv": {"enabled": False, "engine": "basic_opencv", "status": "coming_soon"},
         }
@@ -329,12 +333,38 @@ class QueueManagerTests(unittest.TestCase):
         self.assertTrue(item["processing_plan"]["frames"]["enabled"])
         self.assertEqual({"mode": "interval", "seconds": 30}, item["processing_plan"]["frames"]["rate"])
         self.assertEqual(75, item["processing_plan"]["frames"]["jpeg_quality"])
+        self.assertEqual("width_1280", item["processing_plan"]["frames"]["max_frame_size"])
+        self.assertEqual("prefer_mp4", item["processing_plan"]["url_download"]["format_profile"])
+        self.assertEqual("720", item["processing_plan"]["url_download"]["max_video_height"])
         self.assertFalse(item["processing_plan"]["ocr"]["enabled"])
         self.assertEqual("tesseract", item["processing_plan"]["ocr"]["backend"])
         self.assertTrue(item["processing_plan"]["ocr"]["engine_available"])
         self.assertFalse(item["operations"]["ocr"])
         self.assertTrue(item["operations"]["extract_frames"])
         self.assertEqual(75, item["frame_extraction"]["jpeg_quality"])
+        self.assertEqual("width_1280", item["frame_extraction"]["max_frame_size"])
+
+    def test_url_item_update_can_change_max_height_without_changing_profile(self) -> None:
+        manager = self.make_manager(processor=lambda _item, _model, _device: {})
+        status = self.track_job(manager.add_urls([QueueUrl(
+            "https://example.test/video",
+            processing_plan={"url_download": {"format_profile": "prefer_webm", "max_video_height": "720"}},
+        )]))
+        item = status["items"][0]
+
+        updated = manager.update_item(
+            item["index"],
+            processing_plan={
+                **item["processing_plan"],
+                "url_download": {
+                    **item["processing_plan"]["url_download"],
+                    "max_video_height": "1440",
+                },
+            },
+        )["items"][0]
+
+        self.assertEqual("prefer_webm", updated["processing_plan"]["url_download"]["format_profile"])
+        self.assertEqual("1440", updated["processing_plan"]["url_download"]["max_video_height"])
 
     def test_per_item_audio_model_and_device_are_used_for_transcription(self) -> None:
         calls: list[tuple[str, str]] = []
@@ -373,7 +403,12 @@ class QueueManagerTests(unittest.TestCase):
             source_filename="frames.mp4",
             processing_plan={
                 "audio": {"enabled": False, "model": "small", "device": "auto"},
-                "frames": {"enabled": True, "rate": {"mode": "interval", "seconds": 30}, "jpeg_quality": 75},
+                "frames": {
+                    "enabled": True,
+                    "rate": {"mode": "interval", "seconds": 30},
+                    "jpeg_quality": 75,
+                    "max_frame_size": "width_960",
+                },
             },
         )])
 
@@ -382,6 +417,7 @@ class QueueManagerTests(unittest.TestCase):
 
         self.assertEqual({"mode": "interval", "seconds": 30}, captured_settings[0]["rate"])
         self.assertEqual(75, captured_settings[0]["jpeg_quality"])
+        self.assertEqual("width_960", captured_settings[0]["max_frame_size"])
 
     def test_changing_defaults_does_not_mutate_existing_items(self) -> None:
         manager = self.make_manager(processor=lambda _item, _model, _device: {})
@@ -687,6 +723,7 @@ class QueueManagerTests(unittest.TestCase):
                 "downloaded_video_path": str(video.source_path),
                 "url_download_diagnostics": {
                     "url_download_format_profile": download_settings["format_profile"],
+                    "url_download_max_video_height": download_settings["max_video_height"],
                     "yt_dlp_format_string_used": "webm-format",
                 },
             }
@@ -704,6 +741,7 @@ class QueueManagerTests(unittest.TestCase):
             processing_plan={
                 "url_download": {
                     "format_profile": "prefer_webm",
+                    "max_video_height": "720",
                     "log_media_probe": True,
                     "log_extraction_benchmark": True,
                 }
@@ -720,10 +758,13 @@ class QueueManagerTests(unittest.TestCase):
         self.assertEqual([], audio_downloads)
         self.assertEqual(["https://example.test/video"], video_downloads)
         self.assertEqual("prefer_webm", download_settings_seen[0]["format_profile"])
+        self.assertEqual("720", download_settings_seen[0]["max_video_height"])
         self.assertEqual([str(video.source_path)], frame_sources)
         self.assertEqual(str(video.source_path), item["downloaded_media_path"])
         self.assertTrue(item["frames_index_path"].endswith("frames_index.json"))
         self.assertEqual("prefer_webm", item["processing_plan"]["url_download"]["format_profile"])
+        self.assertEqual("720", item["processing_plan"]["url_download"]["max_video_height"])
+        self.assertEqual("720", item["url_download_diagnostics"]["url_download_max_video_height"])
         self.assertEqual(2, item["url_download_diagnostics"]["frames_extracted"])
         self.assertIn("frame_extraction_time_sec", item["url_download_diagnostics"])
         self.assertIn("sec_per_frame", item["url_download_diagnostics"])
@@ -1265,10 +1306,11 @@ class QueueManagerTests(unittest.TestCase):
         updated = manager.update_item(
             item["index"],
             operations={"transcribe_audio": False, "extract_frames": True},
-            frame_extraction={"rate": {"mode": "interval", "seconds": 10}, "jpeg_quality": 100},
+            frame_extraction={"rate": {"mode": "interval", "seconds": 10}, "jpeg_quality": 100, "max_frame_size": "giant"},
         )
 
         self.assertEqual(100, updated["items"][0]["frame_extraction"]["jpeg_quality"])
+        self.assertEqual("original", updated["items"][0]["frame_extraction"]["max_frame_size"])
 
     def test_video_item_without_executable_operation_is_rejected(self) -> None:
         manager = self.make_manager(

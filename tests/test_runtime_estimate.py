@@ -44,8 +44,8 @@ class RuntimeEstimatorTests(unittest.TestCase):
             (sample.parent / "audio_scratch.tmp").write_bytes(b"scratch")
             return {"device": "cuda", "compute_type": "float16"}
 
-        def process_frames(source: Path, output: Path, duration: float, rate: dict, quality: int) -> dict:
-            calls["frames"] = (source, duration, rate, quality)
+        def process_frames(source: Path, output: Path, duration: float, rate: dict, quality: int, max_size: str) -> dict:
+            calls["frames"] = (source, duration, rate, quality, max_size)
             (output / "sample.jpg").write_bytes(b"jpeg")
             return {"sample_frames": 3}
 
@@ -66,12 +66,16 @@ class RuntimeEstimatorTests(unittest.TestCase):
                     "enabled": True,
                     "rate": {"mode": "interval", "seconds": 30},
                     "jpeg_quality": 75,
+                    "max_frame_size": "width_1280",
                 },
             },
         })
 
         self.assertEqual(("sample.wav", "base", "cuda"), calls["audio"])
-        self.assertEqual(({"mode": "interval", "seconds": 30}, 75), (calls["frames"][2], calls["frames"][3]))
+        self.assertEqual(
+            ({"mode": "interval", "seconds": 30}, 75, "width_1280"),
+            (calls["frames"][2], calls["frames"][3], calls["frames"][4]),
+        )
         self.assertEqual(60.0, result["sample_duration_sec"])
         self.assertEqual(24.0, result["audio"]["estimated_full_runtime_sec"])
         self.assertEqual(7.5, result["audio"]["speed_factor"])
@@ -128,10 +132,10 @@ class RuntimeEstimatorTests(unittest.TestCase):
         self.assertIsNone(result["total_estimated_full_runtime_sec"])
 
     def test_frame_only_estimate_skips_audio(self) -> None:
-        frame_calls: list[tuple[float, dict, int]] = []
+        frame_calls: list[tuple[float, dict, int, str]] = []
 
-        def process_frames(_source: Path, output: Path, duration: float, rate: dict, quality: int) -> dict:
-            frame_calls.append((duration, rate, quality))
+        def process_frames(_source: Path, output: Path, duration: float, rate: dict, quality: int, max_size: str) -> dict:
+            frame_calls.append((duration, rate, quality, max_size))
             (output / "sample.jpg").write_bytes(b"jpeg")
             return {"sample_frames": 2}
 
@@ -150,13 +154,15 @@ class RuntimeEstimatorTests(unittest.TestCase):
                     "enabled": True,
                     "rate": {"mode": "interval", "seconds": 30},
                     "jpeg_quality": 80,
+                    "max_frame_size": "bad",
                 },
             },
         })
 
         self.assertFalse(result["audio"]["enabled"])
-        self.assertEqual([(60.0, {"mode": "interval", "seconds": 30}, 80)], frame_calls)
+        self.assertEqual([(60.0, {"mode": "interval", "seconds": 30}, 80, "original")], frame_calls)
         self.assertTrue(result["frames"]["enabled"])
+        self.assertEqual("original", result["frames"]["max_frame_size"])
 
     def test_missing_duration_returns_stable_error_code(self) -> None:
         estimator = RuntimeEstimator(

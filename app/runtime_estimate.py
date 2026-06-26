@@ -8,7 +8,7 @@ from tempfile import TemporaryDirectory
 from typing import Callable
 
 from . import config
-from .frame_extractor import estimate_frame_count, normalize_frame_rate, normalize_jpeg_quality
+from .frame_extractor import estimate_frame_count, normalize_frame_rate, normalize_jpeg_quality, normalize_max_frame_size
 from .utils import audio_duration_seconds
 
 
@@ -69,7 +69,7 @@ class RuntimeEstimator:
         self,
         *,
         audio_processor: Callable[[Path, str, str], dict],
-        frame_processor: Callable[[Path, Path, float, dict, int], dict],
+        frame_processor: Callable[[Path, Path, float, dict, int, str], dict],
         duration_reader: Callable[[Path], float | None] = audio_duration_seconds,
         sample_preparer: Callable[[Path, float, float, Path], Path] = prepare_audio_sample,
         temp_root: Path | None = None,
@@ -140,6 +140,7 @@ class RuntimeEstimator:
             if frames_enabled:
                 rate = normalize_frame_rate(frames_plan.get("rate"))
                 jpeg_quality = normalize_jpeg_quality(frames_plan.get("jpeg_quality"))
+                max_frame_size = normalize_max_frame_size(frames_plan.get("max_frame_size"))
                 frames_workspace = workspace / "frames"
                 frames_workspace.mkdir(parents=True, exist_ok=True)
                 started = self.clock()
@@ -149,6 +150,7 @@ class RuntimeEstimator:
                     sample_duration_sec,
                     rate,
                     jpeg_quality,
+                    max_frame_size,
                 ) or {}
                 sample_runtime_sec = max(0.0, self.clock() - started)
                 sample_frames = int(processor_result.get("sample_frames") or 0)
@@ -162,6 +164,7 @@ class RuntimeEstimator:
                     "interval_sec": rate.get("seconds"),
                     "requested_fps": rate.get("fps"),
                     "jpeg_quality": jpeg_quality,
+                    "max_frame_size": max_frame_size,
                     "sample_frames": sample_frames,
                     "estimated_total_frames": estimated_total_frames,
                     "sample_runtime_sec": self._rounded(sample_runtime_sec),

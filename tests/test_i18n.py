@@ -161,6 +161,13 @@ class I18nTests(unittest.TestCase):
             "computerVision",
             "frameInterval",
             "jpegQuality",
+            "maxFrameSize",
+            "maxFrameSizeOriginal",
+            "maxFrameSizeWidth1920",
+            "maxFrameSizeWidth1280",
+            "maxFrameSizeWidth960",
+            "maxFrameSizeWidth640",
+            "maxFrameSizeHelp",
             "disabled",
             "comingSoon",
             "ocrEngineComingSoon",
@@ -417,16 +424,27 @@ class I18nTests(unittest.TestCase):
             "urlDownloadProfilePreferAvi",
             "urlDownloadProfileAudioFriendly",
             "urlDownloadProfileCustom",
+            "urlDownloadMaxVideoHeightLabel",
+            "urlDownloadMaxVideoHeightAuto",
+            "urlDownloadMaxVideoHeight480",
+            "urlDownloadMaxVideoHeight720",
+            "urlDownloadMaxVideoHeight1080",
+            "urlDownloadMaxVideoHeight1440",
+            "urlDownloadMaxVideoHeight2160",
+            "urlDownloadMaxVideoHeightHelp",
             "urlDownloadCustomFormatLabel",
             "urlDownloadLogMediaProbe",
             "urlDownloadLogExtractionBenchmark",
             "urlDownloadSettingsSaved",
             "urlDownloadCustomFallback",
+            "frameSettingsSaved",
             "processingPlanUrlDownload",
         ):
             self.assertIn(key, ru_keys)
             self.assertIn(key, en_keys)
         self.assertEqual("Prefer WebM", dictionary_value(i18n, "en", "urlDownloadProfilePreferWebm"))
+        self.assertEqual("Max URL video resolution", dictionary_value(i18n, "en", "urlDownloadMaxVideoHeightLabel"))
+        self.assertEqual("Up to 2160p / 4K", dictionary_value(i18n, "en", "urlDownloadMaxVideoHeight2160"))
 
     def test_idle_level_messages_are_localized(self) -> None:
         i18n = (STATIC_DIR / "i18n.js").read_text(encoding="utf-8")
