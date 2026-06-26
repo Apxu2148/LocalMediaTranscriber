@@ -247,6 +247,7 @@ class UiContractTests(unittest.TestCase):
             "defaultProcessingSettings",
             "defaultAudioEnabled",
             "defaultFramesEnabled",
+            "defaultOcrEnabled",
             "defaultFrameRateSelect",
             "defaultJpegQualitySelect",
             "defaultFrameMaxSizeSelect",
@@ -267,7 +268,8 @@ class UiContractTests(unittest.TestCase):
         ):
             self.assertIn(key, html + app_js)
         self.assertNotIn("placeholder-fieldset", default_settings_html)
-        self.assertNotIn('data-i18n="ocr"', default_settings_html)
+        self.assertIn('id="defaultOcrEnabled"', default_settings_html)
+        self.assertIn('data-i18n="ocr"', default_settings_html)
         self.assertNotIn('data-i18n="computerVision"', default_settings_html)
         self.assertIn("defaultProcessingPlanSnapshot", app_js)
         self.assertIn("processingPlanForQueueItem", app_js)
@@ -278,31 +280,40 @@ class UiContractTests(unittest.TestCase):
         self.assertIn("optionSummary.append(label, createProcessingPlanSummary(queueItem))", app_js)
         self.assertIn(".settings-collapsible-summary::before", css := (STATIC_DIR / "style.css").read_text(encoding="utf-8"))
         self.assertIn('.queue-options-collapsible[open] > .settings-collapsible-summary::before', css)
-        self.assertIn('status: "coming_soon"', app_js)
+        self.assertIn("defaultOcrEnabled.checked && !defaultOcrEnabled.disabled", app_js)
+        self.assertIn("const normalizedFramesEnabled = Boolean(framesEnabled) || normalizedOcrEnabled;", app_js)
         self.assertIn("input.disabled = true", app_js)
         self.assertNotIn("Tesseract OCR (coming soon)", app_js)
         self.assertNotIn("Basic OpenCV (coming soon)", app_js)
 
-    def test_ocr_ui_reports_readiness_but_keeps_processing_as_coming_soon(self) -> None:
+    def test_ocr_ui_reports_easyocr_readiness_and_frame_artifacts(self) -> None:
         app_js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
         html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
 
         self.assertIn('id="ocrSettingsPanel"', html)
         self.assertIn('id="ocrBackendSelect"', html)
+        self.assertIn('id="defaultOcrEnabled"', html)
         for backend in ("tesseract", "easyocr", "paddleocr", "windows_ocr"):
             self.assertIn(f'value="{backend}"', html)
         self.assertIn('id="ocrPathInput"', html)
         self.assertIn('data-i18n="ocrNextStage"', html)
-        self.assertIn('createComingSoonOption("ocr")', app_js)
+        self.assertIn("function createOcrPlanSettings(queueItem, disabled)", app_js)
+        self.assertNotIn('createComingSoonOption("ocr")', app_js)
         self.assertIn('createComingSoonOption("cv")', app_js)
         self.assertIn('engine_available: Boolean(', app_js)
         self.assertIn("status.backends?.[selectedBackend]", app_js)
+        self.assertIn("easyOcrActionable()", app_js)
+        self.assertIn('setLocalizedOutput(ocrStatusMessage, "ocrReadyForProcessing"', app_js)
+        self.assertIn('setLocalizedOutput(ocrStatusMessage, "ocrProcessingEasyOcrOnly"', app_js)
+        self.assertIn('t("ocrRunsOnExtractedFrames")', app_js)
+        self.assertIn("outputs.ocr_jsonl_path", app_js)
+        self.assertIn("outputs.ocr_txt_path", app_js)
         self.assertIn("ocrTesseractFields.hidden", app_js)
         self.assertIn("selected_backend: ocrBackendSelect.value", app_js)
         self.assertIn("backend,", app_js)
-        self.assertIn('enabled: false,', app_js)
-        self.assertNotIn("frames_ocr.jsonl", html + app_js)
-        self.assertNotIn("frames_ocr.txt", html + app_js)
+        self.assertIn('languages: ocrLanguages || (backend === "tesseract" ? ["rus", "eng"] : ["ru", "en"])', app_js)
+        self.assertIn("queueStageOcrProcessing", app_js)
+        self.assertIn("statusOcrProcessing", app_js)
 
     def test_url_download_profile_ui_and_plan_snapshot_contract(self) -> None:
         app_js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
@@ -354,7 +365,7 @@ class UiContractTests(unittest.TestCase):
         self.assertIn("runtimeEstimateActive", app_js)
         self.assertIn("estimateDetails", app_js)
         self.assertIn("noEnabledOperationsEstimate", app_js)
-        self.assertIn("createComingSoonOption(\"ocr\")", app_js)
+        self.assertIn("createOcrPlanSettings(queueItem, controlsDisabled)", app_js)
         self.assertIn("createComingSoonOption(\"cv\")", app_js)
         self.assertIn(".queue-runtime-estimate", css)
         self.assertIn(".queue-estimate-button", css)

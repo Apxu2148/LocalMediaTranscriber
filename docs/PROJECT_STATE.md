@@ -2,7 +2,19 @@
 
 ## Current milestone
 
-Stage 1.1b, URL retention cleanup, URL download profiles, and video resolution controls are implemented and validated. URL jobs now snapshot a configurable download profile plus optional max video height, and frame extraction can optionally downscale saved JPEGs. OCR execution remains intentionally disabled.
+Stage 1.1c is implemented: EasyOCR can run over existing extracted frame folders for video and URL queue items when optional OCR dependencies are installed. URL jobs still snapshot a configurable download profile plus optional max video height, and frame extraction can optionally downscale saved JPEGs.
+
+## EasyOCR frame OCR
+
+- `requirements-ocr-easyocr.txt` contains the optional EasyOCR dependency. The main CPU/GPU requirements files are unchanged, and the app must run without EasyOCR installed.
+- OCR readiness remains lightweight: `OcrManager.status().processing_enabled` is true only when the selected backend is `easyocr` and EasyOCR is importable; readiness checks still do not initialize EasyOCR readers or models.
+- Queue OCR is available only for video/URL items with EasyOCR. Enabling OCR auto-enables frame extraction in the normalized `processing_plan` and legacy `operations.extract_frames`.
+- OCR runs after successful frame extraction using the frame result's `frames_index_path` and `frames_path`.
+- OCR outputs are written beside the extracted frames:
+  - `data\recordings\<base>__frames\frames_ocr.jsonl`
+  - `data\recordings\<base>__frames\frames_ocr.txt`
+- Queue items store `ocr_result` with backend, languages, processed-frame counts, OCR time, seconds per frame, and artifact paths. `outputs` exposes `ocr_jsonl_path`, `ocr_jsonl_exists`, `ocr_txt_path`, and `ocr_txt_exists`.
+- OCR cancellation is cooperative between frames. Partial OCR artifacts may exist for frames processed before cancellation.
 
 ## URL download profiles and diagnostics
 
@@ -30,11 +42,12 @@ Stage 1.1b, URL retention cleanup, URL download profiles, and video resolution c
 
 ## Changed areas
 
-- `app/ocr_manager.py`: combined backend catalog, optional import checks, Windows platform check, and selected-backend persistence.
-- `app/main.py`: selected backend/check API fields and invalid-backend handling.
-- `app/queue_manager.py`: selected backend snapshot with OCR still normalized to a no-op.
-- `static/index.html`, `static/app.js`, `static/style.css`, `static/i18n.js`: compact selector, conditional Tesseract fields, readiness details, and RU/EN copy.
-- Focused OCR/API/i18n/UI/queue tests and OCR documentation.
+- `app/ocr_manager.py`: combined backend catalog, optional import checks, Windows platform check, selected-backend persistence, and EasyOCR-only processing availability.
+- `app/ocr_processor.py`: optional EasyOCR frame processor, cancellation/progress hooks, per-frame errors, benchmark fields, and JSONL/TXT artifact writing.
+- `app/main.py`: EasyOCR queue callback wiring and selected backend/check API fields.
+- `app/queue_manager.py`: EasyOCR plan normalization, `ocr_processing` stage, cancellation, OCR result metadata, and OCR output artifacts.
+- `static/index.html`, `static/app.js`, `static/style.css`, `static/i18n.js`: compact selector, conditional Tesseract fields, actionable EasyOCR readiness/default/per-item controls, OCR stage/artifact copy, and RU/EN text.
+- Focused OCR processor/manager/API/i18n/UI/queue tests and OCR documentation.
 - `app/queue_manager.py`, `app/storage_manager.py`, focused retention tests, and retention documentation for the URL cleanup bugfix.
 - `app/url_download_manager.py`, `app/url_downloader.py`, queue/main integration, compact localized settings UI, and focused URL profile/diagnostic tests.
 - `app/frame_settings_manager.py`, `app/frame_extractor.py`, `app/runtime_estimate.py`, queue/main integration, compact localized resolution controls, and focused resolution/estimate/UI tests.
@@ -80,6 +93,15 @@ Video resolution controls:
 - `git diff --check` passed with CRLF warnings only.
 - The first sandboxed test run failed with Windows `PermissionError` during temp-file unlink/replace cleanup; the same focused suite passed when rerun with normal filesystem permissions.
 
+Stage 1.1c EasyOCR over extracted frames:
+
+- `.venv\Scripts\python.exe -m compileall app`
+- `.venv\Scripts\python.exe -m unittest tests.test_ocr_manager` (19 tests)
+- `.venv\Scripts\python.exe -m unittest tests.test_queue_manager` (48 tests)
+- `.venv\Scripts\python.exe -m unittest tests.test_ui_contract tests.test_i18n tests.test_http_smoke` (41 tests)
+- `.venv\Scripts\python.exe -m unittest tests.test_ocr_processor` (8 tests)
+- `git diff --check` passed with CRLF warnings only.
+
 ## Manual checks still required
 
 - Start with `run.bat` and exercise all four selector options.
@@ -94,8 +116,8 @@ Video resolution controls:
 
 ## Known limitations
 
-- No backend performs OCR or creates OCR artifacts.
-- Optional dependencies are detected but never installed or initialized.
+- EasyOCR is the only executable OCR backend. PaddleOCR, Windows OCR, Tesseract processing, CV, smart frames, live screen OCR, LLM/VLM analysis, and broad language management remain out of scope.
+- Optional dependencies are never installed automatically; readiness checks do not initialize OCR models/readers.
 - PaddleOCR and Windows OCR are readiness-only experimental entries.
 - Profiles are best-effort because sites expose different formats. Direct media URLs keep their source format, MOV/AVI preferences do not force remuxing, and no per-URL format listing is implemented.
 - URL max height is best-effort and can fall back to a higher format when the source does not expose a matching bounded format. It is not applied to custom yt-dlp strings or direct media URLs.
@@ -109,7 +131,7 @@ Video resolution controls:
 
 ## Recommended next stage
 
-Stage 1.1c: choose the first executable backend and implement OCR over extracted frames with artifacts, queue handling, runtime estimation, and cancellation in the same stage.
+Future OCR stages: add explicit OCR runtime estimation if needed, consider Tesseract/PaddleOCR/Windows OCR execution, and design smarter frame selection/CV/LLM/VLM work separately.
 
 ## Documentation / project memory notes
 

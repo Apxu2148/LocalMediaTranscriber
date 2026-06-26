@@ -31,7 +31,15 @@ from .utils import audio_duration_seconds, timestamp_for_filename, write_json_fi
 logger = logging.getLogger(__name__)
 
 TERMINAL_STATUSES = {"completed", "error", "failed", "cancelled"}
-ACTIVE_STATUSES = {"downloading", "downloaded", "analyzing", "extracting_audio", "transcribing", "extracting_frames"}
+ACTIVE_STATUSES = {
+    "downloading",
+    "downloaded",
+    "analyzing",
+    "extracting_audio",
+    "transcribing",
+    "extracting_frames",
+    "ocr_processing",
+}
 STAGE_LABEL_KEYS = {
     "idle": "queueStageIdle",
     "adding_file": "queueStageAddingFile",
@@ -45,6 +53,7 @@ STAGE_LABEL_KEYS = {
     "download_failed": "queueStageDownloadFailed",
     "transcribing_audio": "queueStageTranscribingAudio",
     "extracting_frames": "queueStageExtractingFrames",
+    "ocr_processing": "queueStageOcrProcessing",
     "cancelling_transcription": "queueStageCancellingTranscription",
     "cancelling": "queueStageCancelling",
     "completed": "queueStageCompleted",
@@ -84,6 +93,7 @@ class QueueManager:
         downloader: Callable[[str], dict] | None = None,
         video_downloader: Callable[[str], dict] | None = None,
         frame_processor: Callable[[dict, threading.Event, Callable[[dict], None]], dict] | None = None,
+        ocr_processor: Callable[[dict, threading.Event, Callable[[dict], None]], dict] | None = None,
         video_metadata_reader: Callable[[Path], dict] | None = read_video_metadata,
         retention_cleaner: Callable[[dict], dict] | None = None,
         estimate_processor: Callable[[dict], dict] | None = None,
@@ -96,6 +106,7 @@ class QueueManager:
         self.downloader = downloader
         self.video_downloader = video_downloader
         self.frame_processor = frame_processor
+        self.ocr_processor = ocr_processor
         self.video_metadata_reader = video_metadata_reader
         self.retention_cleaner = retention_cleaner
         self.estimate_processor = estimate_processor
@@ -278,6 +289,7 @@ class QueueManager:
                     "frames_index_path": None,
                     "extracted_frame_count": None,
                     "frame_extraction_result": None,
+                    "ocr_result": None,
                     "output_base": None,
                     "error_message": None,
                     "technical_details": None,
@@ -374,6 +386,7 @@ class QueueManager:
                         "frames_index_path": None,
                         "extracted_frame_count": None,
                         "frame_extraction_result": None,
+                        "ocr_result": None,
                         "error_message": None,
                         "technical_details": None,
                         "partial_transcript": False,
@@ -514,7 +527,7 @@ class QueueManager:
 
             if item.get("cancel_requested"):
                 return self._status_snapshot_locked()
-            if item["status"] not in {"downloading", "extracting_audio", "transcribing", "extracting_frames"}:
+            if item["status"] not in {"downloading", "extracting_audio", "transcribing", "extracting_frames", "ocr_processing"}:
                 raise RuntimeError("Эту задачу нельзя отменить на текущем этапе.")
 
             cancel_event = self._cancel_events.get(index)
@@ -523,8 +536,8 @@ class QueueManager:
             item["cancel_requested"] = True
             if item["status"] == "downloading":
                 self._set_item_stage_locked(item, "cancelling_download", status="downloading")
-            elif item["status"] == "extracting_frames":
-                self._set_item_stage_locked(item, "cancelling", status="extracting_frames")
+            elif item["status"] in {"extracting_frames", "ocr_processing"}:
+                self._set_item_stage_locked(item, "cancelling", status=item["status"])
             else:
                 self._set_item_stage_locked(item, "cancelling_transcription", status="transcribing")
             self._persist_locked()
@@ -570,6 +583,7 @@ class QueueManager:
             "frames_index_path": None,
             "extracted_frame_count": None,
             "frame_extraction_result": None,
+            "ocr_result": None,
             "output_base": None,
             "error_message": None,
             "technical_details": None,
@@ -601,7 +615,6 @@ class QueueManager:
             for key in normalized:
                 if key in operations:
                     normalized[key] = bool(operations[key])
-        normalized["ocr"] = False
         normalized["cv"] = False
         if media_kind not in {"video", "url"}:
             normalized["extract_frames"] = False
@@ -653,6 +666,14 @@ class QueueManager:
         if ocr_backend not in {"tesseract", "easyocr", "paddleocr", "windows_ocr"}:
             ocr_backend = "tesseract"
         default_ocr_languages = ["rus", "eng"] if ocr_backend == "tesseract" else ["ru", "en"]
+        ocr_enabled = (
+            operation_defaults.get("ocr", False)
+            if operations is not None
+            else ocr_plan.get("enabled", operation_defaults.get("ocr", False))
+        )
+        ocr_enabled = bool(ocr_enabled) and supports_frames and ocr_backend == "easyocr"
+        if ocr_enabled:
+            frames_enabled = True
 
         return {
             "audio": {
@@ -669,11 +690,11 @@ class QueueManager:
             },
             "url_download": url_download_plan,
             "ocr": {
-                "enabled": False,
+                "enabled": ocr_enabled,
                 "backend": ocr_backend,
                 "engine": ocr_backend,
                 "languages": list(ocr_plan.get("languages") or default_ocr_languages),
-                "status": "coming_soon",
+                "status": "pending" if ocr_enabled else "disabled",
                 "engine_available": bool(ocr_plan.get("engine_available", False)),
             },
             "cv": {
@@ -697,7 +718,7 @@ class QueueManager:
             {
                 "transcribe_audio": plan["audio"]["enabled"],
                 "extract_frames": plan["frames"]["enabled"],
-                "ocr": False,
+                "ocr": plan["ocr"]["enabled"],
                 "cv": False,
             },
             media_kind,
@@ -838,8 +859,10 @@ class QueueManager:
             item["stage_progress"] = {"mode": "indeterminate"}
         elif stage in {"preparing_source", "transcribing_audio", "cancelling_transcription", "cancelling"}:
             item["stage_progress"] = {"mode": "indeterminate"}
-        elif stage == "extracting_frames" and previous_stage != stage:
+        elif stage in {"extracting_frames", "ocr_processing"} and previous_stage != stage:
             estimated = (item.get("frame_extraction") or {}).get("estimated_frame_count")
+            if stage == "ocr_processing":
+                estimated = item.get("extracted_frame_count") or estimated
             item["stage_progress"] = {
                 "mode": "determinate" if estimated else "indeterminate",
                 "percent": 0.0 if estimated else None,
@@ -893,6 +916,9 @@ class QueueManager:
             frame_result.get("frames_index_path") or item.get("frames_index_path"),
             base_dir=config.RECORDINGS_DIR,
         )
+        ocr_result = item.get("ocr_result") or {}
+        ocr_jsonl_path = self._absolute_artifact_path(ocr_result.get("jsonl_path"))
+        ocr_txt_path = self._absolute_artifact_path(ocr_result.get("txt_path"))
         downloaded_media_path = self._absolute_artifact_path(
             item.get("downloaded_video_path") or item.get("downloaded_media_path") or item.get("downloaded_audio_path")
         )
@@ -916,6 +942,10 @@ class QueueManager:
             "frames_dir_exists": self._path_exists(frames_dir),
             "frames_index_path": frames_index_path,
             "frames_index_exists": self._path_exists(frames_index_path),
+            "ocr_jsonl_path": ocr_jsonl_path,
+            "ocr_jsonl_exists": self._path_exists(ocr_jsonl_path),
+            "ocr_txt_path": ocr_txt_path,
+            "ocr_txt_exists": self._path_exists(ocr_txt_path),
             "downloaded_media_path": downloaded_media_path,
             "downloaded_media_exists": self._path_exists(downloaded_media_path),
             "downloaded_media_deleted": bool(cleanup.get("downloaded_media_deleted")),
@@ -973,6 +1003,35 @@ class QueueManager:
                     "percent": round(percent, 1) if percent is not None else None,
                     "completed_units": completed,
                     "total_units": estimated,
+                }
+                self._persist_locked()
+
+        return update
+
+    def _ocr_progress_callback(self, index: int) -> Callable[[dict], None]:
+        def update(progress: dict) -> None:
+            with self._lock:
+                item = next((entry for entry in self._items if entry["index"] == index), None)
+                if item is None:
+                    return
+                completed = int(progress.get("frames_processed") or 0)
+                total = progress.get("frames_total") or item.get("extracted_frame_count")
+                total_units = int(total) if total else None
+                percent = min(100.0, completed * 100.0 / total_units) if total_units else None
+                item["ocr_result"] = {
+                    **(item.get("ocr_result") or {}),
+                    "status": progress.get("status") or "running",
+                    "backend": progress.get("backend") or "easyocr",
+                    "languages": progress.get("languages") or [],
+                    "frames_processed": completed,
+                    "frames_total": total_units,
+                    "frames_with_text": int(progress.get("frames_with_text") or 0),
+                }
+                item["stage_progress"] = {
+                    "mode": "determinate" if total_units else "indeterminate",
+                    "percent": round(percent, 1) if percent is not None else None,
+                    "completed_units": completed,
+                    "total_units": total_units,
                 }
                 self._persist_locked()
 
@@ -1307,6 +1366,86 @@ class QueueManager:
                             task_failed = True
                         else:
                             raise RuntimeError(frame_result.get("error_message") or "Frame extraction failed.")
+
+                ocr_result: dict = {}
+                if operations.get("ocr") and not task_cancelled and not task_failed:
+                    if self.ocr_processor is None:
+                        raise RuntimeError("OCR service is not configured.")
+                    with self._lock:
+                        self._set_item_stage_locked(item, "ocr_processing", status="ocr_processing")
+                        item["cancel_requested"] = False
+                        plan = item.get("processing_plan") or {}
+                        if isinstance(plan.get("ocr"), dict):
+                            plan["ocr"]["status"] = "running"
+                        self._persist_locked()
+                        item_snapshot = copy.deepcopy(item)
+                        cancel_event = threading.Event()
+                        self._cancel_events[item["index"]] = cancel_event
+                    try:
+                        ocr_result = self.ocr_processor(
+                            item_snapshot,
+                            cancel_event,
+                            self._ocr_progress_callback(item["index"]),
+                        )
+                    except Exception as exc:
+                        ocr_result = {
+                            "status": "failed",
+                            "backend": ((item_snapshot.get("processing_plan") or {}).get("ocr") or {}).get("backend", "easyocr"),
+                            "languages": ((item_snapshot.get("processing_plan") or {}).get("ocr") or {}).get("languages", []),
+                            "frames_processed": 0,
+                            "frames_with_text": 0,
+                            "ocr_time_sec": None,
+                            "sec_per_frame": None,
+                            "jsonl_path": None,
+                            "txt_path": None,
+                            "error_message": str(exc),
+                        }
+                        logger.exception("Queue OCR failed: job_id=%s index=%s", self._job_id, item["index"])
+                    finally:
+                        with self._lock:
+                            self._cancel_events.pop(item["index"], None)
+
+                    with self._lock:
+                        item["ocr_result"] = ocr_result
+                        plan = item.get("processing_plan") or {}
+                        if isinstance(plan.get("ocr"), dict):
+                            plan["ocr"]["status"] = ocr_result.get("status") or "completed"
+                        self._refresh_outputs_locked(item)
+                        self._persist_locked()
+
+                    if ocr_result.get("status") == "cancelled":
+                        with self._lock:
+                            item.update(
+                                {
+                                    "status": "cancelled",
+                                    "error_message": None,
+                                    "technical_details": None,
+                                }
+                            )
+                            self._set_item_stage_locked(item, "cancelled", status="cancelled")
+                            self._refresh_outputs_locked(item)
+                            self._persist_locked()
+                            logger.info(
+                                "Queue OCR cancelled: job_id=%s index=%s frames=%s",
+                                self._job_id,
+                                item["index"],
+                                ocr_result.get("frames_processed"),
+                            )
+                        task_cancelled = True
+                    elif ocr_result.get("status") == "failed":
+                        error_message = ocr_result.get("error_message") or "OCR processing failed."
+                        with self._lock:
+                            item.update(
+                                {
+                                    "status": "error",
+                                    "error_message": error_message,
+                                    "technical_details": error_message,
+                                }
+                            )
+                            self._set_item_stage_locked(item, "failed", status="error")
+                            self._refresh_outputs_locked(item)
+                            self._persist_locked()
+                        task_failed = True
 
                 if not task_cancelled and not task_failed:
                     with self._lock:

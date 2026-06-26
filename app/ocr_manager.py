@@ -74,15 +74,17 @@ class OcrManager:
         if backend is not None and backend not in OCR_BACKEND_IDS:
             raise ValueError("invalid_ocr_backend")
         settings = self.settings()
+        backends = {
+            "tesseract": self.tesseract_status(configured_path),
+            "easyocr": self.easyocr_status(),
+            "paddleocr": self.paddleocr_status(),
+            "windows_ocr": self.windows_ocr_status(),
+        }
+        selected_backend = settings["selected_backend"]
         return {
             "selected_backend": settings["selected_backend"],
-            "backends": {
-                "tesseract": self.tesseract_status(configured_path),
-                "easyocr": self.easyocr_status(),
-                "paddleocr": self.paddleocr_status(),
-                "windows_ocr": self.windows_ocr_status(),
-            },
-            "processing_enabled": False,
+            "backends": backends,
+            "processing_enabled": selected_backend == "easyocr" and bool(backends["easyocr"].get("available")),
         }
 
     def tesseract_status(self, configured_path: str | None | object = _USE_SAVED_PATH) -> dict:

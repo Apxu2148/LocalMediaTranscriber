@@ -477,7 +477,7 @@ class QueueManagerTests(unittest.TestCase):
         self.assertEqual("easyocr", item["processing_plan"]["ocr"]["backend"])
         self.assertEqual(["ru", "en"], item["processing_plan"]["ocr"]["languages"])
         self.assertTrue(item["processing_plan"]["ocr"]["engine_available"])
-        self.assertEqual("coming_soon", item["processing_plan"]["ocr"]["status"])
+        self.assertEqual("disabled", item["processing_plan"]["ocr"]["status"])
         self.assertFalse(item["processing_plan"]["cv"]["enabled"])
         self.assertFalse(item["operations"]["ocr"])
         self.assertFalse(item["operations"]["cv"])
@@ -486,6 +486,152 @@ class QueueManagerTests(unittest.TestCase):
         manager.wait(timeout=3)
 
         self.assertEqual(["placeholder.wav"], processed)
+
+    def test_easyocr_plan_auto_enables_frames(self) -> None:
+        manager = self.make_manager(
+            processor=lambda _item, _model, _device: {},
+            video_metadata_reader=lambda _path: {"duration_sec": 20, "fps": 30, "width": 100, "height": 50},
+        )
+
+        status = manager.add_files([QueueFile(
+            source_path=self.make_file("ocr.mp4").source_path,
+            source_filename="ocr.mp4",
+            processing_plan={
+                "audio": {"enabled": False},
+                "frames": {"enabled": False},
+                "ocr": {"enabled": True, "backend": "easyocr", "engine_available": True, "languages": ["ru", "en"]},
+            },
+        )])
+
+        item = status["items"][0]
+        self.assertTrue(item["processing_plan"]["ocr"]["enabled"])
+        self.assertEqual("pending", item["processing_plan"]["ocr"]["status"])
+        self.assertTrue(item["processing_plan"]["frames"]["enabled"])
+        self.assertTrue(item["operations"]["ocr"])
+        self.assertTrue(item["operations"]["extract_frames"])
+
+    def test_easyocr_runs_after_frame_extraction_and_stores_outputs(self) -> None:
+        calls: list[str] = []
+
+        def frame_processor(item: dict, _cancel_event: threading.Event, _progress) -> dict:
+            calls.append("frames")
+            return {
+                "status": "completed",
+                "completed": True,
+                "frames_dir": f"{item['output_base']}__frames",
+                "frames_path": f"data/recordings/{item['output_base']}__frames",
+                "frames_index_path": f"data/recordings/{item['output_base']}__frames/frames_index.json",
+                "estimated_frame_count": 2,
+                "extracted_frame_count": 2,
+            }
+
+        def ocr_processor(item: dict, _cancel_event: threading.Event, progress) -> dict:
+            calls.append("ocr")
+            self.assertTrue(item["frames_index_path"].endswith("frames_index.json"))
+            progress({"status": "running", "backend": "easyocr", "languages": ["ru", "en"], "frames_processed": 1, "frames_total": 2, "frames_with_text": 1})
+            return {
+                "status": "completed",
+                "backend": "easyocr",
+                "languages": ["ru", "en"],
+                "frames_processed": 2,
+                "frames_with_text": 1,
+                "ocr_time_sec": 0.5,
+                "sec_per_frame": 0.25,
+                "jsonl_path": "data/recordings/clip__frames/frames_ocr.jsonl",
+                "txt_path": "data/recordings/clip__frames/frames_ocr.txt",
+            }
+
+        manager = self.make_manager(
+            processor=lambda _item, _model, _device: {},
+            frame_processor=frame_processor,
+            ocr_processor=ocr_processor,
+            duration_reader=lambda _path: 10,
+            video_metadata_reader=lambda _path: {"duration_sec": 10, "fps": 30, "width": 100, "height": 50},
+        )
+        manager.add_files([QueueFile(
+            source_path=self.make_file("clip.mp4").source_path,
+            source_filename="clip.mp4",
+            processing_plan={
+                "audio": {"enabled": False},
+                "frames": {"enabled": True},
+                "ocr": {"enabled": True, "backend": "easyocr", "engine_available": True, "languages": ["ru", "en"]},
+            },
+        )])
+
+        manager.start("small")
+        manager.wait(timeout=3)
+
+        item = manager.status()["items"][0]
+        self.assertEqual(["frames", "ocr"], calls)
+        self.assertEqual("completed", item["status"])
+        self.assertEqual(2, item["ocr_result"]["frames_processed"])
+        self.assertEqual("completed", item["processing_plan"]["ocr"]["status"])
+        self.assertIn("ocr_jsonl_path", item["outputs"])
+        self.assertIn("ocr_txt_path", item["outputs"])
+
+    def test_running_ocr_can_be_cancelled_and_queue_continues(self) -> None:
+        ocr_started = threading.Event()
+        processed: list[str] = []
+
+        def processor(item: dict, _model: str, _device: str) -> dict:
+            processed.append(item["source_filename"])
+            return {"processing_time_sec": 1}
+
+        def frame_processor(item: dict, _cancel_event: threading.Event, _progress) -> dict:
+            return {
+                "status": "completed",
+                "completed": True,
+                "frames_dir": f"{item['output_base']}__frames",
+                "frames_path": f"data/recordings/{item['output_base']}__frames",
+                "frames_index_path": f"data/recordings/{item['output_base']}__frames/frames_index.json",
+                "estimated_frame_count": 3,
+                "extracted_frame_count": 3,
+            }
+
+        def ocr_processor(_item: dict, cancel_event: threading.Event, _progress) -> dict:
+            ocr_started.set()
+            cancel_event.wait(timeout=3)
+            return {
+                "status": "cancelled",
+                "backend": "easyocr",
+                "languages": ["ru", "en"],
+                "frames_processed": 1,
+                "frames_with_text": 1,
+                "ocr_time_sec": 0.2,
+                "sec_per_frame": 0.2,
+                "jsonl_path": "data/recordings/cancel__frames/frames_ocr.jsonl",
+                "txt_path": "data/recordings/cancel__frames/frames_ocr.txt",
+            }
+
+        manager = self.make_manager(
+            processor=processor,
+            frame_processor=frame_processor,
+            ocr_processor=ocr_processor,
+            duration_reader=lambda _path: 10,
+            video_metadata_reader=lambda _path: {"duration_sec": 10, "fps": 30, "width": 100, "height": 50},
+        )
+        status = manager.add_files([
+            QueueFile(
+                source_path=self.make_file("cancel.mp4").source_path,
+                source_filename="cancel.mp4",
+                processing_plan={
+                    "audio": {"enabled": False},
+                    "frames": {"enabled": True},
+                    "ocr": {"enabled": True, "backend": "easyocr", "engine_available": True},
+                },
+            ),
+            self.make_file("after.wav"),
+        ])
+
+        manager.start("small")
+        self.assertTrue(ocr_started.wait(timeout=2))
+        cancelling = manager.cancel_item(status["items"][0]["index"])
+        self.assertEqual("cancelling", cancelling["current_item"]["stage"])
+        manager.wait(timeout=3)
+
+        final = manager.status()
+        self.assertEqual(["cancelled", "completed"], [item["status"] for item in final["items"]])
+        self.assertEqual(["after.wav"], processed)
 
     def test_duplicate_pending_file_add_is_ignored(self) -> None:
         manager = self.make_manager(processor=lambda _item, _model, _device: {})

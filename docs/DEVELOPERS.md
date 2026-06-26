@@ -149,13 +149,13 @@ Safe deletion rules:
 - Never delete the user's original local file outside the project data folder.
 - If a path is ambiguous, outside the expected known folder, missing, locked, or otherwise unsafe, do not delete it; return an error marker where appropriate.
 
-Future OCR/CV cleanup should extend the same model with explicit artifact keys and dedicated cleanup controls. Expected future artifacts include `ocr_timeline.json` and `ocr_text.txt`, but OCR is not implemented yet.
+EasyOCR frame OCR artifacts are created under extracted frame folders and are not part of retention cleanup. Future cleanup controls for OCR/CV should use explicit artifact keys and the same safe-path rules.
 
 ### `app/ocr_manager.py`
 
-OCR backend catalog, readiness detection, and settings service for Stage 1.1b.
+OCR backend catalog, readiness detection, and settings service.
 
-`GET /api/ocr/status` and `POST /api/ocr/check` return a combined payload with `selected_backend`, `processing_enabled=false`, and a `backends` object keyed by `tesseract`, `easyocr`, `paddleocr`, and `windows_ocr`. Each backend record has stable `id`, `name`, `type`, `available`, `status`, `version`, `languages`, and `notes` fields. Tesseract additionally retains `path`, `configured_path`, `error`, `has_rus`, and `has_eng` diagnostics.
+`GET /api/ocr/status` and `POST /api/ocr/check` return a combined payload with `selected_backend`, `processing_enabled`, and a `backends` object keyed by `tesseract`, `easyocr`, `paddleocr`, and `windows_ocr`. `processing_enabled` is true only when the selected backend is `easyocr` and EasyOCR is importable. Each backend record has stable `id`, `name`, `type`, `available`, `status`, `version`, `languages`, and `notes` fields. Tesseract additionally retains `path`, `configured_path`, `error`, `has_rus`, and `has_eng` diagnostics.
 
 Detection is intentionally lightweight:
 
@@ -176,9 +176,26 @@ Settings schema:
 }
 ```
 
-`POST /api/ocr/settings` persists the selected backend, Tesseract path, and Tesseract default languages while preserving unrelated settings sections. Unknown backend IDs are rejected when saving; an unknown ID found in an older/corrupt settings file safely falls back to Tesseract. Tesseract uses `rus`/`eng` identifiers, while EasyOCR plans use `ru`/`en`; Stage 1.1b intentionally does not add a broader language-normalization layer.
+`POST /api/ocr/settings` persists the selected backend, Tesseract path, and default languages while preserving unrelated settings sections. Unknown backend IDs are rejected when saving; an unknown ID found in an older/corrupt settings file safely falls back to Tesseract. Tesseract uses `rus`/`eng` identifiers, while EasyOCR plans use `ru`/`en`; Stage 1.1c intentionally keeps language handling narrow to EasyOCR `["ru", "en"]`.
 
-Stage 1.1b intentionally does not read images, invoke OCR on frames, create OCR artifacts, estimate OCR runtime, or add OCR cancellation. Processing plans snapshot the selected backend as `ocr.backend` (and retain `ocr.engine` as a compatibility alias), but queue normalization still forces `ocr.enabled=false` and `status=coming_soon`. Stage 1.1c should implement OCR over extracted frames with explicit artifacts, queue execution, estimates, and cancellation.
+Readiness checks must stay lightweight. They must not construct `easyocr.Reader`, invoke PaddleOCR models, or call Windows OCR APIs beyond import checks.
+
+### `app/ocr_processor.py`
+
+Executable EasyOCR processor for extracted frame folders.
+
+Key behavior:
+
+- Keeps EasyOCR optional at import time. If the `easyocr` module is missing, startup still succeeds and requested OCR fails with a controlled `OcrProcessorError`.
+- Reads `frames_index.json` from an existing frame folder and processes only frame files already listed there.
+- Uses EasyOCR languages `["ru", "en"]` for this stage.
+- Initializes `easyocr.Reader` lazily only inside processing, never during readiness/status calls.
+- Checks cancellation between frames and reports progress through the queue callback.
+- Records frame-level errors in OCR output records instead of aborting the whole item for a single bad frame.
+- Writes `frames_ocr.jsonl` and `frames_ocr.txt` beside `frames_index.json`.
+- Returns benchmark metadata: `frames_processed`, `frames_with_text`, `ocr_time_sec`, and `sec_per_frame`.
+
+JSONL records include `frame_index`, relative `frame_path`, `timestamp_sec`, `engine`, `languages`, joined `text`, `blocks`, `duration_sec`, and optional `error`. TXT output includes only frames with recognized text or frame-level OCR errors, grouped by frame header.
 
 ### `app/audio_recorder.py`
 
@@ -424,15 +441,15 @@ Key behavior:
 - Marks local `.mp4`, `.webm`, `.mkv`, `.avi`, and `.mov` sources as video items.
 - Creates one job JSON under `data\jobs`.
 - Processes items sequentially in one worker thread.
-- Supports stop-after-current, clear, retry failed items, pending-item removal, running transcription/frame-extraction cancellation, status snapshots, elapsed time, ETA, and persistent job snapshots.
+- Supports stop-after-current, clear, retry failed items, pending-item removal, running transcription/frame-extraction/OCR cancellation, status snapshots, elapsed time, ETA, and persistent job snapshots.
 - Treat the queue as a media processing queue, not only a transcription queue.
-- Current executable operations are `transcribe_audio` and `extract_frames`.
+- Current executable operations are `transcribe_audio`, `extract_frames`, and EasyOCR frame OCR when the selected backend is available.
 - URL items are created as media processing items. By default they transcribe audio, keep frame extraction off, and carry default frame extraction settings for later opt-in when no frontend processing plan is supplied.
-- Visible but disabled future operations are `ocr` and `cv`.
+- CV remains a visible but disabled future operation. PaddleOCR and Windows OCR are readiness-only and do not run queue OCR.
 - Queue item status remains the behavior switch for existing logic. Stage fields are a small UI/status model layered on top: `stage`, `stage_label_key`, and `stage_detail`.
-- Current stage IDs are `idle`, `waiting_download`, `preparing_source`, `downloading_media`, `downloading_video`, `cancelling_download`, `download_cancelled`, `download_failed`, `transcribing_audio`, `cancelling_transcription`, `extracting_frames`, `cancelling`, `completed`, `failed`, and `cancelled`.
-- Active items expose one `stage_progress` object. `mode` is `determinate`, `indeterminate`, or `none`; determinate downloads may include percent/bytes/speed/ETA, and frame extraction may include completed/total units. Transcription stays indeterminate because the backend has no reliable segment total.
-- Future reserved stage IDs are `ocr_pending_future`, `cv_pending_future`, and `media_index_pending_future`; they are labels only and must not imply OCR/CV/media-index implementation.
+- Current stage IDs are `idle`, `waiting_download`, `preparing_source`, `downloading_media`, `downloading_video`, `cancelling_download`, `download_cancelled`, `download_failed`, `transcribing_audio`, `cancelling_transcription`, `extracting_frames`, `ocr_processing`, `cancelling`, `completed`, `failed`, and `cancelled`.
+- Active items expose one `stage_progress` object. `mode` is `determinate`, `indeterminate`, or `none`; determinate downloads may include percent/bytes/speed/ETA, and frame extraction/OCR may include completed/total units. Transcription stays indeterminate because the backend has no reliable segment total.
+- Future reserved stage IDs are `ocr_pending_future`, `cv_pending_future`, and `media_index_pending_future`; only `ocr_processing` indicates real OCR work in this stage.
 - Stores each item's actual processing plan in `processing_plan`. The current schema has `audio.enabled/model/device`, `frames.enabled/rate/interval_sec/jpeg_quality/max_frame_size`, `url_download.format_profile/custom_format/max_video_height/log_media_probe/log_extraction_benchmark/status`, `ocr.enabled/backend/engine/languages/status/engine_available`, and `cv.enabled/engine/status`.
 - Default processing settings are frontend state for now. The frontend sends a snapshot with each add-files/add-recordings/add-urls request, so defaults apply only to newly added items.
 - Pending item edits update the item plan. Precedence is per-item `processing_plan` over defaults; legacy `operations` and `frame_extraction` are synchronized compatibility fields.
@@ -441,9 +458,10 @@ Key behavior:
 - The runtime Model/Device/Compute type/Speed cards have one frontend renderer. During audio transcription they use the current item's audio plan plus matching resolved transcriber values; during non-audio queue stages they show not applicable, and while idle they show idle.
 - Old queue items without `processing_plan` remain valid. The worker falls back to the queue start model/device and legacy operation/frame fields.
 - Stores per-item operation choices in `operations`: `transcribe_audio`, `extract_frames`, `ocr`, and `cv`.
-- Keeps OCR and CV as no-op placeholders in the backend. Incoming OCR/CV enabled flags are normalized back to disabled with `status=coming_soon`; OCR may additionally snapshot `engine_available` for readiness display without triggering work.
+- Normalizes OCR to enabled only for video/URL items with `backend=easyocr`; enabling OCR also enables frame extraction in both `processing_plan.frames.enabled` and legacy `operations.extract_frames`.
+- Keeps CV as a no-op placeholder in the backend. Incoming CV enabled flags are normalized back to disabled with `status=coming_soon`.
 - Stores per-item frame settings in `frame_extraction`: extraction rate, JPEG quality, max frame size, estimates, warning flag, and latest extraction result. `frame_extraction.max_frame_size` is a compatibility mirror of `processing_plan.frames.max_frame_size`.
-- Stores terminal output metadata in `outputs`: transcript path/existence, diagnostic JSON path/existence, frame folder path/existence, frame index path/existence, downloaded URL media path/existence/deleted marker, uploaded temp path/existence/deleted marker, and retention cleanup error markers.
+- Stores terminal output metadata in `outputs`: transcript path/existence, diagnostic JSON path/existence, frame folder path/existence, frame index path/existence, OCR JSONL/TXT path/existence, downloaded URL media path/existence/deleted marker, uploaded temp path/existence/deleted marker, and retention cleanup error markers.
 - Calls the optional `retention_cleaner` after active work stops for terminal URL items and fully successful local items. Failed/cancelled URL downloads follow the keep-download setting; failed/cancelled local items retain their inputs.
 - Uses callbacks supplied by `app/main.py` to download URLs, transcribe files, extract frames, estimate runtimes, and record errors.
 
@@ -455,7 +473,7 @@ Stage labels are frontend-localized through `static/i18n.js`. Backend snapshots 
 
 Add-button safety lives primarily in `static/app.js`. The UI keeps `isAddingFile`, `isAddingUrl`, `isAddingRecording`, and `pendingAddKeys` guards so repeated clicks during a slow backend response do not enqueue duplicates. Browser file keys use file name, size, and `lastModified`; URL keys use normalized URL text; latest-recording keys use source type plus saved audio path. The backend also ignores active duplicate source paths and normalized URL adds as a secondary guard. Controls must be re-enabled in `finally` paths after success or failure.
 
-Output artifacts are a compatibility layer, not a replacement for existing top-level result fields. Keep `transcript_path`, `json_path`, `frames_path`, `frames_index_path`, and downloaded media fields on the item for older code. Use `outputs` for user-facing artifact display and future artifact extensions. Future OCR should add keys such as `ocr_timeline_path`, `ocr_text_path`, and matching existence/deleted markers without changing existing transcript/frame keys.
+Output artifacts are a compatibility layer, not a replacement for existing top-level result fields. Keep `transcript_path`, `json_path`, `frames_path`, `frames_index_path`, and downloaded media fields on the item for older code. Use `outputs` for user-facing artifact display and future artifact extensions. EasyOCR adds `ocr_jsonl_path`, `ocr_jsonl_exists`, `ocr_txt_path`, and `ocr_txt_exists` without changing existing transcript/frame keys.
 
 ### `app/runtime_estimate.py`
 
@@ -917,12 +935,13 @@ URL source
   -> transcript in data/transcripts
   -> frames folder in data/recordings/<base>__frames
   -> frames_index.json
-  -> future ocr_timeline.json
+  -> frames_ocr.jsonl
+  -> frames_ocr.txt
   -> future cv_timeline.json
   -> future combined media index
 ```
 
-URL frame indexes can include `source_type`, `source_url`, source title/platform, and downloaded media paths when that metadata is available. Direct URL extension detection ignores query strings, so `video.mp4?token=abc` is treated as a direct `.mp4` file. If transcription succeeds and frame extraction fails, the transcript path remains on the queue item. If transcription fails but frame extraction was selected, the worker still attempts frame extraction and preserves frame outputs if they succeed. OCR, CV, cookies/authentication, playlists, per-URL format listing, and forced remux/recoding remain non-goals.
+URL frame indexes can include `source_type`, `source_url`, source title/platform, and downloaded media paths when that metadata is available. Direct URL extension detection ignores query strings, so `video.mp4?token=abc` is treated as a direct `.mp4` file. If transcription succeeds and frame extraction fails, the transcript path remains on the queue item. If transcription fails but frame extraction was selected, the worker still attempts frame extraction and preserves frame outputs if they succeed. OCR beyond EasyOCR-over-extracted-frames, CV, cookies/authentication, playlists, per-URL format listing, and forced remux/recoding remain non-goals.
 
 Manual cancellation checklist:
 
@@ -930,6 +949,7 @@ Manual cancellation checklist:
 - Cancelling a long transcription shows `cancelling_transcription`, then a cancelled item with a partial transcript marker when text was recognized.
 - After cancelling the first of two queued items, the second pending item runs normally.
 - Frame extraction cancellation still preserves partial frames and cancelled index metadata.
+- EasyOCR cancellation stops between frames and may keep complete OCR JSONL/TXT output for frames processed before cancellation.
 - Cancelling a direct or `yt-dlp` download shows `cancelling_download`, removes downloader-owned partial files, marks the item `download_cancelled`, and continues to the next pending item.
 - URL transcription can be cancelled after download when the item is in transcription.
 

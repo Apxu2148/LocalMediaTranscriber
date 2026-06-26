@@ -115,6 +115,7 @@ const defaultFramesEnabled = document.querySelector("#defaultFramesEnabled");
 const defaultFrameRateSelect = document.querySelector("#defaultFrameRateSelect");
 const defaultJpegQualitySelect = document.querySelector("#defaultJpegQualitySelect");
 const defaultFrameMaxSizeSelect = document.querySelector("#defaultFrameMaxSizeSelect");
+const defaultOcrEnabled = document.querySelector("#defaultOcrEnabled");
 const urlDownloadProfileSelect = document.querySelector("#urlDownloadProfileSelect");
 const urlDownloadMaxVideoHeightSelect = document.querySelector("#urlDownloadMaxVideoHeightSelect");
 const urlDownloadCustomField = document.querySelector("#urlDownloadCustomField");
@@ -1297,7 +1298,7 @@ function renderRuntimeDetails() {
         device: notApplicable,
         compute: notApplicable,
         speed: notApplicable,
-      }, stage === "extracting_frames" ? "statusExtractingFrames" : "statusNotApplicable");
+      }, stage === "extracting_frames" ? "statusExtractingFrames" : stage === "ocr_processing" ? "statusOcrProcessing" : "statusNotApplicable");
       return;
     }
 
@@ -1746,6 +1747,17 @@ function ocrBackendNoteKeys(backend) {
   return keys;
 }
 
+function selectedOcrBackendStatus() {
+  const backend = ocrBackendSelect.value || latestOcrStatus?.selected_backend || "tesseract";
+  return latestOcrStatus?.backends?.[backend] || {};
+}
+
+function easyOcrActionable() {
+  const backend = ocrBackendSelect.value || latestOcrStatus?.selected_backend || "tesseract";
+  const backendStatus = latestOcrStatus?.backends?.[backend] || {};
+  return backend === "easyocr" && Boolean(backendStatus.available);
+}
+
 function renderOcrStatus(status, { syncConfiguredPath = false, syncSelectedBackend = false } = {}) {
   latestOcrStatus = status;
   if (syncSelectedBackend) {
@@ -1771,8 +1783,14 @@ function renderOcrStatus(status, { syncConfiguredPath = false, syncSelectedBacke
   ocrPathStatusRow.hidden = !showTesseractFields;
   ocrTesseractFields.hidden = !showTesseractFields;
   ocrBackendNotes.textContent = ocrBackendNoteKeys(backend).map((key) => t(key)).join(" ");
-  if (available) {
-    setLocalizedOutput(ocrStatusMessage, "ocrNextStage", {}, "info");
+  if (!easyOcrActionable()) {
+    defaultOcrEnabled.checked = false;
+  }
+  updateLongOperationControls();
+  if (available && selectedBackend === "easyocr") {
+    setLocalizedOutput(ocrStatusMessage, "ocrReadyForProcessing", {}, "success");
+  } else if (available) {
+    setLocalizedOutput(ocrStatusMessage, "ocrProcessingEasyOcrOnly", {}, "info");
   } else if (backend.id === "tesseract" && backend.status === "not_found") {
     setLocalizedOutput(ocrStatusMessage, "ocrInstallHint", {}, "warning");
   } else if (warningStatuses.has(backend.status)) {
@@ -1831,7 +1849,7 @@ async function saveOcrSettings() {
       body: JSON.stringify({
         selected_backend: ocrBackendSelect.value,
         tesseract_path: ocrPathInput.value.trim() || null,
-        default_languages: ["rus", "eng"],
+        default_languages: ocrBackendSelect.value === "easyocr" ? ["ru", "en"] : ["rus", "eng"],
       }),
     });
     renderOcrStatus(result.status, { syncConfiguredPath: true, syncSelectedBackend: true });
@@ -2497,6 +2515,7 @@ function queueStatusLabel(status) {
     analyzing: t("statusAnalyzing"),
     extracting_audio: t("statusExtracting"),
     extracting_frames: t("statusExtractingFrames"),
+    ocr_processing: t("statusOcrProcessing"),
     transcribing: t("statusTranscribing"),
     completed: t("statusCompleted"),
     error: t("statusError"),
@@ -2519,6 +2538,7 @@ function queueStageKey(stage) {
     download_failed: "queueStageDownloadFailed",
     transcribing_audio: "queueStageTranscribingAudio",
     extracting_frames: "queueStageExtractingFrames",
+    ocr_processing: "queueStageOcrProcessing",
     cancelling_transcription: "queueStageCancellingTranscription",
     cancelling: "queueStageCancelling",
     completed: "queueStageCompleted",
@@ -2539,6 +2559,7 @@ function queueStageFromStatus(status) {
     extracting_audio: "transcribing_audio",
     transcribing: "transcribing_audio",
     extracting_frames: "extracting_frames",
+    ocr_processing: "ocr_processing",
     completed: "completed",
     error: "failed",
     failed: "failed",
@@ -2885,6 +2906,7 @@ function processingPlanFromValues({
   jpegQuality,
   maxFrameSize,
   urlDownload,
+  ocrEnabled,
   ocrBackend,
   ocrLanguages,
   ocrEngineAvailable,
@@ -2892,6 +2914,9 @@ function processingPlanFromValues({
   const backend = ocrBackend || latestOcrStatus?.selected_backend || "tesseract";
   const backendStatus = latestOcrStatus?.backends?.[backend];
   const downloadSettings = urlDownload || latestUrlDownloadSettings;
+  const easyOcrReady = backend === "easyocr" && Boolean(ocrEngineAvailable ?? backendStatus?.available);
+  const normalizedOcrEnabled = Boolean(ocrEnabled) && easyOcrReady;
+  const normalizedFramesEnabled = Boolean(framesEnabled) || normalizedOcrEnabled;
   return {
     audio: {
       enabled: Boolean(audioEnabled),
@@ -2899,7 +2924,7 @@ function processingPlanFromValues({
       device: device || selectedDevice(),
     },
     frames: {
-      enabled: Boolean(framesEnabled),
+      enabled: normalizedFramesEnabled,
       rate: frameRate,
       interval_sec: frameRate?.mode === "interval" ? frameRate.seconds : null,
       jpeg_quality: Number(jpegQuality || 75),
@@ -2914,11 +2939,11 @@ function processingPlanFromValues({
       status: "pending",
     },
     ocr: {
-      enabled: false,
+      enabled: normalizedOcrEnabled,
       backend,
       engine: backend,
       languages: ocrLanguages || (backend === "tesseract" ? ["rus", "eng"] : ["ru", "en"]),
-      status: "coming_soon",
+      status: normalizedOcrEnabled ? "pending" : easyOcrReady ? "available" : "unavailable",
       engine_available: Boolean(ocrEngineAvailable ?? backendStatus?.available),
     },
     cv: {
@@ -2939,6 +2964,7 @@ function defaultProcessingPlanSnapshot() {
     jpegQuality: defaultJpegQualitySelect.value || "75",
     maxFrameSize: defaultFrameMaxSizeSelect.value || latestFrameSettings.max_frame_size || "original",
     urlDownload: urlDownloadSettingsFromControls(),
+    ocrEnabled: defaultOcrEnabled.checked && !defaultOcrEnabled.disabled,
     ocrBackend: ocrBackendSelect.value || latestOcrStatus?.selected_backend,
   });
 }
@@ -2958,6 +2984,7 @@ function processingPlanForQueueItem(queueItem) {
     jpegQuality: frames.jpeg_quality || frameSettings.jpeg_quality || 90,
     maxFrameSize: frames.max_frame_size || frameSettings.max_frame_size || "original",
     urlDownload: plan.url_download,
+    ocrEnabled: plan.ocr?.enabled ?? operations.ocr ?? false,
     ocrBackend: plan.ocr?.backend || plan.ocr?.engine,
     ocrLanguages: plan.ocr?.languages,
     ocrEngineAvailable: plan.ocr?.engine_available,
@@ -2991,6 +3018,16 @@ function urlDownloadProfileLabel(profile) {
     audio_friendly: "urlDownloadProfileAudioFriendly",
     custom: "urlDownloadProfileCustom",
   }[profile] || "urlDownloadProfileAuto";
+  return t(key);
+}
+
+function ocrBackendLabel(backend) {
+  const key = {
+    tesseract: "ocrEngineTesseract",
+    easyocr: "ocrEngineEasyOcr",
+    paddleocr: "ocrEnginePaddleOcr",
+    windows_ocr: "ocrEngineWindowsOcr",
+  }[backend] || "ocrEngineLabel";
   return t(key);
 }
 
@@ -3082,7 +3119,13 @@ function createProcessingPlanSummary(queueItem) {
         ? `${frameRateLabel(plan.frames.rate)} / JPEG ${plan.frames.jpeg_quality}% / ${frameMaxSizeLabel(plan.frames.max_frame_size)}`
         : t("disabled"),
     })),
-    textLine(t("processingPlanOcr", { value: `${t("disabled")} / ${t("comingSoon")}` })),
+    textLine(t("processingPlanOcr", {
+      value: plan.ocr.enabled
+        ? `${ocrBackendLabel(plan.ocr.backend)} / ${(plan.ocr.languages || []).join(", ")}`
+        : plan.ocr.backend === "easyocr" && plan.ocr.engine_available
+          ? t("disabled")
+          : `${t("disabled")} / ${t("comingSoon")}`,
+    })),
     textLine(t("processingPlanCv", { value: `${t("disabled")} / ${t("comingSoon")}` })),
   );
   if (queueItem.source_type === "url") {
@@ -3267,6 +3310,24 @@ function createAudioPlanSettings(queueItem, disabled) {
   return wrapper;
 }
 
+function createOcrPlanSettings(queueItem, disabled) {
+  const plan = processingPlanForQueueItem(queueItem);
+  const wrapper = document.createElement("div");
+  wrapper.className = "queue-ocr-settings";
+  const actionable = queueItemIsVideo(queueItem) && plan.ocr.backend === "easyocr" && Boolean(plan.ocr.engine_available);
+  const ocrToggle = createQueueCheckbox("ocr", plan.ocr.enabled, disabled || !actionable, "ocr");
+  if (!actionable) {
+    ocrToggle.classList.add("queue-option-disabled");
+  }
+  const note = document.createElement("p");
+  note.className = "section-note";
+  note.textContent = actionable
+    ? t("ocrRunsOnExtractedFrames")
+    : t(plan.ocr.backend === "easyocr" ? "ocrEasyOcrMissing" : "ocrProcessingEasyOcrOnly");
+  wrapper.append(ocrToggle, note);
+  return wrapper;
+}
+
 function createUrlDownloadSettings(queueItem, disabled) {
   const plan = processingPlanForQueueItem(queueItem);
   const wrapper = document.createElement("div");
@@ -3435,6 +3496,8 @@ function queueItemArtifactLines(queueItem) {
   addLine(artifactPathLine("diagnosticJsonArtifactPath", outputs.json_path, outputs.json_exists));
   addLine(artifactPathLine("framesArtifactPath", outputs.frames_dir, outputs.frames_dir_exists));
   addLine(artifactPathLine("framesIndexArtifactPath", outputs.frames_index_path, outputs.frames_index_exists));
+  addLine(artifactPathLine("ocrJsonlArtifactPath", outputs.ocr_jsonl_path, outputs.ocr_jsonl_exists));
+  addLine(artifactPathLine("ocrTxtArtifactPath", outputs.ocr_txt_path, outputs.ocr_txt_exists));
 
   if (outputs.downloaded_media_deleted) {
     lines.push(t("downloadedMediaDeleted"));
@@ -3536,7 +3599,8 @@ function createQueueItemElement(queueItem, status) {
     && !cancellationPending
     && ["extracting_audio", "transcribing"].includes(queueItem.status);
   const canCancelFrameExtraction = isCurrent && !cancellationPending && queueItem.status === "extracting_frames";
-  const canCancel = canCancelDownload || canCancelTranscription || canCancelFrameExtraction;
+  const canCancelOcr = isCurrent && !cancellationPending && queueItem.status === "ocr_processing";
+  const canCancel = canCancelDownload || canCancelTranscription || canCancelFrameExtraction || canCancelOcr;
   const currentButCannotCancel = isCurrent && !canCancel && status.status === "running";
   if (canRemove || canCancel || currentButCannotCancel) {
     const actionButton = document.createElement("button");
@@ -3562,6 +3626,8 @@ function createQueueItemElement(queueItem, status) {
       : canCancelTranscription
       ? t("transcriptionCancelAfterSegment")
       : canCancelFrameExtraction
+        ? t("cancelCurrentItem")
+      : canCancelOcr
         ? t("cancelCurrentItem")
       : currentButCannotCancel
         ? t("runningItemCannotCancel")
@@ -3607,13 +3673,13 @@ function createQueueItemElement(queueItem, status) {
   );
   if (queueItemIsVideo(queueItem)) {
     optionControls.append(
-      createQueueCheckbox("extractFrames", options.extract_frames, controlsDisabled, "extract_frames"),
+      createQueueCheckbox("extractFrames", options.extract_frames, controlsDisabled || Boolean(options.ocr), "extract_frames"),
       createFrameSettings(queueItem, controlsDisabled),
-      createComingSoonOption("ocr"),
+      createOcrPlanSettings(queueItem, controlsDisabled),
       createComingSoonOption("cv"),
     );
   } else {
-    optionControls.append(createComingSoonOption("ocr"), createComingSoonOption("cv"));
+    optionControls.append(createOcrPlanSettings(queueItem, true), createComingSoonOption("cv"));
   }
   optionControls.append(createRuntimeEstimate(queueItem, status));
   optionGroup.append(optionSummary, optionControls);
@@ -3722,6 +3788,13 @@ function renderQueue(status, options = {}) {
   queueRetryButton.disabled = queueActive || failed === 0;
   whisperModelSelect.disabled = queueActive || !defaultAudioEnabled.checked;
   whisperDeviceSelect.disabled = queueActive || !defaultAudioEnabled.checked;
+  defaultOcrEnabled.disabled = queueActive || !easyOcrActionable();
+  if (defaultOcrEnabled.disabled) {
+    defaultOcrEnabled.checked = false;
+  }
+  if (defaultOcrEnabled.checked) {
+    defaultFramesEnabled.checked = true;
+  }
   transcribeButton.disabled = queueActive || isTranscribing || hasAddingInProgress();
   setRecordingUi(isRecording);
   updateRecordingTranscribeActions(lastRecordings);
@@ -3802,9 +3875,12 @@ function collectQueueItemPayload(card) {
   const operations = {
     transcribe_audio: card.querySelector('[data-queue-operation="transcribe_audio"]')?.checked ?? true,
     extract_frames: card.querySelector('[data-queue-operation="extract_frames"]')?.checked ?? false,
-    ocr: false,
+    ocr: card.querySelector('[data-queue-operation="ocr"]')?.checked ?? false,
     cv: false,
   };
+  if (operations.ocr) {
+    operations.extract_frames = true;
+  }
   const modelSelect = card.querySelector("[data-queue-audio-model]");
   const deviceSelect = card.querySelector("[data-queue-audio-device]");
   const rateSelect = card.querySelector("[data-queue-frame-rate]");
@@ -3827,6 +3903,7 @@ function collectQueueItemPayload(card) {
     jpegQuality,
     maxFrameSize,
     urlDownload: urlDownloadPlan,
+    ocrEnabled: operations.ocr,
     ocrBackend: card.dataset.ocrBackend,
     ocrLanguages: JSON.parse(card.dataset.ocrLanguages || "null") || undefined,
     ocrEngineAvailable: card.dataset.ocrEngineAvailable === "true",
@@ -3954,7 +4031,8 @@ function validateQueueStartOptions() {
     return item.status === "pending"
       && (queueItemIsVideo(item) || item.media_kind === "audio")
       && !operations.transcribe_audio
-      && !operations.extract_frames;
+      && !operations.extract_frames
+      && !operations.ocr;
   });
   if (!invalid) {
     return true;
@@ -3989,7 +4067,14 @@ function updateLongOperationControls() {
   queueUrlAddButton.disabled = urlAddBlocked;
   queueUrlInput.disabled = urlAddBlocked;
   defaultAudioEnabled.disabled = active;
-  defaultFramesEnabled.disabled = active;
+  defaultOcrEnabled.disabled = active || !easyOcrActionable();
+  if (defaultOcrEnabled.disabled) {
+    defaultOcrEnabled.checked = false;
+  }
+  if (defaultOcrEnabled.checked) {
+    defaultFramesEnabled.checked = true;
+  }
+  defaultFramesEnabled.disabled = active || defaultOcrEnabled.checked;
   defaultFrameRateSelect.disabled = active || !defaultFramesEnabled.checked;
   defaultJpegQualitySelect.disabled = active || !defaultFramesEnabled.checked;
   defaultFrameMaxSizeSelect.disabled = active || !defaultFramesEnabled.checked;
@@ -4162,8 +4247,11 @@ whisperModelSelect.addEventListener("change", () => {
   renderRuntimeDetails();
 });
 whisperDeviceSelect.addEventListener("change", updateQueueSettingsSummary);
-for (const control of [defaultAudioEnabled, defaultFramesEnabled, defaultFrameRateSelect, defaultJpegQualitySelect, defaultFrameMaxSizeSelect]) {
+for (const control of [defaultAudioEnabled, defaultFramesEnabled, defaultFrameRateSelect, defaultJpegQualitySelect, defaultFrameMaxSizeSelect, defaultOcrEnabled]) {
   control.addEventListener("change", () => {
+    if (defaultOcrEnabled.checked) {
+      defaultFramesEnabled.checked = true;
+    }
     updateLongOperationControls();
     updateQueueSettingsSummary();
     if (control === defaultFrameMaxSizeSelect) {

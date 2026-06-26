@@ -22,6 +22,7 @@ from .frame_extractor import VideoFrameExtractor
 from .frame_settings_manager import FrameSettingsManager
 from .model_manager import WhisperModelManager
 from .ocr_manager import OcrManager
+from .ocr_processor import process_easyocr_frames
 from .queue_manager import QueueFile, QueueManager, QueueUrl
 from .runtime_estimate import RuntimeEstimator
 from .screen_recorder import (
@@ -271,6 +272,23 @@ def process_queue_frame_extraction(item: dict, cancel_event: threading.Event, pr
     )
 
 
+def process_queue_ocr(item: dict, cancel_event: threading.Event, progress_callback) -> dict:
+    ocr_plan = (item.get("processing_plan") or {}).get("ocr") or {}
+    backend = str(ocr_plan.get("backend") or ocr_plan.get("engine") or "").strip().lower()
+    if backend != "easyocr":
+        raise RuntimeError(f"OCR backend is not implemented for processing in this stage: {backend or 'unknown'}")
+    frame_result = item.get("frame_extraction_result") or (item.get("frame_extraction") or {}).get("result") or {}
+    frames_index_path = frame_result.get("frames_index_path") or item.get("frames_index_path")
+    frames_path = frame_result.get("frames_path") or item.get("frames_path")
+    return process_easyocr_frames(
+        frames_index_path=frames_index_path,
+        frames_path=frames_path,
+        languages=ocr_plan.get("languages") or ["ru", "en"],
+        cancel_event=cancel_event,
+        progress_callback=progress_callback,
+    )
+
+
 def process_runtime_estimate_audio(sample_path: Path, model_name: str, device_preference: str) -> dict:
     result = transcriber.transcribe(sample_path, model_name, device_preference)
     return {
@@ -324,6 +342,7 @@ queue_manager = QueueManager(
     downloader=url_downloader.download,
     video_downloader=url_downloader.download_video,
     frame_processor=process_queue_frame_extraction,
+    ocr_processor=process_queue_ocr,
     retention_cleaner=storage_manager.apply_retention_cleanup,
     estimate_processor=runtime_estimator.estimate,
 )

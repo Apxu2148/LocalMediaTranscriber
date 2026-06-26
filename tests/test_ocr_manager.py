@@ -240,6 +240,34 @@ class OcrManagerTests(unittest.TestCase):
         self.assertEqual({"tesseract", "easyocr", "paddleocr", "windows_ocr"}, set(status["backends"]))
         self.assertFalse(status["processing_enabled"])
 
+    def test_processing_enabled_only_for_selected_available_easyocr(self) -> None:
+        manager = OcrManager(settings_path=self.settings_path)
+        available = {"available": True, "status": "available"}
+        unavailable = {"available": False, "status": "not_installed"}
+        with (
+            patch.object(manager, "tesseract_status", return_value={"id": "tesseract", **available}),
+            patch.object(manager, "easyocr_status", return_value={"id": "easyocr", **available}),
+            patch.object(manager, "paddleocr_status", return_value={"id": "paddleocr", **unavailable}),
+            patch.object(manager, "windows_ocr_status", return_value={"id": "windows_ocr", **unavailable}),
+        ):
+            tesseract_selected = manager.status()
+
+        self.assertEqual("tesseract", tesseract_selected["selected_backend"])
+        self.assertFalse(tesseract_selected["processing_enabled"])
+
+        manager.update_settings({"selected_backend": "easyocr"})
+        with (
+            patch.object(manager, "tesseract_status", return_value={"id": "tesseract", **available}),
+            patch.object(manager, "easyocr_status", return_value={"id": "easyocr", **available}) as easyocr_status,
+            patch.object(manager, "paddleocr_status", return_value={"id": "paddleocr", **unavailable}),
+            patch.object(manager, "windows_ocr_status", return_value={"id": "windows_ocr", **unavailable}),
+        ):
+            easyocr_selected = manager.status()
+
+        self.assertEqual("easyocr", easyocr_selected["selected_backend"])
+        self.assertTrue(easyocr_selected["processing_enabled"])
+        easyocr_status.assert_called_once_with()
+
     def test_selected_backend_is_persisted_and_invalid_updates_are_rejected(self) -> None:
         manager = OcrManager(settings_path=self.settings_path)
         manager.update_settings({"selected_backend": "easyocr"})

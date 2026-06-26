@@ -87,11 +87,19 @@ pip install -r requirements-gpu.txt
 
 `requirements-gpu.txt` contains the CUDA/NVIDIA packages needed for GPU acceleration plus the screen-recording runtime packages mirrored from the CPU file. Keep both requirements files updated when dependencies change.
 
-## OCR Engine Setup (Stage 1.1a)
+## OCR Engine Setup
 
-Stage 1.1a checks whether the external Tesseract OCR engine is available. The OCR panel near the default queue settings shows the detected executable path, version, installed language packs, and separate readiness for `rus` and `eng`. You can save a custom path to `tesseract.exe` when automatic detection does not find it.
+The OCR panel near the default queue settings shows the selected backend, detected availability, version, installed language packs where applicable, and actionable status for frame OCR.
 
 Tesseract is not bundled, downloaded, or installed by this app. Install Tesseract OCR for Windows separately, then either make `tesseract` available in `PATH`, use a standard `C:\Program Files\Tesseract-OCR` installation, or enter the executable path in the UI. The Russian and English language packs (`rus` and `eng`) are recommended.
+
+EasyOCR is optional and is the first executable frame-OCR backend. Install it manually only if you want OCR over extracted frames:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-ocr-easyocr.txt
+```
+
+This may also install PyTorch dependencies selected by EasyOCR. The app does not install or download OCR dependencies automatically.
 
 This stage does not run OCR on extracted frames and does not create OCR output files. Actual frame OCR is reserved for Stage 1.1b; the OCR processing option remains disabled and marked as coming soon.
 
@@ -159,8 +167,8 @@ Queue usability:
 - Pending local items have an **Estimate time** action. It tests up to the first 60 seconds with that item's model/device and frame interval/JPEG quality/max frame size, then shows separate and combined approximate runtimes.
 - Estimate samples use temporary clipped audio and temporary JPEGs. They do not create normal transcripts, frame folders, `frames_index.json`, or output artifacts, and the temporary workspace is removed after success or failure.
 - Pending URL items can be estimated only when a local downloaded media file is already available. Stage 0.96 does not download a URL solely for estimation.
-- After an item completes, fails, or is cancelled, its card shows a "Created files" section with known artifacts: transcript TXT, diagnostic JSON, frame folder, `frames_index.json`, downloaded URL media, and uploaded temporary file when available. Cancelled transcription outputs are labelled as partial transcripts. If retention removed a file, the item says so instead of showing it as still present.
-- OCR/CV/media-index stage labels and plan entries are reserved for future work. OCR/CV controls are disabled/coming-soon placeholders and do not create OCR/CV output files. Runtime estimates must be extended when OCR or CV becomes executable.
+- After an item completes, fails, or is cancelled, its card shows a "Created files" section with known artifacts: transcript TXT, diagnostic JSON, frame folder, `frames_index.json`, EasyOCR frame OCR JSONL/TXT outputs, downloaded URL media, and uploaded temporary file when available. Cancelled transcription outputs are labelled as partial transcripts. If retention removed a file, the item says so instead of showing it as still present.
+- EasyOCR can run over extracted video/URL frames when the optional OCR requirements are installed and EasyOCR is the selected backend. PaddleOCR, Windows OCR, CV, and media-index entries remain disabled/coming-soon. Runtime estimates do not include a separate OCR estimate yet; actual OCR benchmark metrics are recorded after processing.
 
 URL download profiles:
 
@@ -186,11 +194,12 @@ Storage panel:
 OCR backend readiness:
 
 - **Tesseract OCR** is an external executable. The app checks a configured path, `PATH`, common Windows install locations, its version, and installed `rus`/`eng` language data.
-- **EasyOCR** is an optional integrated Python backend. This stage only checks whether its module is importable and does not initialize a reader or download models.
+- **EasyOCR** is an optional integrated Python backend. Readiness checks only verify the module import and do not initialize a reader or download models; actual reader/model initialization happens only when OCR processing is requested.
 - **PaddleOCR** is an optional experimental Python backend. This stage only checks whether its module is importable.
 - **Windows OCR** is an experimental Windows-only system backend. The app performs a lightweight WinRT import check on Windows.
-- EasyOCR, PaddleOCR, and WinRT dependencies are not installed automatically and are not part of the main requirements files.
-- The selected backend is saved for future processing plans. At this stage no backend reads extracted frames or creates OCR output; frame OCR is planned for Stage 1.1c.
+- EasyOCR, PaddleOCR, and WinRT dependencies are not installed automatically and are not part of the main requirements files. EasyOCR's optional requirement is isolated in `requirements-ocr-easyocr.txt`.
+- When EasyOCR is selected and importable, OCR can be enabled for video and URL queue items. Enabling OCR also enables frame extraction because OCR runs over the extracted frame folder.
+- EasyOCR outputs are written beside `frames_index.json` as `frames_ocr.jsonl` and `frames_ocr.txt`. The JSONL contains one record per processed frame; the TXT contains recognized text and frame-level OCR errors.
 
 Recordings:
 
@@ -234,6 +243,15 @@ C:\Python\LocalMediaTranscriber\data\recordings\<base>__frames\frames_index.json
 
 The folder contains JPEG files named like `frame_000001__t000000.000.jpg` and a `frames_index.json` file with source details, frame extraction settings, video metadata, extracted frame records, status, and cancellation/error information. The default extraction setting is one frame every 10 seconds with JPEG quality `90` and original frame dimensions. Available JPEG quality options are `75`, `80`, `85`, `90`, `95`, and `100`; available max frame sizes are Original, width up to 1920, 1280, 960, or 640 pixels. Downscaling preserves aspect ratio and never upscales smaller videos. Quality `100` can significantly increase file size and usually is not necessary for OCR/CV. The queue UI estimates the frame count and approximate disk usage before processing, and warns when a setting is expected to create more than 1000 images.
 
+When EasyOCR processing is enabled, OCR artifacts are saved in the same extracted-frame folder:
+
+```text
+C:\Python\LocalMediaTranscriber\data\recordings\<base>__frames\frames_ocr.jsonl
+C:\Python\LocalMediaTranscriber\data\recordings\<base>__frames\frames_ocr.txt
+```
+
+EasyOCR uses `ru` and `en` for this stage. Missing EasyOCR dependencies, unsupported OCR backends, missing frame indexes, or empty frame lists fail the queue item with a controlled error instead of crashing the app.
+
 Downloads from public URLs:
 
 ```text
@@ -260,7 +278,7 @@ C:\Python\LocalMediaTranscriber\data\logs\app.log
 
 Runtime output under `data\recordings`, `data\transcripts`, `data\uploads`, `data\downloads`, `data\jobs`, and `data\logs` is ignored by Git.
 
-Current cancellation behavior: pending or waiting queue items can be removed; active URL downloads, audio transcription, and frame extraction can be cancelled cooperatively, and the queue continues with the next pending item. Direct downloads stop at the next streaming chunk; `yt-dlp` downloads stop through progress/postprocessor hooks. Cancelled or failed downloads remove their owned partial files instead of exposing them as completed media. Audio transcription cancellation is safe but not an unsafe thread kill, so it may finish after the current Whisper segment or model-loading step. Cancelled transcription saves any recognized text as a clearly marked partial transcript with `__partial_cancelled__` in the filename and `status: "cancelled"` / `partial: true` in the diagnostic JSON; the queue does not present that file as a successful final transcript.
+Current cancellation behavior: pending or waiting queue items can be removed; active URL downloads, audio transcription, frame extraction, and EasyOCR frame OCR can be cancelled cooperatively, and the queue continues with the next pending item. Direct downloads stop at the next streaming chunk; `yt-dlp` downloads stop through progress/postprocessor hooks. Cancelled or failed downloads remove their owned partial files instead of exposing them as completed media. Audio transcription cancellation is safe but not an unsafe thread kill, so it may finish after the current Whisper segment or model-loading step. Cancelled transcription saves any recognized text as a clearly marked partial transcript with `__partial_cancelled__` in the filename and `status: "cancelled"` / `partial: true` in the diagnostic JSON; the queue does not present that file as a successful final transcript. Cancelled OCR may keep complete JSONL/TXT artifacts for frames processed before cancellation.
 
 Microphone privacy behavior: microphone access is requested only when the user starts a recording that includes the microphone source. Queue processing, URL downloads, local file transcription, frame extraction, storage views, and normal UI browsing do not use the microphone. The level meters stay idle until a matching recording source is active, and the recording stop flow releases the microphone stream.
 

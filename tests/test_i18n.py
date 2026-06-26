@@ -232,6 +232,7 @@ class I18nTests(unittest.TestCase):
             "frameWriteError",
             "selectAtLeastOneUrlOperation",
             "statusExtractingFrames",
+            "statusOcrProcessing",
             "statusNotApplicable",
             "statusIdle",
             "statusTranscribingAudio",
@@ -256,6 +257,7 @@ class I18nTests(unittest.TestCase):
             "queueStageDownloadFailed",
             "queueStageTranscribingAudio",
             "queueStageExtractingFrames",
+            "queueStageOcrProcessing",
             "queueStageCancellingTranscription",
             "queueStageCancelling",
             "queueStageCompleted",
@@ -304,6 +306,8 @@ class I18nTests(unittest.TestCase):
             "diagnosticJsonArtifactPath",
             "framesArtifactPath",
             "framesIndexArtifactPath",
+            "ocrJsonlArtifactPath",
+            "ocrTxtArtifactPath",
             "downloadedMediaArtifactPath",
             "downloadedMediaDeleted",
             "uploadedTempArtifactPath",
@@ -399,14 +403,23 @@ class I18nTests(unittest.TestCase):
             "ocrEnginesChecked",
             "ocrSettingsSaved",
             "ocrNextStage",
+            "ocrReadyForProcessing",
+            "ocrProcessingEasyOcrOnly",
+            "ocrRunsOnExtractedFrames",
+            "ocrJsonlArtifactPath",
+            "ocrTxtArtifactPath",
             "ocrErrorInvalidPath",
         ):
             self.assertIn(key, ru_keys)
             self.assertIn(key, en_keys)
         self.assertEqual("OCR / text recognition", dictionary_value(i18n, "en", "ocrSettingsTitle"))
         self.assertEqual(
-            "At this stage the app only checks OCR engines. Text recognition on frames will be added in the next stage.",
+            "EasyOCR can process already extracted video frames when its optional dependencies are installed.",
             dictionary_value(i18n, "en", "ocrNextStage"),
+        )
+        self.assertEqual(
+            "EasyOCR is available. OCR can be enabled for extracted frames.",
+            dictionary_value(i18n, "en", "ocrReadyForProcessing"),
         )
 
     def test_url_download_settings_copy_is_localized(self) -> None:
