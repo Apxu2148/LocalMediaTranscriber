@@ -281,14 +281,14 @@
                 <button id="queueStopButton" type="button" disabled data-i18n="stopAfterCurrent"></button>
                 <button id="queueRetryButton" type="button" data-i18n="retryFailed"></button>
               </div>
-              <section id="defaultProcessingSettings" class="default-processing-settings" aria-labelledby="defaultProcessingSettingsTitle">
-                <div class="default-processing-heading">
+              <details id="defaultProcessingSettings" class="default-processing-settings settings-collapsible" aria-labelledby="defaultProcessingSettingsTitle" open>
+                <summary class="default-processing-heading settings-collapsible-summary">
                   <div>
                     <h4 id="defaultProcessingSettingsTitle" data-i18n="defaultProcessingSettingsTitle"></h4>
                     <p class="section-note" data-i18n="appliesToNewQueueItems"></p>
                   </div>
                   <small data-i18n="itemSettingsOverrideDefaults"></small>
-                </div>
+                </summary>
                 <div class="default-processing-grid">
                   <fieldset>
                     <legend>
@@ -429,7 +429,7 @@
                   </div>
                   <output id="ocrStatusMessage" class="output compact" data-i18n="ocrChecking"></output>
                 </section>
-              </section>
+              </details>
               <output id="queueOutput" class="output"></output>
               <ul id="queueList" class="queue-list"></ul>
             </section>

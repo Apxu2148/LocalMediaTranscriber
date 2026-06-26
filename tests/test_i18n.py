@@ -196,6 +196,7 @@ class I18nTests(unittest.TestCase):
             "show",
             "hide",
             "processingOptions",
+            "itemProcessingSettings",
             "transcribeAudio",
             "extractFrames",
             "urlMedia",
@@ -342,6 +343,9 @@ class I18nTests(unittest.TestCase):
         for key, (ru_value, en_value) in expected.items():
             self.assertEqual(ru_value, dictionary_value(i18n, "ru", key))
             self.assertEqual(en_value, dictionary_value(i18n, "en", key))
+
+        self.assertEqual("Параметры обработки элемента", dictionary_value(i18n, "ru", "itemProcessingSettings"))
+        self.assertEqual("Item processing settings", dictionary_value(i18n, "en", "itemProcessingSettings"))
 
     def test_storage_settings_saved_message_is_localized(self) -> None:
         i18n = (STATIC_DIR / "i18n.js").read_text(encoding="utf-8")

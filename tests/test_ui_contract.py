@@ -136,6 +136,7 @@ class UiContractTests(unittest.TestCase):
         self.assertIn("data-queue-jpeg-quality", app_js)
         self.assertIn("data-queue-frame-size", app_js)
         self.assertIn("data-queue-url-max-height", app_js)
+        self.assertIn("data-queue-settings-panel", app_js)
         self.assertIn("75, 80, 85, 90, 95, 100", app_js)
         self.assertIn("frameMaxSizeOptions", app_js)
         self.assertIn("urlDownloadMaxVideoHeightOptions", app_js)
@@ -182,6 +183,7 @@ class UiContractTests(unittest.TestCase):
         self.assertIn("frameWriteError", app_js)
         self.assertIn("queueControlHasActiveFocus", app_js)
         self.assertIn("preserveFocusedQueueControls", app_js)
+        self.assertIn("collapsedQueueSettingsItemIds", app_js)
         self.assertIn('"/api/models/download"', app_js)
         self.assertIn('"/api/models/download-status"', app_js)
         self.assertIn('"/api/models/verify"', app_js)
@@ -236,6 +238,8 @@ class UiContractTests(unittest.TestCase):
         self.assertEqual(1, html.count('id="whisperModelSelect"'))
         self.assertEqual(1, html.count('id="whisperDeviceSelect"'))
         self.assertLess(html.index('id="queueRetryButton"'), html.index('id="defaultProcessingSettings"'))
+        self.assertIn('<details id="defaultProcessingSettings" class="default-processing-settings settings-collapsible" aria-labelledby="defaultProcessingSettingsTitle" open>', html)
+        self.assertIn('<summary class="default-processing-heading settings-collapsible-summary">', html)
         default_settings_html = html[
             html.index('id="defaultProcessingSettings"'):html.index('id="ocrSettingsPanel"')
         ]
@@ -252,6 +256,7 @@ class UiContractTests(unittest.TestCase):
             "defaultProcessingSettingsTitle",
             "appliesToNewQueueItems",
             "itemSettingsOverrideDefaults",
+            "itemProcessingSettings",
             "processingPlan",
             "processingPlanAudio",
             "processingPlanFrames",
@@ -268,6 +273,11 @@ class UiContractTests(unittest.TestCase):
         self.assertIn("processingPlanForQueueItem", app_js)
         self.assertIn("processing_plan", app_js)
         self.assertIn("frameMaxSizeLabel(plan.frames.max_frame_size)", app_js)
+        self.assertIn('optionGroup.className = "queue-options queue-options-collapsible"', app_js)
+        self.assertIn('optionGroup.open = !collapsedQueueSettingsItemIds.has(queueItem.index)', app_js)
+        self.assertIn("optionSummary.append(label, createProcessingPlanSummary(queueItem))", app_js)
+        self.assertIn(".settings-collapsible-summary::before", css := (STATIC_DIR / "style.css").read_text(encoding="utf-8"))
+        self.assertIn('.queue-options-collapsible[open] > .settings-collapsible-summary::before', css)
         self.assertIn('status: "coming_soon"', app_js)
         self.assertIn("input.disabled = true", app_js)
         self.assertNotIn("Tesseract OCR (coming soon)", app_js)

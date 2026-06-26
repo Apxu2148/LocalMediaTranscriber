@@ -219,6 +219,7 @@ const terminalQueueStatuses = new Set(["completed", "error", "failed", "cancelle
 const pendingAddKeys = new Set();
 const pendingQueueCancellationIds = new Set();
 const pendingRuntimeEstimateIds = new Set();
+const collapsedQueueSettingsItemIds = new Set();
 const audioRuntimeStages = new Set(["transcribing_audio", "cancelling_transcription"]);
 
 function t(key, variables = {}) {
@@ -3588,28 +3589,34 @@ function createQueueItemElement(queueItem, status) {
 
   const options = queueItem.operations || {};
   const controlsDisabled = queueActive || runtimeEstimateActive(status) || queueItem.status !== "pending";
-  const optionGroup = document.createElement("div");
-  optionGroup.className = "queue-options";
+  const optionGroup = document.createElement("details");
+  optionGroup.className = "queue-options queue-options-collapsible";
+  optionGroup.dataset.queueSettingsPanel = "true";
+  optionGroup.open = !collapsedQueueSettingsItemIds.has(queueItem.index);
+  const optionSummary = document.createElement("summary");
+  optionSummary.className = "queue-options-summary settings-collapsible-summary";
   const label = document.createElement("div");
   label.className = "queue-options-label";
-  label.textContent = t("processingOptions");
-  optionGroup.append(
-    label,
-    createProcessingPlanSummary(queueItem),
+  label.textContent = t("itemProcessingSettings");
+  optionSummary.append(label, createProcessingPlanSummary(queueItem));
+  const optionControls = document.createElement("div");
+  optionControls.className = "queue-options-controls";
+  optionControls.append(
     createAudioPlanSettings(queueItem, controlsDisabled),
     createUrlDownloadSettings(queueItem, controlsDisabled),
   );
   if (queueItemIsVideo(queueItem)) {
-    optionGroup.append(
+    optionControls.append(
       createQueueCheckbox("extractFrames", options.extract_frames, controlsDisabled, "extract_frames"),
       createFrameSettings(queueItem, controlsDisabled),
       createComingSoonOption("ocr"),
       createComingSoonOption("cv"),
     );
   } else {
-    optionGroup.append(createComingSoonOption("ocr"), createComingSoonOption("cv"));
+    optionControls.append(createComingSoonOption("ocr"), createComingSoonOption("cv"));
   }
-  optionGroup.append(createRuntimeEstimate(queueItem, status));
+  optionControls.append(createRuntimeEstimate(queueItem, status));
+  optionGroup.append(optionSummary, optionControls);
   item.append(optionGroup);
 
   const outputLines = queueItemArtifactLines(queueItem);
@@ -3658,6 +3665,12 @@ function renderQueue(status, options = {}) {
     const item = status.items?.find((candidate) => candidate.index === index);
     if (!item || ["complete", "failed"].includes(item.estimate?.status)) {
       pendingRuntimeEstimateIds.delete(index);
+    }
+  }
+  const visibleQueueItemIds = new Set((status.items || []).map((item) => item.index));
+  for (const index of collapsedQueueSettingsItemIds) {
+    if (!visibleQueueItemIds.has(index)) {
+      collapsedQueueSettingsItemIds.delete(index);
     }
   }
   const total = Number(status.total_items || 0);
@@ -4219,6 +4232,22 @@ queueList.addEventListener("focusout", () => {
     }
   }, 150);
 });
+queueList.addEventListener("toggle", (event) => {
+  const panel = event.target;
+  if (!panel.matches?.("[data-queue-settings-panel]")) {
+    return;
+  }
+  const card = queueCardFromTarget(panel);
+  const index = Number(card?.dataset.queueIndex);
+  if (!index) {
+    return;
+  }
+  if (panel.open) {
+    collapsedQueueSettingsItemIds.delete(index);
+  } else {
+    collapsedQueueSettingsItemIds.add(index);
+  }
+}, true);
 queueList.addEventListener("change", async (event) => {
   const target = event.target;
   if (!target.matches("[data-queue-operation], [data-queue-audio-model], [data-queue-audio-device], [data-queue-frame-rate], [data-queue-jpeg-quality], [data-queue-frame-size], [data-queue-url-max-height]")) {
