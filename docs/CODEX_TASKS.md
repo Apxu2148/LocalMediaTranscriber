@@ -12,3 +12,4 @@
 | Bugfix | Implemented and validated | [Runtime estimate OCR and details fix](codex_tasks/2026-06-27_runtime_estimate_ocr_and_details_fix.md) |
 | Bugfix | Implemented | [Per-item OCR backend selector and no-audio estimate robustness](codex_tasks/2026-06-27_per_item_ocr_backend_and_no_audio_estimate.md) |
 | Output layout | Implemented and validated | [Queue output folder structure with user-defined queue folder name](codex_tasks/2026-06-27_queue_output_folder_structure.md) |
+| UI cleanup | Implemented | [Transcription result preview cleanup](codex_tasks/2026-06-27_transcription_result_preview_cleanup.md) |

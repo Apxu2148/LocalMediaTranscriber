@@ -482,8 +482,24 @@
             <pre id="transcribeTechnicalText"></pre>
           </details>
           <output id="benchmarkOutput" class="output compact"></output>
-          <h2 id="latestResultHeading" class="result-heading" data-i18n="latestResult"></h2>
-          <textarea id="transcriptText" readonly spellcheck="false" aria-labelledby="latestResultHeading" data-i18n-aria-label="latestResult"></textarea>
+          <details id="transcriptPreviewSection" class="transcript-preview collapsible-section">
+            <summary class="transcript-preview-summary collapsible-summary">
+              <h2 id="latestResultHeading" class="result-heading" data-i18n="latestResult"></h2>
+              <span class="collapse-toggle-label">
+                <span data-collapsed data-i18n="show"></span>
+                <span data-expanded data-i18n="hide"></span>
+              </span>
+            </summary>
+            <form id="transcriptPathForm" class="transcript-preview-form">
+              <label class="queue-setting-field" for="transcriptPathInput">
+                <span data-i18n="transcriptFilePathLabel"></span>
+                <input id="transcriptPathInput" type="text" autocomplete="off" spellcheck="false" data-i18n-aria-label="transcriptFilePathLabel" />
+              </label>
+              <button id="transcriptPathLoadButton" type="submit" data-i18n="showTranscriptFile"></button>
+            </form>
+            <output id="transcriptPreviewOutput" class="output compact" data-i18n="latestTranscription"></output>
+            <textarea id="transcriptText" readonly spellcheck="false" aria-labelledby="latestResultHeading" data-i18n-aria-label="latestResult"></textarea>
+          </details>
         </section>
 
         <details id="filesSection" class="workspace-section collapsible-section">

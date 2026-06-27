@@ -840,6 +840,33 @@ summary:focus-visible {
   margin-top: 18px;
 }
 
+.transcript-preview {
+  margin-top: 18px;
+}
+
+.transcript-preview-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.transcript-preview .result-heading {
+  margin: 0;
+}
+
+.transcript-preview-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  margin-bottom: 12px;
+}
+
+.transcript-preview-form button {
+  min-height: 36px;
+}
+
 .file-transcribe-form {
   display: grid;
   gap: 12px;
@@ -1964,6 +1991,7 @@ textarea {
   .storage-summary-grid,
   .queue-add-form,
   .queue-url-form,
+  .transcript-preview-form,
     .queue-progress-grid {
     grid-template-columns: 1fr;
   }

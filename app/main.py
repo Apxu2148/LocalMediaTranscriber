@@ -639,11 +639,13 @@ def ocr_check(payload: OcrCheckRequest | None = Body(default=None)) -> dict:
 
 
 @app.get("/api/transcripts/read")
-def read_transcript(file_path: str) -> dict:
-    transcript_path = validate_transcript_txt_path(file_path)
+def read_transcript(file_path: str | None = None, path: str | None = None) -> dict:
+    transcript_path = validate_transcript_txt_path(file_path if file_path is not None else path)
     return {
+        "ok": True,
+        "path": str(transcript_path),
         "file_path": str(transcript_path),
-        "text": transcript_path.read_text(encoding="utf-8"),
+        "text": read_transcript_text(transcript_path),
     }
 
 
@@ -1403,23 +1405,51 @@ def validate_recording_audio_path(file_path: str) -> Path:
         raise_api_error(str(exc))
 
 
-def validate_transcript_txt_path(file_path: str) -> Path:
+def transcript_read_roots() -> tuple[Path, ...]:
+    return (
+        config.TRANSCRIPTS_DIR.resolve(),
+        config.QUEUES_DIR.resolve(),
+    )
+
+
+def validate_transcript_txt_path(file_path: str | None) -> Path:
     try:
-        requested_name = (file_path or "").strip()
-        requested_path = Path(requested_name)
-        if not requested_name or requested_name != requested_path.name or ":" in requested_name:
-            raise RuntimeError("Можно читать только TXT-файлы из папки data/transcripts.")
+        requested_text = (file_path or "").strip()
+        if not requested_text:
+            raise RuntimeError("Путь к transcript-файлу пуст.")
+        if "://" in requested_text:
+            raise RuntimeError("Можно читать только transcript-файлы из data/transcripts или data/queues.")
+        requested_path = Path(requested_text)
+        if ".." in requested_path.parts:
+            raise RuntimeError("Можно читать только transcript-файлы из data/transcripts или data/queues.")
         if requested_path.suffix.lower() != ".txt":
             raise RuntimeError("Можно читать только TXT-файлы транскриптов.")
-        transcript_path = (config.TRANSCRIPTS_DIR / requested_name).resolve()
-        transcripts_dir = config.TRANSCRIPTS_DIR.resolve()
-        if not transcript_path.is_relative_to(transcripts_dir):
-            raise RuntimeError("Можно читать только TXT-файлы из папки data/transcripts.")
+
+        has_path_parts = requested_path.name != requested_text
+        if requested_path.is_absolute():
+            transcript_path = requested_path.resolve()
+        elif has_path_parts:
+            transcript_path = (config.BASE_DIR / requested_path).resolve()
+        else:
+            transcript_path = (config.TRANSCRIPTS_DIR / requested_path.name).resolve()
+
+        if not any(transcript_path.is_relative_to(root) for root in transcript_read_roots()):
+            raise RuntimeError("Можно читать только transcript-файлы из data/transcripts или data/queues.")
         if not transcript_path.is_file():
             raise RuntimeError("TXT-файл транскрипта не найден.")
         return transcript_path
     except RuntimeError as exc:
         raise_api_error(str(exc))
+
+
+def read_transcript_text(transcript_path: Path) -> str:
+    try:
+        try:
+            return transcript_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            return transcript_path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        raise_api_error("Не удалось прочитать transcript-файл", extra={"technical_details": str(exc)})
 
 
 def recent_files(directory: Path, limit: int = 5, allowed_suffixes: set[str] | None = None) -> list[dict]:

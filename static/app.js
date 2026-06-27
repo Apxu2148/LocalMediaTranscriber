@@ -59,6 +59,10 @@ const transcribeOutput = document.querySelector("#transcribeOutput");
 const transcribeTechnicalDetails = document.querySelector("#transcribeTechnicalDetails");
 const transcribeTechnicalText = document.querySelector("#transcribeTechnicalText");
 const benchmarkOutput = document.querySelector("#benchmarkOutput");
+const transcriptPreviewSection = document.querySelector("#transcriptPreviewSection");
+const transcriptPathForm = document.querySelector("#transcriptPathForm");
+const transcriptPathInput = document.querySelector("#transcriptPathInput");
+const transcriptPreviewOutput = document.querySelector("#transcriptPreviewOutput");
 const transcriptText = document.querySelector("#transcriptText");
 const systemStatus = document.querySelector("#systemStatus");
 const modelBadge = document.querySelector("#modelBadge");
@@ -192,7 +196,7 @@ let transcriptionPhase = null;
 let activeRuntimeModel = null;
 let latestTranscriptionStatus = null;
 let latestBenchmarkStatus = null;
-let lastLoadedQueueTranscriptPath = null;
+let lastLoadedTranscriptPath = null;
 let activeMicDeviceValue = "";
 let activeOutputDeviceValue = "";
 let micDevicesRefreshInFlight = false;
@@ -1483,26 +1487,63 @@ function transcriptFileName(value) {
   return text.split(/[\\/]/).filter(Boolean).pop() || text;
 }
 
-async function loadTranscript(filePath, announce = false) {
-  const transcriptName = transcriptFileName(filePath);
+function transcriptLoadSuccessMessage(filePath, announce) {
+  const displayPath = displayOutputPath(filePath);
+  if (announce) {
+    return t("transcriptLoaded", { name: transcriptFileName(filePath), path: displayPath });
+  }
+  return `${t("latestTranscription")}: ${displayPath}`;
+}
+
+function queueItemTranscriptPath(item) {
+  return item?.outputs?.transcript_path || item?.transcript_path || null;
+}
+
+function pathLooksLikeQueueTranscript(filePath) {
+  const normalized = String(filePath || "").replaceAll("\\", "/").toLowerCase();
+  return normalized.startsWith("data/queues/") || normalized.includes("/data/queues/");
+}
+
+async function loadTranscript(filePath, announce = false, reveal = false) {
+  const requestedPath = String(filePath || "").trim();
+  if (!requestedPath) {
+    setOutput(transcriptPreviewOutput, t("transcriptReadFailed"), "error");
+    return;
+  }
   try {
-    const result = await requestJson(`/api/transcripts/read?file_path=${encodeURIComponent(transcriptName)}`);
+    const result = await requestJson(`/api/transcripts/read?file_path=${encodeURIComponent(requestedPath)}`);
+    const loadedPath = result.path || result.file_path || requestedPath;
     transcriptText.value = result.text || "";
-    lastLoadedQueueTranscriptPath = filePath;
-    if (announce) {
-      setDynamicOutput(transcribeOutput, () => t("transcriptLoaded", { name: transcriptName }), "success");
+    transcriptPathInput.value = loadedPath;
+    lastLoadedTranscriptPath = loadedPath;
+    setDynamicOutput(transcriptPreviewOutput, () => transcriptLoadSuccessMessage(loadedPath, announce), "success");
+    if (reveal) {
+      transcriptPreviewSection.open = true;
     }
   } catch (error) {
-    setOutput(transcribeOutput, error.message, "error");
+    setOutput(transcriptPreviewOutput, `${t("transcriptReadFailed")}: ${error.message}`, "error");
   }
 }
 
 function maybeLoadLatestQueueTranscript(status) {
-  const completedItem = [...(status.items || [])]
+  const terminalItems = [...(status.items || [])]
     .reverse()
-    .find((item) => ["completed", "error", "failed"].includes(item.status) && item.transcript_path);
-  if (completedItem?.transcript_path && completedItem.transcript_path !== lastLoadedQueueTranscriptPath) {
-    loadTranscript(completedItem.transcript_path);
+    .filter((item) => terminalQueueStatuses.has(item.status) && queueItemTranscriptPath(item));
+  const queueItem = terminalItems.find((item) => pathLooksLikeQueueTranscript(queueItemTranscriptPath(item)));
+  const transcriptPath = queueItemTranscriptPath(queueItem || terminalItems[0]);
+  if (transcriptPath && transcriptPath !== lastLoadedTranscriptPath) {
+    loadTranscript(transcriptPath);
+  }
+}
+
+async function maybeLoadLatestStorageTranscript(files) {
+  if (lastLoadedTranscriptPath) {
+    return;
+  }
+  const latestTranscript = (files || []).find((file) => file.name?.toLowerCase().endsWith(".txt"));
+  const transcriptPath = latestTranscript?.path || latestTranscript?.name;
+  if (transcriptPath) {
+    await loadTranscript(transcriptPath);
   }
 }
 
@@ -1901,8 +1942,10 @@ async function refreshStorage() {
     recordingsPath.textContent = storage.recordings.path;
     transcriptsPath.textContent = storage.transcripts.path;
     latestRecordingFiles = storage.recordings.files || [];
+    const transcriptFiles = storage.transcripts.files || [];
     renderFileList(recordingsFileList, latestRecordingFiles, t("recordingsEmpty"));
-    renderFileList(transcriptsFileList, storage.transcripts.files, t("transcriptsEmpty"), true);
+    renderFileList(transcriptsFileList, transcriptFiles, t("transcriptsEmpty"), true);
+    await maybeLoadLatestStorageTranscript(transcriptFiles);
     fillVideoMuxOptions(latestRecordingFiles);
   } catch (error) {
     renderFileList(recordingsFileList, [], error.message);
@@ -1973,7 +2016,7 @@ function renderFileList(target, files, emptyMessage, clickableTranscripts = fals
     if (name instanceof HTMLButtonElement) {
       name.type = "button";
       name.className = "file-link";
-      name.addEventListener("click", () => loadTranscript(file.name, true));
+      name.addEventListener("click", () => loadTranscript(file.path || file.name, true, true));
     }
     meta.textContent = `${formatDateTime(file.modified)} · ${file.size_mb} MB`;
     item.title = file.path;
@@ -4458,6 +4501,10 @@ transcribeAllRecordingsButton.addEventListener("click", addAllRecordings);
 openRecordingsButton.addEventListener("click", () => openFolder("recordings"));
 openTranscriptsButton.addEventListener("click", () => openFolder("transcripts"));
 openDataFolderButton.addEventListener("click", () => openFolder("data"));
+transcriptPathForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  await loadTranscript(transcriptPathInput.value, true, true);
+});
 refreshStorageSummaryButton.addEventListener("click", refreshStorageSummary);
 keepDownloadedMediaCheckbox.addEventListener("change", saveStorageSettings);
 keepUploadedTempCheckbox.addEventListener("change", saveStorageSettings);

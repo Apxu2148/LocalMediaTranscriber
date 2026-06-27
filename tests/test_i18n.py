@@ -226,6 +226,11 @@ class I18nTests(unittest.TestCase):
             "tourModelsText",
             "show",
             "hide",
+            "latestResult",
+            "transcriptFilePathLabel",
+            "showTranscriptFile",
+            "latestTranscription",
+            "transcriptReadFailed",
             "processingOptions",
             "itemProcessingSettings",
             "transcribeAudio",
@@ -361,6 +366,19 @@ class I18nTests(unittest.TestCase):
         html_keys = set(re.findall(r'data-i18n(?:-title|-aria-label|-placeholder)?="([A-Za-z][A-Za-z0-9_]*)"', html))
         app_keys = set(re.findall(r'(?<![A-Za-z0-9_$])t\("([A-Za-z][A-Za-z0-9_]*)"', app_js))
         self.assertFalse((html_keys | app_keys) - keys)
+
+    def test_transcript_preview_copy_is_localized(self) -> None:
+        i18n = (STATIC_DIR / "i18n.js").read_text(encoding="utf-8")
+        expected = {
+            "latestResult": ("Результат транскрибации", "Transcription result"),
+            "transcriptFilePathLabel": ("Путь к transcript-файлу", "Transcript file path"),
+            "showTranscriptFile": ("Показать файл", "Show file"),
+            "latestTranscription": ("Последняя транскрибация", "Latest transcription"),
+            "transcriptReadFailed": ("Не удалось прочитать transcript-файл", "Failed to read transcript file"),
+        }
+        for key, (ru_value, en_value) in expected.items():
+            self.assertEqual(ru_value, dictionary_value(i18n, "ru", key))
+            self.assertEqual(en_value, dictionary_value(i18n, "en", key))
 
     def test_processing_plan_polish_copy_is_localized(self) -> None:
         i18n = (STATIC_DIR / "i18n.js").read_text(encoding="utf-8")

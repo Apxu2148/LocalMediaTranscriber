@@ -1,9 +1,12 @@
 import unittest
+import shutil
+from contextlib import contextmanager
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import PropertyMock, call, patch
+from uuid import uuid4
 
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app import config
@@ -16,6 +19,17 @@ from app.system_audio_recorder import SystemAudioRecorder
 
 PROJECT_TMP = Path(__file__).resolve().parents[1] / "tmp"
 config.JOBS_DIR = PROJECT_TMP
+
+
+@contextmanager
+def project_temp_dir(prefix: str):
+    path = PROJECT_TMP / f"{prefix}_{uuid4().hex}"
+    path.mkdir(parents=True, exist_ok=False)
+    try:
+        yield path
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
 
 with patch.object(utils_module, "setup_logging"):
     from app import main as main_module  # noqa: E402
@@ -261,25 +275,29 @@ class HttpSmokeTests(unittest.TestCase):
         self.assertEqual("invalid_ocr_backend", response.json()["detail"]["message"])
 
     def test_recording_queue_and_transcript_reader_are_path_constrained(self) -> None:
-        with TemporaryDirectory(dir=PROJECT_TMP) as temp_dir:
-            root = Path(temp_dir)
+        with project_temp_dir("transcript_reader") as root:
             recordings_dir = root / "recordings"
             transcripts_dir = root / "transcripts"
+            queues_dir = root / "queues"
             recordings_dir.mkdir()
             transcripts_dir.mkdir()
+            queues_dir.mkdir()
             recording_path = recordings_dir / "mic.wav"
             missing_recording_path = recordings_dir / "missing.wav"
             transcript_path = transcripts_dir / "result.txt"
+            queue_transcript_path = queues_dir / "queue_a" / "item_001" / "transcript" / "transcript.txt"
             non_txt_transcript_path = transcripts_dir / "result.json"
             outside_transcript_path = root / "outside.txt"
             recording_path.write_bytes(b"audio")
             transcript_path.write_text("recognized text", encoding="utf-8")
+            queue_transcript_path.parent.mkdir(parents=True)
+            queue_transcript_path.write_text("queue text", encoding="utf-8")
             non_txt_transcript_path.write_text("{}", encoding="utf-8")
-            outside_transcript_path.write_text("private text", encoding="utf-8")
 
             with (
                 patch.object(config, "RECORDINGS_DIR", recordings_dir),
                 patch.object(config, "TRANSCRIPTS_DIR", transcripts_dir),
+                patch.object(config, "QUEUES_DIR", queues_dir),
                 patch.object(main_module.queue_manager, "add_files", return_value={"status": "pending"}) as add_files,
                 TestClient(main_module.app) as client,
             ):
@@ -310,16 +328,51 @@ class HttpSmokeTests(unittest.TestCase):
 
                 read_response = client.get("/api/transcripts/read", params={"file_path": "result.txt"})
                 self.assertEqual(200, read_response.status_code)
-                self.assertEqual("recognized text", read_response.json()["text"])
+                read_payload = read_response.json()
+                self.assertTrue(read_payload["ok"])
+                self.assertEqual(str(transcript_path), read_payload["path"])
+                self.assertEqual("recognized text", read_payload["text"])
 
-                rejected_absolute = client.get("/api/transcripts/read", params={"file_path": str(transcript_path)})
-                self.assertEqual(400, rejected_absolute.status_code)
+                read_absolute = client.get("/api/transcripts/read", params={"file_path": str(transcript_path)})
+                self.assertEqual(200, read_absolute.status_code)
+                self.assertEqual("recognized text", read_absolute.json()["text"])
+                read_queue = client.get("/api/transcripts/read", params={"file_path": str(queue_transcript_path)})
+                self.assertEqual(200, read_queue.status_code)
+                self.assertEqual(str(queue_transcript_path), read_queue.json()["path"])
+                self.assertEqual("queue text", read_queue.json()["text"])
                 rejected_read = client.get("/api/transcripts/read", params={"file_path": str(outside_transcript_path)})
                 self.assertEqual(400, rejected_read.status_code)
                 rejected_non_txt = client.get("/api/transcripts/read", params={"file_path": non_txt_transcript_path.name})
                 self.assertEqual(400, rejected_non_txt.status_code)
                 rejected_traversal = client.get("/api/transcripts/read", params={"file_path": "../outside.txt"})
                 self.assertEqual(400, rejected_traversal.status_code)
+
+    def test_transcript_path_helper_reads_only_transcript_outputs(self) -> None:
+        with project_temp_dir("transcript_helper") as root:
+            transcripts_dir = root / "transcripts"
+            queues_dir = root / "queues"
+            transcripts_dir.mkdir()
+            queues_dir.mkdir()
+            transcript_path = transcripts_dir / "result.txt"
+            queue_transcript_path = queues_dir / "queue_a" / "item_001" / "transcript" / "transcript.txt"
+            outside_path = root / "outside.txt"
+            invalid_utf8_path = transcripts_dir / "invalid.txt"
+            transcript_path.write_text("recognized text", encoding="utf-8")
+            queue_transcript_path.parent.mkdir(parents=True)
+            queue_transcript_path.write_text("queue text", encoding="utf-8")
+            invalid_utf8_path.write_bytes(b"hello \xff")
+
+            with (
+                patch.object(config, "TRANSCRIPTS_DIR", transcripts_dir),
+                patch.object(config, "QUEUES_DIR", queues_dir),
+            ):
+                self.assertEqual(transcript_path.resolve(), main_module.validate_transcript_txt_path("result.txt"))
+                self.assertEqual(queue_transcript_path.resolve(), main_module.validate_transcript_txt_path(str(queue_transcript_path)))
+                self.assertEqual("hello \ufffd", main_module.read_transcript_text(invalid_utf8_path))
+                with self.assertRaises(HTTPException):
+                    main_module.validate_transcript_txt_path(str(outside_path))
+                with self.assertRaises(HTTPException):
+                    main_module.validate_transcript_txt_path("../outside.txt")
 
     def test_runtime_switch_endpoints_reject_inactive_tracks(self) -> None:
         with TestClient(main_module.app) as client:

@@ -89,7 +89,12 @@ class UiContractTests(unittest.TestCase):
             "clearDownloadsButton",
             "clearUploadsButton",
             "storageCleanupOutput",
+            "transcriptPreviewSection",
             "latestResultHeading",
+            "transcriptPathForm",
+            "transcriptPathInput",
+            "transcriptPathLoadButton",
+            "transcriptPreviewOutput",
             "transcriptText",
         ):
             self.assertIn(f'id="{element_id}"', html)
@@ -130,8 +135,11 @@ class UiContractTests(unittest.TestCase):
         self.assertIn('refreshButton.dataset.previewDisplay', app_js)
         self.assertIn("latestTechnicalItem.technical_details", app_js)
         self.assertIn("/api/transcripts/read", app_js)
-        self.assertIn("loadTranscript(file.name, true)", app_js)
+        self.assertIn("loadTranscript(file.path || file.name, true, true)", app_js)
         self.assertIn('transcriptText.value = result.text || "";', app_js)
+        self.assertIn("queueItemTranscriptPath", app_js)
+        self.assertIn("pathLooksLikeQueueTranscript", app_js)
+        self.assertIn("maybeLoadLatestStorageTranscript", app_js)
         self.assertIn("frameRateOptions", app_js)
         self.assertIn("data-queue-operation", app_js)
         self.assertIn("data-queue-frame-rate", app_js)
@@ -514,6 +522,11 @@ class UiContractTests(unittest.TestCase):
         css = (STATIC_DIR / "style.css").read_text(encoding="utf-8")
         self.assertIn('<details id="filesSection" class="workspace-section collapsible-section">', html)
         self.assertIn('<details id="benchmarkSection" class="workspace-section collapsible-section">', html)
+        self.assertIn('<details id="transcriptPreviewSection" class="transcript-preview collapsible-section">', html)
+        self.assertNotIn('<details id="transcriptPreviewSection" class="transcript-preview collapsible-section" open>', html)
+        self.assertIn('data-i18n="transcriptFilePathLabel"', html)
+        self.assertIn('data-i18n="showTranscriptFile"', html)
+        self.assertIn('data-i18n="latestTranscription"', html)
         self.assertIn('data-i18n="show"', html)
         self.assertIn('data-i18n="hide"', html)
         self.assertIn(".collapsible-section[open]", css)
