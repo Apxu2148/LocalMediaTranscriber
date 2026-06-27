@@ -80,9 +80,13 @@ class HttpSmokeTests(unittest.TestCase):
             patch.object(main_module.transcriber, "status", return_value=fake_transcriber_status),
             TestClient(main_module.app) as client,
         ):
-            add_response = client.post("/api/queue/add-urls", json={"urls": ["https://example.test/video"]})
+            add_response = client.post(
+                "/api/queue/add-urls",
+                json={"urls": ["https://example.test/video"], "queue_folder_name": "smoke_queue"},
+            )
             self.assertEqual(200, add_response.status_code)
             self.assertEqual("https://example.test/video", add_urls.call_args.args[0][0].source_url)
+            self.assertEqual("smoke_queue", add_urls.call_args.kwargs["queue_folder_name"])
 
             queue_response = client.post("/api/queue/start", json={"model": "small", "device": "cpu"})
             self.assertEqual(200, queue_response.status_code)

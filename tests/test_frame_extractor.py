@@ -133,6 +133,25 @@ class FrameExtractorTests(unittest.TestCase):
         self.assertTrue((frames_dir / payload["frames"][0]["file"]).is_file())
         self.assertEqual(payload["extracted_frame_count"], len(list(frames_dir.glob("*.jpg"))))
 
+    def test_extract_frames_can_write_to_requested_queue_directory(self) -> None:
+        path = self.make_video("queue-output.avi", fps=5, frames=10)
+        output_dir = self.root / "data" / "queues" / "queue" / "item_001_video" / "frames"
+
+        result = self.extractor.extract_frames(
+            source_path=path,
+            source_filename="queue-output.avi",
+            output_base="queue-output",
+            output_dir=output_dir,
+            rate={"mode": "interval", "seconds": 1},
+            jpeg_quality=85,
+        )
+
+        self.assertEqual("completed", result["status"])
+        self.assertEqual("frames", result["frames_dir"])
+        self.assertTrue((output_dir / "frames_index.json").exists())
+        self.assertGreater(len(list(output_dir.glob("*.jpg"))), 0)
+        self.assertEqual([], list(self.recordings_dir.iterdir()))
+
     def test_max_frame_size_downscales_without_upscaling(self) -> None:
         path = self.make_video("downscale.avi", fps=5, frames=5, size=(800, 450))
         result = self.extractor.extract_frames(

@@ -49,11 +49,13 @@ class TranscriptStore:
         source_type: str,
         result: Any,
         extra_metadata: dict | None = None,
+        output_dir: Path | None = None,
     ) -> dict:
         transcript_path, json_path = self._reserve_paths(
             source_filename,
             result.model,
             strip_extension=source_type != "url",
+            output_dir=output_dir,
         )
         transcript_text = result.text or "Распознаваемая речь не найдена."
         transcript_path.write_text(transcript_text, encoding="utf-8")
@@ -116,12 +118,14 @@ class TranscriptStore:
         source_type: str,
         result: Any,
         extra_metadata: dict | None = None,
+        output_dir: Path | None = None,
     ) -> dict:
         transcript_path, json_path = self._reserve_paths(
             source_filename,
             result.model,
             marker="partial_cancelled",
             strip_extension=source_type != "url",
+            output_dir=output_dir,
         )
         transcript_text = result.text or "Транскрибация отменена до завершения."
         transcript_path.write_text(transcript_text, encoding="utf-8")
@@ -179,11 +183,14 @@ class TranscriptStore:
         error_message: str,
         technical_details: str = "",
         extra_metadata: dict | None = None,
+        output_dir: Path | None = None,
     ) -> dict:
         transcript_path, json_path = self._reserve_paths(
             source_filename,
             model,
             strip_extension=source_type != "url",
+            marker="error" if output_dir is not None else None,
+            output_dir=output_dir,
         )
         payload = self._base_payload(
             source_path=source_path,
@@ -274,18 +281,23 @@ class TranscriptStore:
         *,
         marker: str | None = None,
         strip_extension: bool = True,
+        output_dir: Path | None = None,
     ) -> tuple[Path, Path]:
-        self.transcripts_dir.mkdir(parents=True, exist_ok=True)
-        timestamp = timestamp_for_filename()
-        stem = source_stem_for(source_filename) if strip_extension else safe_filename_part(source_filename)
-        safe_model = safe_filename_part(model, max_length=32)
-        middle = f"__{marker}" if marker else ""
-        prefix = f"{stem}{middle}__{timestamp}__{safe_model}__transcript"
+        target_dir = output_dir or self.transcripts_dir
+        target_dir.mkdir(parents=True, exist_ok=True)
+        if output_dir is not None:
+            prefix = "transcript" if marker is None else f"transcript__{safe_filename_part(marker, max_length=40)}"
+        else:
+            timestamp = timestamp_for_filename()
+            stem = source_stem_for(source_filename) if strip_extension else safe_filename_part(source_filename)
+            safe_model = safe_filename_part(model, max_length=32)
+            middle = f"__{marker}" if marker else ""
+            prefix = f"{stem}{middle}__{timestamp}__{safe_model}__transcript"
 
         counter = 1
         while True:
             suffix = "" if counter == 1 else f"__{counter}"
-            transcript_path = self.transcripts_dir / f"{prefix}{suffix}.txt"
+            transcript_path = target_dir / f"{prefix}{suffix}.txt"
             json_path = transcript_path.with_suffix(".json")
             if not transcript_path.exists() and not json_path.exists():
                 return transcript_path, json_path

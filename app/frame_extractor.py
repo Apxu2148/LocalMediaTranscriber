@@ -342,6 +342,7 @@ class VideoFrameExtractor:
         cancel_event: threading.Event | None = None,
         progress_callback: Callable[[dict], None] | None = None,
         source_metadata: dict | None = None,
+        output_dir: Path | None = None,
     ) -> dict:
         settings = normalize_frame_extraction_settings({
             "rate": rate,
@@ -351,7 +352,11 @@ class VideoFrameExtractor:
         source_name = source_filename or source_path.name
         source_stem = source_stem_for(source_name)
         base = safe_filename_part(output_base or f"{source_stem}_{timestamp_for_filename()}", max_length=72)
-        frames_dir = self._reserve_frames_dir(base)
+        if output_dir is not None:
+            frames_dir = Path(output_dir)
+            frames_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            frames_dir = self._reserve_frames_dir(base)
         started_at = datetime.now().astimezone().isoformat(timespec="seconds")
         index_payload = self._base_index_payload(
             source_path=source_path,

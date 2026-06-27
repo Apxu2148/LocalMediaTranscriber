@@ -110,6 +110,8 @@ const queueUrlForm = document.querySelector("#queueUrlForm");
 const queueUrlInput = document.querySelector("#queueUrlInput");
 const queueUrlAddButton = document.querySelector("#queueUrlAddButton");
 const queueSettingsSummary = document.querySelector("#queueSettingsSummary");
+const queueFolderNameInput = document.querySelector("#queueFolderNameInput");
+const queueFolderPathOutput = document.querySelector("#queueFolderPathOutput");
 const defaultAudioEnabled = document.querySelector("#defaultAudioEnabled");
 const defaultFramesEnabled = document.querySelector("#defaultFramesEnabled");
 const defaultFrameRateSelect = document.querySelector("#defaultFrameRateSelect");
@@ -1417,6 +1419,7 @@ async function addRecordingsToQueue(recordings) {
           source_type: item.source_type,
         })),
         processing_plan: defaultProcessingPlanSnapshot(),
+        queue_folder_name: queueFolderNameValue(),
       }),
     });
     renderQueue(status);
@@ -1457,6 +1460,7 @@ async function addLocalFilesToQueue(files, input, pickerText, multiple = false) 
     formData.append("files", file);
   }
   formData.append("processing_plan", JSON.stringify(defaultProcessingPlanSnapshot()));
+  formData.append("queue_folder_name", queueFolderNameValue());
   try {
     renderQueue(await requestJson("/api/queue/add-files", { method: "POST", body: formData }));
     resetFilePicker(input, pickerText, multiple);
@@ -2792,6 +2796,21 @@ function updateQueueSettingsSummary(status = null) {
   });
 }
 
+function queueFolderNameValue() {
+  return queueFolderNameInput?.value.trim() || "";
+}
+
+function updateQueueFolderUi(status = null) {
+  if (!queueFolderNameInput || !queueFolderPathOutput) {
+    return;
+  }
+  const hasQueue = Number(status?.total_items || 0) > 0 || Boolean(status?.queue_path);
+  queueFolderNameInput.disabled = queueActive || hasAddingInProgress() || hasQueue;
+  queueFolderPathOutput.textContent = status?.queue_path
+    ? t("queueFolderPath", { path: displayOutputPath(status.queue_path) })
+    : t("queueFolderPathPending");
+}
+
 function frameRateOptions() {
   return [
     { value: "interval:30", rate: { mode: "interval", seconds: 30 }, label: t("frameRateEvery30Seconds") },
@@ -3626,6 +3645,10 @@ function queueItemArtifactLines(queueItem) {
     }
   };
 
+  addLine(artifactPathLine("queueFolderArtifactPath", outputs.queue_path, outputs.queue_exists));
+  addLine(artifactPathLine("queueManifestArtifactPath", outputs.queue_manifest_path, outputs.queue_manifest_exists));
+  addLine(artifactPathLine("queueItemFolderArtifactPath", outputs.item_path, outputs.item_exists));
+  addLine(artifactPathLine("sourceManifestArtifactPath", outputs.source_manifest_path, outputs.source_manifest_exists));
   addLine(artifactPathLine(
     outputs.transcript_partial ? "partialTranscriptArtifactPath" : "transcriptArtifactPath",
     outputs.transcript_path,
@@ -3905,6 +3928,7 @@ function renderQueue(status, options = {}) {
   queueProgress.value = progress;
   queueProgressText.textContent = t("queueProgress", { done: finished, total, value: Math.round(progress) });
   updateQueueStageStatus(status);
+  updateQueueFolderUi(status);
   renderRuntimeDetails();
 
   const preserveQueueControls = options.preserveFocusedQueueControls
@@ -4209,6 +4233,7 @@ function updateLongOperationControls() {
     || hasAddingInProgress();
   const fileAddBlocked = active || isAddingFile;
   const urlAddBlocked = active || isAddingUrl;
+  const queueFolderLocked = Number(latestQueueStatus?.total_items || 0) > 0 || Boolean(latestQueueStatus?.queue_path);
   whisperModelSelect.disabled = active || !defaultAudioEnabled.checked;
   whisperDeviceSelect.disabled = active || !defaultAudioEnabled.checked;
   transcribeButton.disabled = fileAddBlocked;
@@ -4219,6 +4244,9 @@ function updateLongOperationControls() {
   queueFilePickerButton.disabled = fileAddBlocked;
   queueUrlAddButton.disabled = urlAddBlocked;
   queueUrlInput.disabled = urlAddBlocked;
+  if (queueFolderNameInput) {
+    queueFolderNameInput.disabled = active || queueFolderLocked;
+  }
   defaultAudioEnabled.disabled = active;
   defaultOcrEnabled.disabled = active || !easyOcrActionable();
   if (defaultOcrEnabled.disabled) {
@@ -4552,7 +4580,7 @@ queueUrlForm.addEventListener("submit", async (event) => {
     renderQueue(await requestJson("/api/queue/add-urls", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ urls, processing_plan: defaultProcessingPlanSnapshot() }),
+      body: JSON.stringify({ urls, processing_plan: defaultProcessingPlanSnapshot(), queue_folder_name: queueFolderNameValue() }),
     }));
     queueUrlInput.value = "";
     const message = t("urlAdded", { count: urls.length });
@@ -4577,7 +4605,7 @@ queueStartButton.addEventListener("click", async () => {
     renderQueue(await requestJson("/api/queue/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: selectedModel(), device: selectedDevice() }),
+      body: JSON.stringify({ model: selectedModel(), device: selectedDevice(), queue_folder_name: queueFolderNameValue() }),
     }));
     setLocalizedOutput(queueOutput, "queueStarted");
     showToast(t("queueStarted"), "info");

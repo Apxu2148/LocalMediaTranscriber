@@ -15,13 +15,14 @@ Implemented through Stage 1.1c:
 - cancellation for transcription and frame extraction;
 - URL download profiles plus media/extraction benchmark diagnostics;
 - OCR backend selector/readiness catalog for Tesseract, EasyOCR, PaddleOCR, and Windows OCR;
-- EasyOCR over extracted frame folders with `frames_ocr.jsonl` and `frames_ocr.txt` artifacts.
+- EasyOCR over extracted frame folders with `frames_ocr.jsonl` and `frames_ocr.txt` artifacts;
+- queue-owned output folders under `data\queues\<queue_folder>\item_xxx\`, with manifests and per-item `downloads`, `transcript`, `frames`, `ocr`, `cv`, `events`, and `logs` folders.
 
 PaddleOCR, Windows OCR, Tesseract OCR processing, and CV processing are still disabled / coming soon.
 
 ## Current next task
 
-Future OCR/CV stages: add runtime estimates if needed, consider additional OCR backends, and design smarter frame selection/CV/LLM/VLM work separately.
+Future OCR/CV stages: use the reserved per-item `cv\` folder for CV outputs, consider additional OCR backends, and design smarter frame selection/CV/LLM/VLM work separately.
 
 ## Constraints
 

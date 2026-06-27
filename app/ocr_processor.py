@@ -86,6 +86,7 @@ class EasyOcrFrameProcessor:
         languages: list[str] | None = None,
         cancel_event: threading.Event | None = None,
         progress_callback: Callable[[dict], None] | None = None,
+        output_dir: str | Path | None = None,
     ) -> dict:
         selected_languages = normalize_easyocr_languages(languages)
         frames_dir, index_payload = self._load_frame_index(frames_index_path, frames_path)
@@ -94,8 +95,12 @@ class EasyOcrFrameProcessor:
             raise OcrProcessorError("OCR requires extracted frames, but no frames were found.")
 
         reader = self._create_reader(selected_languages)
-        jsonl_path = frames_dir / "frames_ocr.jsonl"
-        txt_path = frames_dir / "frames_ocr.txt"
+        ocr_dir = resolve_project_path(output_dir) if output_dir is not None else frames_dir
+        if ocr_dir is None:
+            ocr_dir = frames_dir
+        ocr_dir.mkdir(parents=True, exist_ok=True)
+        jsonl_path = ocr_dir / "frames_ocr.jsonl"
+        txt_path = ocr_dir / "frames_ocr.txt"
 
         started = self.clock()
         records: list[dict] = []
@@ -150,6 +155,7 @@ class EasyOcrFrameProcessor:
             "jsonl_path": relative_project_path(jsonl_path),
             "txt_path": relative_project_path(txt_path),
             "frames_path": relative_project_path(frames_dir),
+            "ocr_path": relative_project_path(ocr_dir),
             "cancelled": status == "cancelled",
             "completed": status == "completed",
         }
@@ -350,6 +356,7 @@ def process_easyocr_frames(
     languages: list[str] | None = None,
     cancel_event: threading.Event | None = None,
     progress_callback: Callable[[dict], None] | None = None,
+    output_dir: str | Path | None = None,
 ) -> dict:
     return EasyOcrFrameProcessor().process_frames(
         frames_index_path=frames_index_path,
@@ -357,6 +364,7 @@ def process_easyocr_frames(
         languages=languages,
         cancel_event=cancel_event,
         progress_callback=progress_callback,
+        output_dir=output_dir,
     )
 
 

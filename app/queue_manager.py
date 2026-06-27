@@ -1,6 +1,8 @@
 import copy
 import inspect
 import logging
+import re
+import shutil
 import threading
 import time
 from dataclasses import dataclass
@@ -63,6 +65,48 @@ STAGE_LABEL_KEYS = {
     "cv_pending_future": "queueStageCvFuture",
     "media_index_pending_future": "queueStageMediaIndexFuture",
 }
+WINDOWS_RESERVED_NAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{index}" for index in range(1, 10)),
+    *(f"LPT{index}" for index in range(1, 10)),
+}
+QUEUE_FOLDER_COMPONENT_MAX_LENGTH = 100
+QUEUE_ITEM_LABEL_MAX_LENGTH = 60
+QUEUE_OUTPUT_SUBDIRS = ("source", "downloads", "transcript", "frames", "ocr", "cv", "events", "logs")
+
+
+def queue_timestamp_for_folder() -> str:
+    return datetime.now().astimezone().strftime("%Y-%m-%d_%H%M%S")
+
+
+def safe_queue_path_component(
+    value: str | None,
+    *,
+    fallback: str = "queue",
+    max_length: int = QUEUE_FOLDER_COMPONENT_MAX_LENGTH,
+) -> str:
+    cleaned = re.sub(r"\s+", "_", str(value or "").strip())
+    if not cleaned:
+        cleaned = fallback
+    else:
+        cleaned = safe_filename_part(cleaned, max_length=max_length)
+    while ".." in cleaned:
+        cleaned = cleaned.replace("..", "_")
+    cleaned = re.sub(r"_+", "_", cleaned).strip(" ._")
+    if not cleaned:
+        cleaned = fallback
+    if cleaned.upper() in WINDOWS_RESERVED_NAMES:
+        cleaned = f"{cleaned}_{fallback}"
+    if len(cleaned) > max_length:
+        cleaned = safe_filename_part(cleaned, max_length=max_length)
+    return cleaned or fallback
+
+
+def queue_folder_name_for(user_value: str | None) -> str:
+    return f"{queue_timestamp_for_folder()}_{safe_queue_path_component(user_value)}"
 
 
 @dataclass(frozen=True)
@@ -97,8 +141,10 @@ class QueueManager:
         video_metadata_reader: Callable[[Path], dict] | None = read_video_metadata,
         retention_cleaner: Callable[[dict], dict] | None = None,
         estimate_processor: Callable[[dict], dict] | None = None,
+        queues_dir: Path | None = None,
     ) -> None:
         self.jobs_dir = jobs_dir
+        self.queues_dir = queues_dir or config.QUEUES_DIR
         self.processor = processor
         self.error_recorder = error_recorder
         self.duration_reader = duration_reader
@@ -116,6 +162,9 @@ class QueueManager:
         self._items: list[dict] = []
         self._job_id: str | None = None
         self._job_path: Path | None = None
+        self._queue_folder_name: str | None = None
+        self._queue_path: Path | None = None
+        self._queue_manifest_path: Path | None = None
         self._created_at: str | None = None
         self._started_at: str | None = None
         self._finished_at: str | None = None
@@ -193,14 +242,14 @@ class QueueManager:
         with self._lock:
             return bool(self._estimating_indices)
 
-    def add_files(self, files: list[QueueFile]) -> dict:
+    def add_files(self, files: list[QueueFile], queue_folder_name: str | None = None) -> dict:
         if not files:
             raise RuntimeError("Выберите хотя бы один файл для очереди.")
 
         with self._lock:
             self._ensure_inactive_locked("Нельзя добавлять файлы во время обработки очереди.")
             if self._job_id is None:
-                self._create_job_locked()
+                self._create_job_locked(queue_folder_name)
 
             start_index = len(self._items) + 1
             active_keys = self._active_file_duplicate_keys_locked()
@@ -230,14 +279,14 @@ class QueueManager:
             )
             return self._status_snapshot_locked()
 
-    def add_urls(self, urls: list[QueueUrl]) -> dict:
+    def add_urls(self, urls: list[QueueUrl], queue_folder_name: str | None = None) -> dict:
         if not urls:
             raise RuntimeError("Добавьте хотя бы одну ссылку для очереди.")
 
         with self._lock:
             self._ensure_inactive_locked("Нельзя добавлять ссылки во время обработки очереди.")
             if self._job_id is None:
-                self._create_job_locked()
+                self._create_job_locked(queue_folder_name)
 
             start_index = len(self._items) + 1
             active_keys = self._active_url_duplicate_keys_locked()
@@ -297,6 +346,15 @@ class QueueManager:
                     "outputs": {},
                     "estimate": None,
                 }
+                item.update(
+                    self._queue_item_output_fields_locked(
+                        index=index,
+                        source_label=self._url_source_label(source_url, index),
+                        source_type="url",
+                        original_path=None,
+                        source_url=source_url,
+                    )
+                )
                 self._sync_legacy_fields_from_processing_plan(item)
                 self._refresh_frame_estimate_locked(item)
                 self._items.append(item)
@@ -354,6 +412,9 @@ class QueueManager:
             self._items = []
             self._job_id = None
             self._job_path = None
+            self._queue_folder_name = None
+            self._queue_path = None
+            self._queue_manifest_path = None
             self._created_at = None
             self._started_at = None
             self._finished_at = None
@@ -454,6 +515,9 @@ class QueueManager:
                 self._status = "empty"
                 self._job_id = None
                 self._job_path = None
+                self._queue_folder_name = None
+                self._queue_path = None
+                self._queue_manifest_path = None
                 self._created_at = None
                 self._started_at = None
                 self._finished_at = None
@@ -591,10 +655,107 @@ class QueueManager:
             "outputs": {},
             "estimate": None,
         }
+        item.update(
+            self._queue_item_output_fields_locked(
+                index=index,
+                source_label=queue_file.source_filename,
+                source_type=queue_file.source_type,
+                original_path=str(queue_file.source_path),
+                source_url=None,
+            )
+        )
         self._sync_legacy_fields_from_processing_plan(item)
         if media_kind == "video":
             self._refresh_video_analysis_locked(item)
         return item
+
+    def _queue_item_output_fields_locked(
+        self,
+        *,
+        index: int,
+        source_label: str,
+        source_type: str,
+        original_path: str | None,
+        source_url: str | None,
+    ) -> dict:
+        if self._queue_path is None:
+            return {}
+
+        label_source = source_label if source_type == "url" else Path(source_label).stem if source_label else ""
+        label = safe_queue_path_component(
+            label_source,
+            fallback="url_source" if source_type == "url" else "media_item",
+            max_length=QUEUE_ITEM_LABEL_MAX_LENGTH,
+        )
+        base_folder = f"item_{index:03d}_{label}"
+        item_folder = base_folder
+        item_path = self._queue_path / item_folder
+        counter = 2
+        while item_path.exists():
+            item_folder = f"{base_folder}_{counter}"
+            item_path = self._queue_path / item_folder
+            counter += 1
+
+        queue_output = {f"{name}_dir": str(item_path / name) for name in QUEUE_OUTPUT_SUBDIRS}
+        for folder_path in queue_output.values():
+            Path(folder_path).mkdir(parents=True, exist_ok=True)
+
+        source_manifest_path = Path(queue_output["source_dir"]) / "source_manifest.json"
+        source_manifest = {
+            "schema_version": 1,
+            "queue_id": self._job_id,
+            "queue_folder_name": self._queue_folder_name,
+            "item_index": index,
+            "item_folder": item_folder,
+            "source_type": source_type,
+            "source": source_url or original_path or source_label,
+            "source_url": source_url,
+            "original_path": original_path,
+            "copied_to_queue": False,
+            "related_event_paths": self._related_event_paths(original_path),
+        }
+        write_json_file_atomic(source_manifest_path, source_manifest)
+
+        return {
+            "queue_folder_name": self._queue_folder_name,
+            "queue_path": str(self._queue_path),
+            "queue_manifest_path": str(self._queue_manifest_path) if self._queue_manifest_path else None,
+            "item_folder": item_folder,
+            "item_path": str(item_path),
+            "original_source_path": original_path,
+            "source_manifest_path": str(source_manifest_path),
+            "queue_output": queue_output,
+        }
+
+    @staticmethod
+    def _url_source_label(source_url: str, index: int) -> str:
+        parsed = urlsplit(source_url)
+        host = parsed.netloc or "url"
+        path_name = Path(parsed.path).name
+        stem = Path(path_name).stem if path_name else ""
+        return "_".join(part for part in (host, stem) if part) or f"url_{index:03d}"
+
+    @staticmethod
+    def _related_event_paths(original_path: str | None) -> dict:
+        if not original_path:
+            return {}
+        try:
+            source_path = Path(original_path)
+            parent = source_path.parent
+        except OSError:
+            return {}
+        related: dict[str, str | list[str]] = {}
+        session_json = parent / "session.json"
+        if session_json.is_file():
+            related["session"] = str(session_json)
+        input_events = parent / "input_events.jsonl"
+        if input_events.is_file():
+            related["input_events"] = str(input_events)
+        for key, pattern in (("mouse", "mouse_events*.jsonl"), ("keyboard", "keyboard_events*.jsonl")):
+            paths = [str(path) for path in sorted(parent.glob(pattern)) if path.is_file()]
+            if paths:
+                related[key] = paths
+        return related
 
     @staticmethod
     def _media_kind_for(path_or_name: Path | str) -> str:
@@ -933,6 +1094,16 @@ class QueueManager:
         downloaded_media_path = self._absolute_artifact_path(
             item.get("downloaded_video_path") or item.get("downloaded_media_path") or item.get("downloaded_audio_path")
         )
+        queue_output = item.get("queue_output") or {}
+        queue_path = self._absolute_artifact_path(item.get("queue_path") or (str(self._queue_path) if self._queue_path else None))
+        queue_manifest_path = self._absolute_artifact_path(
+            item.get("queue_manifest_path") or (str(self._queue_manifest_path) if self._queue_manifest_path else None)
+        )
+        item_path = self._absolute_artifact_path(item.get("item_path"))
+        source_manifest_path = self._absolute_artifact_path(item.get("source_manifest_path"))
+        events_dir = self._absolute_artifact_path(queue_output.get("events_dir"))
+        logs_dir = self._absolute_artifact_path(queue_output.get("logs_dir"))
+        cv_dir = self._absolute_artifact_path(queue_output.get("cv_dir"))
         uploaded_temp_path = None
         if item.get("source_type") == "local_file" and item.get("source_path"):
             source_path = Path(item["source_path"])
@@ -944,6 +1115,14 @@ class QueueManager:
                 uploaded_temp_path = None
 
         outputs = {
+            "queue_path": queue_path,
+            "queue_exists": self._path_exists(queue_path),
+            "queue_manifest_path": queue_manifest_path,
+            "queue_manifest_exists": self._path_exists(queue_manifest_path),
+            "item_path": item_path,
+            "item_exists": self._path_exists(item_path),
+            "source_manifest_path": source_manifest_path,
+            "source_manifest_exists": self._path_exists(source_manifest_path),
             "transcript_path": self._absolute_artifact_path(item.get("transcript_path")),
             "transcript_exists": self._path_exists(item.get("transcript_path")),
             "transcript_partial": bool(item.get("partial_transcript")),
@@ -957,6 +1136,12 @@ class QueueManager:
             "ocr_jsonl_exists": self._path_exists(ocr_jsonl_path),
             "ocr_txt_path": ocr_txt_path,
             "ocr_txt_exists": self._path_exists(ocr_txt_path),
+            "events_dir": events_dir,
+            "events_dir_exists": self._path_exists(events_dir),
+            "logs_dir": logs_dir,
+            "logs_dir_exists": self._path_exists(logs_dir),
+            "cv_dir": cv_dir,
+            "cv_dir_exists": self._path_exists(cv_dir),
             "downloaded_media_path": downloaded_media_path,
             "downloaded_media_exists": self._path_exists(downloaded_media_path),
             "downloaded_media_deleted": bool(cleanup.get("downloaded_media_deleted")),
@@ -1576,7 +1761,7 @@ class QueueManager:
             self._count_locked("cancelled"),
         )
 
-    def _create_job_locked(self) -> None:
+    def _create_job_locked(self, queue_folder_name: str | None = None) -> None:
         self.jobs_dir.mkdir(parents=True, exist_ok=True)
         base_id = timestamp_for_filename()
         job_id = base_id
@@ -1587,9 +1772,32 @@ class QueueManager:
 
         self._job_id = job_id
         self._job_path = self.jobs_dir / f"job_{job_id}.json"
+        self._queue_folder_name, self._queue_path = self._reserve_queue_path_locked(queue_folder_name)
+        self._queue_manifest_path = self._queue_path / "queue_manifest.json"
         self._created_at = self._now()
         self._status = "pending"
-        logger.info("Queue created: job_id=%s job_json=%s", self._job_id, self._job_path)
+        logger.info(
+            "Queue created: job_id=%s job_json=%s queue_path=%s",
+            self._job_id,
+            self._job_path,
+            self._queue_path,
+        )
+
+    def _reserve_queue_path_locked(self, requested_name: str | None) -> tuple[str, Path]:
+        self.queues_dir.mkdir(parents=True, exist_ok=True)
+        queues_root = self.queues_dir.resolve()
+        base_name = queue_folder_name_for(requested_name)
+        folder_name = base_name
+        queue_path = (self.queues_dir / folder_name).resolve()
+        counter = 2
+        while queue_path.exists():
+            folder_name = f"{base_name}_{counter}"
+            queue_path = (self.queues_dir / folder_name).resolve()
+            counter += 1
+        if not queue_path.is_relative_to(queues_root):
+            raise RuntimeError("Queue output folder resolved outside data/queues.")
+        queue_path.mkdir(parents=True, exist_ok=False)
+        return folder_name, queue_path
 
     def _status_snapshot_locked(self) -> dict:
         payload = self._job_payload_locked()
@@ -1620,6 +1828,9 @@ class QueueManager:
     def _job_payload_locked(self) -> dict:
         return {
             "job_id": self._job_id,
+            "queue_folder_name": self._queue_folder_name,
+            "queue_path": str(self._queue_path) if self._queue_path else None,
+            "queue_manifest_path": str(self._queue_manifest_path) if self._queue_manifest_path else None,
             "created_at": self._created_at,
             "started_at": self._started_at,
             "finished_at": self._finished_at,
@@ -1637,6 +1848,47 @@ class QueueManager:
         if self._job_path is None:
             return
         write_json_file_atomic(self._job_path, self._job_payload_locked())
+        if self._queue_manifest_path is not None:
+            write_json_file_atomic(self._queue_manifest_path, self._queue_manifest_payload_locked())
+
+    def _queue_manifest_payload_locked(self) -> dict:
+        return {
+            "schema_version": 1,
+            "queue_id": self._job_id,
+            "queue_folder_name": self._queue_folder_name,
+            "queue_path": str(self._queue_path) if self._queue_path else None,
+            "queue_manifest_path": str(self._queue_manifest_path) if self._queue_manifest_path else None,
+            "created_at": self._created_at,
+            "started_at": self._started_at,
+            "finished_at": self._finished_at,
+            "project": "LocalMediaTranscriber",
+            "job_path": str(self._job_path) if self._job_path else None,
+            "status": self._status,
+            "model": self._model,
+            "device_preference": self._device_preference,
+            "total_items": len(self._items),
+            "completed_items": self._count_locked("completed"),
+            "failed_items": self._count_failed_locked(),
+            "cancelled_items": self._count_locked("cancelled"),
+            "items": [self._queue_manifest_item_payload(item) for item in self._items],
+        }
+
+    @staticmethod
+    def _queue_manifest_item_payload(item: dict) -> dict:
+        return {
+            "index": item.get("index"),
+            "source": item.get("source_url") or item.get("source_path") or item.get("source_filename"),
+            "source_type": item.get("source_type") or "unknown",
+            "source_filename": item.get("source_filename"),
+            "source_title": item.get("source_title"),
+            "item_folder": item.get("item_folder"),
+            "item_path": item.get("item_path"),
+            "source_manifest_path": item.get("source_manifest_path"),
+            "status": item.get("status"),
+            "stage": item.get("stage"),
+            "processing_plan": copy.deepcopy(item.get("processing_plan") or {}),
+            "outputs": copy.deepcopy(item.get("outputs") or {}),
+        }
 
     def _eta_locked(self) -> tuple[float | None, str]:
         completed = [
@@ -1668,6 +1920,90 @@ class QueueManager:
         start = datetime.fromisoformat(self._started_at)
         end = datetime.fromisoformat(self._finished_at) if self._finished_at else datetime.now().astimezone()
         return round(max(0.0, (end - start).total_seconds()), 1)
+
+    def _relocate_url_download(self, item_snapshot: dict, source_path: Path, metadata: dict) -> tuple[Path, dict]:
+        downloads_dir_value = (item_snapshot.get("queue_output") or {}).get("downloads_dir")
+        if not downloads_dir_value:
+            return source_path, metadata
+
+        downloads_dir = Path(downloads_dir_value)
+        downloads_dir.mkdir(parents=True, exist_ok=True)
+        target_path = self._reserve_download_target(downloads_dir, source_path.name)
+        try:
+            if source_path.resolve() == target_path.resolve():
+                return source_path, metadata
+        except OSError:
+            return source_path, metadata
+
+        if self._is_known_download_path(source_path):
+            shutil.move(str(source_path), str(target_path))
+        else:
+            shutil.copy2(source_path, target_path)
+
+        relocated = dict(metadata)
+        original_path = metadata.get("source_path") or str(source_path)
+        for key in ("source_path", "downloaded_audio_path", "downloaded_media_path", "downloaded_video_path"):
+            value = relocated.get(key)
+            if key == "source_path" or not value or self._same_path(value, original_path):
+                relocated[key] = str(target_path)
+        return target_path, relocated
+
+    @staticmethod
+    def _reserve_download_target(downloads_dir: Path, source_name: str) -> Path:
+        source_path = Path(source_name)
+        stem = safe_queue_path_component(source_path.stem, fallback="downloaded_media", max_length=80)
+        suffix = source_path.suffix if source_path.suffix else ""
+        target_path = downloads_dir / f"{stem}{suffix}"
+        counter = 2
+        while target_path.exists():
+            target_path = downloads_dir / f"{stem}_{counter}{suffix}"
+            counter += 1
+        return target_path
+
+    def _is_known_download_path(self, source_path: Path) -> bool:
+        try:
+            resolved = source_path.resolve()
+        except OSError:
+            return False
+        roots = [config.DOWNLOADS_DIR.resolve(), (self.queues_dir.resolve().parent / "downloads").resolve()]
+        return any(resolved.is_relative_to(root) for root in roots)
+
+    @staticmethod
+    def _same_path(left: str | Path | None, right: str | Path | None) -> bool:
+        if not left or not right:
+            return False
+        try:
+            return Path(left).resolve() == Path(right).resolve()
+        except OSError:
+            return str(left) == str(right)
+
+    def _write_item_source_manifest_locked(self, item: dict) -> None:
+        manifest_path_value = item.get("source_manifest_path")
+        if not manifest_path_value:
+            return
+        manifest_path = Path(manifest_path_value)
+        payload = {
+            "schema_version": 1,
+            "queue_id": self._job_id,
+            "queue_folder_name": self._queue_folder_name,
+            "item_index": item.get("index"),
+            "item_folder": item.get("item_folder"),
+            "source_type": item.get("source_type") or "unknown",
+            "source": item.get("source_url") or item.get("source_path") or item.get("source_filename"),
+            "source_url": item.get("source_url"),
+            "source_path": item.get("source_path"),
+            "source_filename": item.get("source_filename"),
+            "source_title": item.get("source_title"),
+            "source_platform": item.get("source_platform"),
+            "original_path": item.get("original_source_path") or item.get("source_path"),
+            "downloaded_audio_path": item.get("downloaded_audio_path"),
+            "downloaded_media_path": item.get("downloaded_media_path"),
+            "downloaded_video_path": item.get("downloaded_video_path"),
+            "copied_to_queue": bool(item.get("source_type") == "url" and item.get("downloaded_media_path")),
+            "queue_output": copy.deepcopy(item.get("queue_output") or {}),
+            "related_event_paths": self._related_event_paths(item.get("source_path")),
+        }
+        write_json_file_atomic(manifest_path, payload)
 
     def _prepare_source(
         self,
@@ -1708,6 +2044,7 @@ class QueueManager:
         source_path = Path(metadata["source_path"])
         if not source_path.exists():
             raise RuntimeError("Скачанный аудиофайл не найден.")
+        source_path, metadata = self._relocate_url_download(item_snapshot, source_path, metadata)
 
         with self._lock:
             media_kind = "url" if needs_video else self._media_kind_for(source_path)
@@ -1726,6 +2063,7 @@ class QueueManager:
                 }
             )
             self._set_item_stage_locked(item, "preparing_source", status="downloaded")
+            self._write_item_source_manifest_locked(item)
             self._persist_locked()
         return source_path
 

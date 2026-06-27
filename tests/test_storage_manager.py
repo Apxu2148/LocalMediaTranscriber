@@ -31,7 +31,7 @@ class StorageManagerTests(unittest.TestCase):
         folders = {folder["key"]: folder for folder in summary["folders"]}
 
         self.assertEqual(str(self.data_dir.resolve()), summary["data_path"])
-        self.assertEqual({"downloads", "uploads", "recordings", "transcripts", "logs", "jobs"}, set(folders))
+        self.assertEqual({"downloads", "uploads", "recordings", "transcripts", "logs", "jobs", "queues"}, set(folders))
         self.assertTrue(folders["downloads"]["exists"])
         self.assertEqual(4, folders["downloads"]["size_bytes"])
         self.assertFalse(folders["uploads"]["exists"])
@@ -124,6 +124,22 @@ class StorageManagerTests(unittest.TestCase):
         self.assertFalse(result["downloaded_media_deleted"])
         self.assertTrue(result["downloaded_media_delete_error"])
         self.assertTrue(outside_path.exists())
+
+    def test_retention_cleanup_deletes_queue_owned_url_downloads(self) -> None:
+        manager = self.make_manager()
+        manager.update_settings({"keep_downloaded_url_media": False})
+        media_path = self.data_dir / "queues" / "queue_1" / "item_001_url" / "downloads" / "media.mp4"
+        media_path.parent.mkdir(parents=True)
+        media_path.write_bytes(b"media")
+
+        result = manager.apply_retention_cleanup({
+            "source_type": "url",
+            "status": "completed",
+            "downloaded_media_path": str(media_path),
+        })
+
+        self.assertTrue(result["downloaded_media_deleted"])
+        self.assertFalse(media_path.exists())
 
     def test_retention_cleanup_deletes_uploaded_temp_only_inside_project_data(self) -> None:
         manager = self.make_manager()

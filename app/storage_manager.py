@@ -31,6 +31,7 @@ class StorageManager:
             "transcripts": self.data_dir / "transcripts",
             "logs": self.data_dir / "logs",
             "jobs": self.data_dir / "jobs",
+            "queues": self.data_dir / "queues",
         }
         self.cleanup_allowed = {"downloads", "uploads"}
 
@@ -118,7 +119,14 @@ class StorageManager:
                 or item.get("downloaded_media_path")
                 or item.get("downloaded_audio_path")
             )
-            result.update(self._delete_intermediate_file(path, "downloads", "downloaded_media"))
+            result.update(
+                self._delete_intermediate_file(
+                    path,
+                    "downloads",
+                    "downloaded_media",
+                    extra_allowed_roots=[self.folder_paths["queues"]],
+                )
+            )
 
         if item.get("status") == "completed" and not settings.get("keep_uploaded_temp_files", True):
             path = item.get("source_path") if item.get("source_type") == "local_file" else None
@@ -159,7 +167,14 @@ class StorageManager:
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 
-    def _delete_intermediate_file(self, path_value: str | None, folder_key: str, prefix: str) -> dict:
+    def _delete_intermediate_file(
+        self,
+        path_value: str | None,
+        folder_key: str,
+        prefix: str,
+        *,
+        extra_allowed_roots: list[Path] | None = None,
+    ) -> dict:
         payload = {
             f"{prefix}_deleted": False,
             f"{prefix}_delete_error": None,
@@ -170,7 +185,12 @@ class StorageManager:
         folder = self._safe_known_folder(folder_key)
         try:
             path = Path(path_value).resolve()
-            if not path.is_relative_to(self.data_dir) or not path.is_relative_to(folder):
+            allowed_roots = [folder]
+            for root in extra_allowed_roots or []:
+                resolved_root = root.resolve()
+                if resolved_root.is_relative_to(self.data_dir):
+                    allowed_roots.append(resolved_root)
+            if not path.is_relative_to(self.data_dir) or not any(path.is_relative_to(root) for root in allowed_roots):
                 payload[f"{prefix}_delete_error"] = "Путь находится вне разрешенной папки project data."
                 return payload
             if path.exists() and path.is_file():

@@ -15,6 +15,7 @@ DOWNLOADS_DIR = DATA_DIR / "downloads"
 TRANSCRIPTS_DIR = DATA_DIR / "transcripts"
 LOGS_DIR = DATA_DIR / "logs"
 JOBS_DIR = DATA_DIR / "jobs"
+QUEUES_DIR = DATA_DIR / "queues"
 MODELS_DIR = BASE_DIR / "models"
 TEMP_DIR = BASE_DIR / "tmp"
 
@@ -91,6 +92,7 @@ def ensure_directories() -> None:
         TRANSCRIPTS_DIR,
         LOGS_DIR,
         JOBS_DIR,
+        QUEUES_DIR,
         MODELS_DIR,
         TEMP_DIR,
     ):

@@ -130,6 +130,7 @@ class OpenFolderRequest(BaseModel):
 class QueueStartRequest(BaseModel):
     model: str | None = None
     device: str | None = None
+    queue_folder_name: str | None = None
 
 
 class QueueItemIndexRequest(BaseModel):
@@ -146,6 +147,7 @@ class QueueItemUpdateRequest(BaseModel):
 class QueueUrlsRequest(BaseModel):
     urls: list[str]
     processing_plan: dict | None = None
+    queue_folder_name: str | None = None
 
 
 class QueueRecordingRequest(BaseModel):
@@ -156,6 +158,7 @@ class QueueRecordingRequest(BaseModel):
 class QueueRecordingsRequest(BaseModel):
     files: list[QueueRecordingRequest]
     processing_plan: dict | None = None
+    queue_folder_name: str | None = None
 
 
 class StorageSettingsRequest(BaseModel):
@@ -224,6 +227,7 @@ def process_queue_item(
     cancel_event: threading.Event | None = None,
 ) -> dict:
     source_path = Path(item["source_path"])
+    transcript_dir = queue_item_output_dir(item, "transcript_dir")
     should_cancel = cancel_event.is_set if cancel_event is not None else None
     result = transcriber.transcribe(source_path, model_name, device_preference, should_cancel=should_cancel)
     if result.cancelled:
@@ -233,6 +237,7 @@ def process_queue_item(
             source_type=item.get("source_type") or "local_file",
             result=result,
             extra_metadata=item,
+            output_dir=transcript_dir,
         )
     return transcript_store.save_success(
         source_path=source_path,
@@ -240,7 +245,13 @@ def process_queue_item(
         source_type=item.get("source_type") or "local_file",
         result=result,
         extra_metadata=item,
+        output_dir=transcript_dir,
     )
+
+
+def queue_item_output_dir(item: dict, key: str) -> Path | None:
+    value = (item.get("queue_output") or {}).get(key)
+    return Path(value) if value else None
 
 
 def process_queue_frame_extraction(item: dict, cancel_event: threading.Event, progress_callback) -> dict:
@@ -269,6 +280,7 @@ def process_queue_frame_extraction(item: dict, cancel_event: threading.Event, pr
         cancel_event=cancel_event,
         progress_callback=progress_callback,
         source_metadata=source_metadata,
+        output_dir=queue_item_output_dir(item, "frames_dir"),
     )
 
 
@@ -290,6 +302,7 @@ def process_queue_ocr(item: dict, cancel_event: threading.Event, progress_callba
         languages=ocr_plan.get("languages") or ["ru", "en"],
         cancel_event=cancel_event,
         progress_callback=progress_callback,
+        output_dir=queue_item_output_dir(item, "ocr_dir"),
     )
 
 
@@ -350,6 +363,7 @@ def save_queue_item_error(item: dict, model_name: str, _device_preference: str, 
         error_message=str(exc),
         technical_details=technical_details_for_exception(exc),
         extra_metadata=item,
+        output_dir=queue_item_output_dir(item, "transcript_dir"),
     )
 
 
@@ -372,6 +386,7 @@ queue_manager = QueueManager(
     ocr_processor=process_queue_ocr,
     retention_cleaner=storage_manager.apply_retention_cleanup,
     estimate_processor=runtime_estimator.estimate,
+    queues_dir=config.QUEUES_DIR,
 )
 benchmark_service = BenchmarkService(
     transcriber=transcriber,
@@ -1053,7 +1068,11 @@ def parse_processing_plan_form(value: str | None) -> dict | None:
 
 
 @app.post("/api/queue/add-files")
-async def queue_add_files(files: list[UploadFile] = File(...), processing_plan: str | None = Form(default=None)) -> dict:
+async def queue_add_files(
+    files: list[UploadFile] = File(...),
+    processing_plan: str | None = Form(default=None),
+    queue_folder_name: str | None = Form(default=None),
+) -> dict:
     ensure_benchmark_inactive()
     if queue_manager.is_running:
         raise_api_error("Нельзя добавлять файлы во время обработки очереди.")
@@ -1069,7 +1088,7 @@ async def queue_add_files(files: list[UploadFile] = File(...), processing_plan: 
         queue_files.append(QueueFile(source_path=upload_path, source_filename=source_filename, processing_plan=plan))
 
     try:
-        return queue_manager.add_files(queue_files)
+        return queue_manager.add_files(queue_files, queue_folder_name=queue_folder_name)
     except RuntimeError as exc:
         raise_api_error(str(exc))
     except ValueError as exc:
@@ -1100,7 +1119,7 @@ def queue_add_recordings(payload: QueueRecordingsRequest) -> dict:
         )
 
     try:
-        return queue_manager.add_files(queue_files)
+        return queue_manager.add_files(queue_files, queue_folder_name=payload.queue_folder_name)
     except RuntimeError as exc:
         raise_api_error(str(exc))
     except ValueError as exc:
@@ -1112,7 +1131,7 @@ def queue_add_urls(payload: QueueUrlsRequest) -> dict:
     ensure_benchmark_inactive()
     try:
         urls = [QueueUrl(source_url=url, processing_plan=payload.processing_plan) for url in payload.urls if url.strip()]
-        return queue_manager.add_urls(urls)
+        return queue_manager.add_urls(urls, queue_folder_name=payload.queue_folder_name)
     except RuntimeError as exc:
         raise_api_error(str(exc))
     except ValueError as exc:

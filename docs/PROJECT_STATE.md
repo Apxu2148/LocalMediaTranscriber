@@ -2,7 +2,18 @@
 
 ## Current milestone
 
-Stage 1.1c is implemented: EasyOCR can run over existing extracted frame folders for video and URL queue items when optional OCR dependencies are installed. URL jobs still snapshot a configurable download profile plus optional max video height, and frame extraction can optionally downscale saved JPEGs.
+Stage 1.1c is implemented and queue outputs now use a queue-owned folder layout under `data\queues\<queue_folder>\item_xxx\`. EasyOCR can run over extracted frame folders for video and URL queue items when optional OCR dependencies are installed. URL jobs still snapshot a configurable download profile plus optional max video height, and frame extraction can optionally downscale saved JPEGs.
+
+## Queue output layout
+
+- New queue sessions reserve one root folder under `data\queues\`, named `YYYY-MM-DD_HHMMSS_<safe_name>`. Empty UI input falls back to `_queue`; user-provided names are sanitized for Windows-safe path components and cannot escape `data\queues`.
+- Each queue item gets a stable numbered folder such as `item_001_<safe_source_name>` with `source`, `downloads`, `transcript`, `frames`, `ocr`, `cv`, `events`, and `logs` subfolders.
+- Queue manifests are written to `queue_manifest.json` and refreshed through the existing queue persistence path as item outputs become available.
+- New queue transcript outputs go to `item_xxx\transcript\transcript.txt` and `transcript.json`; top-level compatibility fields (`transcript_path`, `json_path`) now point at those paths.
+- New queue frame outputs go to `item_xxx\frames\frames_index.json` and frame JPEGs. Direct/non-queue frame extraction still uses the older recordings folder behavior.
+- New queue OCR outputs go to `item_xxx\ocr\frames_ocr.jsonl` and `frames_ocr.txt`. OCR over a non-queue frame folder can still write beside the frames when no output directory is provided.
+- URL downloads used by queue items are relocated into `item_xxx\downloads\`; retention cleanup can delete those queue-owned downloads without touching local source files.
+- The Created files UI/API uses `queueItem.outputs` and now lists queue root, queue manifest, item folder, source manifest, transcript, frame, OCR, download, events/logs/CV-reserved paths when present.
 
 ## EasyOCR frame OCR
 
@@ -10,9 +21,9 @@ Stage 1.1c is implemented: EasyOCR can run over existing extracted frame folders
 - OCR readiness remains lightweight: `OcrManager.status().processing_enabled` is true only when the selected backend is `easyocr` and EasyOCR is importable; readiness checks still do not initialize EasyOCR readers or models.
 - Queue OCR is available only for video/URL items with EasyOCR. Enabling OCR auto-enables frame extraction in the normalized `processing_plan` and legacy `operations.extract_frames`.
 - OCR runs after successful frame extraction using the frame result's `frames_index_path` and `frames_path`.
-- OCR outputs are written beside the extracted frames:
-  - `data\recordings\<base>__frames\frames_ocr.jsonl`
-  - `data\recordings\<base>__frames\frames_ocr.txt`
+- For new queue items, OCR outputs are written under the queue item:
+  - `data\queues\<queue_folder>\item_xxx_<source>\ocr\frames_ocr.jsonl`
+  - `data\queues\<queue_folder>\item_xxx_<source>\ocr\frames_ocr.txt`
 - Queue items store `ocr_result` with backend, languages, processed-frame counts, OCR time, seconds per frame, and artifact paths. `outputs` exposes `ocr_jsonl_path`, `ocr_jsonl_exists`, `ocr_txt_path`, and `ocr_txt_exists`.
 - OCR cancellation is cooperative between frames. Partial OCR artifacts may exist for frames processed before cancellation.
 
@@ -44,15 +55,25 @@ Stage 1.1c is implemented: EasyOCR can run over existing extracted frame folders
 
 - `app/ocr_manager.py`: combined backend catalog, optional import checks, Windows platform check, selected-backend persistence, and EasyOCR-only processing availability.
 - `app/ocr_processor.py`: optional EasyOCR frame processor, cancellation/progress hooks, per-frame errors, benchmark fields, and JSONL/TXT artifact writing.
-- `app/main.py`: EasyOCR queue callback wiring and selected backend/check API fields.
-- `app/queue_manager.py`: EasyOCR plan normalization, `ocr_processing` stage, cancellation, OCR result metadata, and OCR output artifacts.
-- `static/index.html`, `static/app.js`, `static/style.css`, `static/i18n.js`: compact selector, conditional Tesseract fields, actionable EasyOCR readiness/default/per-item controls, OCR stage/artifact copy, and RU/EN text.
+- `app/main.py`: EasyOCR queue callback wiring, selected backend/check API fields, queue folder name API fields, and queue output directory handoff.
+- `app/queue_manager.py`: EasyOCR plan normalization, `ocr_processing` stage, cancellation, OCR result metadata, queue/item output folder creation, URL download relocation, queue manifests, and output artifacts.
+- `static/index.html`, `static/app.js`, `static/style.css`, `static/i18n.js`: compact selector, conditional Tesseract fields, actionable EasyOCR readiness/default/per-item controls, queue folder naming UI, Created files queue paths, OCR stage/artifact copy, and RU/EN text.
 - Focused OCR processor/manager/API/i18n/UI/queue tests and OCR documentation.
 - `app/queue_manager.py`, `app/storage_manager.py`, focused retention tests, and retention documentation for the URL cleanup bugfix.
 - `app/url_download_manager.py`, `app/url_downloader.py`, queue/main integration, compact localized settings UI, and focused URL profile/diagnostic tests.
 - `app/frame_settings_manager.py`, `app/frame_extractor.py`, `app/runtime_estimate.py`, queue/main integration, compact localized resolution controls, and focused resolution/estimate/UI tests.
 
 ## Validation
+
+Queue output folder structure:
+
+- `.venv\Scripts\python.exe -m compileall app`
+- `.venv\Scripts\python.exe -m unittest tests.test_queue_manager` (53 tests)
+- `.venv\Scripts\python.exe -m unittest tests.test_runtime_estimate` (14 tests)
+- `.venv\Scripts\python.exe -m unittest tests.test_ocr_processor` (11 tests)
+- `.venv\Scripts\python.exe -m unittest tests.test_frame_extractor` (14 tests)
+- `.venv\Scripts\python.exe -m unittest tests.test_ui_contract tests.test_i18n tests.test_http_smoke` (41 tests)
+- `.venv\Scripts\python.exe -m unittest tests.test_storage_manager` (11 tests)
 
 Passed on 2026-06-20:
 
@@ -113,6 +134,7 @@ Stage 1.1c EasyOCR over extracted frames:
 - Save a URL max height and frame max size, refresh, add a new URL/video item, and confirm the new item snapshots those values while older pending items keep their previous plans.
 - Extract frames from a video wider than the selected max size and verify `frames_index.json` records the downscaled dimensions; repeat with a smaller video and confirm no upscaling.
 - Switch RU to EN while a queue is active and confirm the persistent queue-start/stage/per-item messages update.
+- Run the queue output manual checks from `docs/codex_tasks/2026-06-27_queue_output_folder_structure.md`: named queue, multi-item queue, empty-name fallback, unsafe-name sanitization, and URL download retention cleanup.
 
 ## Known limitations
 

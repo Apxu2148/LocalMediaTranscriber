@@ -84,6 +84,18 @@ class EasyOcrFrameProcessorTests(unittest.TestCase):
         self.assertEqual(0.91, records[0]["blocks"][0]["confidence"])
         self.assertIn("Привет", txt_path.read_text(encoding="utf-8"))
 
+    def test_can_write_outputs_to_separate_ocr_directory(self) -> None:
+        reader = FakeReader({"frame_000001.jpg": [], "frame_000002.jpg": []})
+        processor = EasyOcrFrameProcessor(reader_factory=lambda _langs: reader)
+        ocr_dir = self.root / "item_001" / "ocr"
+
+        result = processor.process_frames(frames_index_path=self.index_path, output_dir=ocr_dir)
+
+        self.assertEqual((ocr_dir / "frames_ocr.jsonl").resolve(), (config.BASE_DIR / result["jsonl_path"]).resolve())
+        self.assertEqual((ocr_dir / "frames_ocr.txt").resolve(), (config.BASE_DIR / result["txt_path"]).resolve())
+        self.assertEqual(self.frames_dir.resolve(), (config.BASE_DIR / result["frames_path"]).resolve())
+        self.assertFalse((self.frames_dir / "frames_ocr.jsonl").exists())
+
     def test_empty_frame_result_is_recorded_and_skipped_in_txt(self) -> None:
         reader = FakeReader({"frame_000001.jpg": [], "frame_000002.jpg": []})
         processor = EasyOcrFrameProcessor(reader_factory=lambda _langs: reader)

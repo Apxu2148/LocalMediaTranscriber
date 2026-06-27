@@ -44,6 +44,8 @@ class UiContractTests(unittest.TestCase):
             "queueFilePickerText",
             "queueStartButton",
             "queueClearButton",
+            "queueFolderNameInput",
+            "queueFolderPathOutput",
             "defaultProcessingSettings",
             "defaultAudioEnabled",
             "defaultFramesEnabled",
@@ -152,6 +154,12 @@ class UiContractTests(unittest.TestCase):
         self.assertIn('queueItem.source_type === "url"', app_js)
         self.assertIn("queueItemOutputLines", app_js)
         self.assertIn("queueItemArtifactLines", app_js)
+        self.assertIn("queueFolderNameValue", app_js)
+        self.assertIn("queue_folder_name", app_js)
+        self.assertIn("queueFolderArtifactPath", app_js)
+        self.assertIn("queueManifestArtifactPath", app_js)
+        self.assertIn("queueItemFolderArtifactPath", app_js)
+        self.assertIn("sourceManifestArtifactPath", app_js)
         self.assertIn("outputArtifactsTitle", app_js)
         self.assertIn("downloaded_media_deleted", app_js)
         self.assertIn("uploaded_temp_deleted", app_js)

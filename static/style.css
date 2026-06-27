@@ -1111,6 +1111,12 @@ summary:focus-visible {
   color: var(--muted);
 }
 
+.queue-folder-settings {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+}
+
 .default-processing-settings {
   display: grid;
   gap: 10px;
@@ -1394,7 +1400,8 @@ summary:focus-visible {
   font-size: 13px;
 }
 
-.queue-setting-field select {
+.queue-setting-field select,
+.queue-setting-field input {
   min-height: 36px;
   padding: 6px 8px;
 }

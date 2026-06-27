@@ -11,3 +11,4 @@
 | 1.1c | Implemented | [EasyOCR over existing extracted frames](codex_tasks/2026-06-26_stage_1_1c_easyocr_over_frames.md) |
 | Bugfix | Implemented and validated | [Runtime estimate OCR and details fix](codex_tasks/2026-06-27_runtime_estimate_ocr_and_details_fix.md) |
 | Bugfix | Implemented | [Per-item OCR backend selector and no-audio estimate robustness](codex_tasks/2026-06-27_per_item_ocr_backend_and_no_audio_estimate.md) |
+| Output layout | Implemented and validated | [Queue output folder structure with user-defined queue folder name](codex_tasks/2026-06-27_queue_output_folder_structure.md) |

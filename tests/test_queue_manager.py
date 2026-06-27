@@ -46,10 +46,13 @@ class QueueManagerTests(unittest.TestCase):
         self.managers: list[QueueManager] = []
         self.timestamp_patch = patch("app.queue_manager.timestamp_for_filename", return_value=self.prefix)
         self.timestamp_patch.start()
+        self.queue_timestamp_patch = patch("app.queue_manager.queue_timestamp_for_folder", return_value="2026-06-27_181500")
+        self.queue_timestamp_patch.start()
 
     def tearDown(self) -> None:
         for manager in self.managers:
             manager.wait(timeout=1)
+        self.queue_timestamp_patch.stop()
         self.timestamp_patch.stop()
         shutil.rmtree(self.root, ignore_errors=True)
 
@@ -59,6 +62,7 @@ class QueueManagerTests(unittest.TestCase):
         return QueueFile(source_path=path, source_filename=name)
 
     def make_manager(self, **kwargs) -> QueueManager:
+        kwargs.setdefault("queues_dir", self.root / "data" / "queues")
         manager = QueueManager(jobs_dir=self.root, **kwargs)
         self.managers.append(manager)
         return manager
@@ -248,6 +252,114 @@ class QueueManagerTests(unittest.TestCase):
         self.assertEqual("empty", manager.status()["status"])
         self.assertEqual([], manager.status()["items"])
 
+    def test_empty_queue_folder_name_generates_timestamp_default_and_numbered_items(self) -> None:
+        manager = self.make_manager(processor=lambda _item, _model, _device: {})
+        status = manager.add_files([self.make_file("one.wav"), self.make_file("two.wav")], queue_folder_name="")
+        queue_path = Path(status["queue_path"])
+
+        self.assertEqual("2026-06-27_181500_queue", status["queue_folder_name"])
+        self.assertTrue(queue_path.is_relative_to((self.root / "data" / "queues").resolve()))
+        self.assertTrue((queue_path / "queue_manifest.json").exists())
+        self.assertTrue(status["items"][0]["item_folder"].startswith("item_001_one"))
+        self.assertTrue(status["items"][1]["item_folder"].startswith("item_002_two"))
+        self.assertEqual(status["queue_path"], status["items"][0]["queue_path"])
+        self.assertEqual(status["queue_path"], status["items"][1]["queue_path"])
+
+    def test_user_queue_folder_name_is_sanitized_and_cannot_escape_queues_dir(self) -> None:
+        manager = self.make_manager(processor=lambda _item, _model, _device: {})
+        status = manager.add_urls(
+            [QueueUrl("https://example.test/watch/video.mp4")],
+            queue_folder_name=r"  My OCR test / MOEX: Brent? ..\bad  ",
+        )
+        queue_path = Path(status["queue_path"])
+
+        self.assertEqual("2026-06-27_181500_My_OCR_test_MOEX_Brent_bad", status["queue_folder_name"])
+        self.assertTrue(queue_path.is_relative_to((self.root / "data" / "queues").resolve()))
+        self.assertNotIn("..", status["queue_folder_name"])
+        self.assertTrue(status["items"][0]["item_folder"].startswith("item_001_example.test_video"))
+
+    def test_queue_outputs_are_written_under_item_folders_and_manifest_tracks_them(self) -> None:
+        def processor(item: dict, _model: str, _device: str) -> dict:
+            transcript_dir = Path(item["queue_output"]["transcript_dir"])
+            transcript_path = transcript_dir / "transcript.txt"
+            json_path = transcript_dir / "transcript.json"
+            transcript_path.write_text("hello", encoding="utf-8")
+            json_path.write_text("{}", encoding="utf-8")
+            return {
+                "audio_duration_sec": 4,
+                "processing_time_sec": 1,
+                "realtime_factor": 4,
+                "transcript_path": str(transcript_path),
+                "json_path": str(json_path),
+            }
+
+        def frame_processor(item: dict, _cancel_event: threading.Event, _progress) -> dict:
+            frames_dir = Path(item["queue_output"]["frames_dir"])
+            frame_path = frames_dir / "frame_000001__t000000.000.jpg"
+            index_path = frames_dir / "frames_index.json"
+            frame_path.write_bytes(b"jpg")
+            index_path.write_text("{}", encoding="utf-8")
+            return {
+                "status": "completed",
+                "completed": True,
+                "frames_dir": frames_dir.name,
+                "frames_path": str(frames_dir),
+                "frames_index_path": str(index_path),
+                "extracted_frame_count": 1,
+            }
+
+        def ocr_processor(item: dict, _cancel_event: threading.Event, _progress) -> dict:
+            ocr_dir = Path(item["queue_output"]["ocr_dir"])
+            jsonl_path = ocr_dir / "frames_ocr.jsonl"
+            txt_path = ocr_dir / "frames_ocr.txt"
+            jsonl_path.write_text("{}", encoding="utf-8")
+            txt_path.write_text("text", encoding="utf-8")
+            return {
+                "status": "completed",
+                "backend": "easyocr",
+                "languages": ["ru", "en"],
+                "frames_processed": 1,
+                "frames_with_text": 1,
+                "ocr_time_sec": 0.1,
+                "sec_per_frame": 0.1,
+                "jsonl_path": str(jsonl_path),
+                "txt_path": str(txt_path),
+            }
+
+        manager = self.make_manager(
+            processor=processor,
+            frame_processor=frame_processor,
+            ocr_processor=ocr_processor,
+            duration_reader=lambda _path: 4,
+            video_metadata_reader=lambda _path: {"duration_sec": 4, "fps": 30, "width": 100, "height": 50},
+        )
+        manager.add_files([QueueFile(
+            source_path=self.make_file("media_demo.mp4").source_path,
+            source_filename="media_demo.mp4",
+            processing_plan={
+                "audio": {"enabled": True},
+                "frames": {"enabled": True},
+                "ocr": {"enabled": True, "backend": "easyocr", "engine_available": True},
+            },
+        )], queue_folder_name="output_paths")
+
+        manager.start("small", "cpu")
+        manager.wait(timeout=3)
+
+        item = manager.status()["items"][0]
+        item_path = Path(item["item_path"])
+        self.assertEqual("completed", item["status"])
+        self.assertEqual(item_path / "transcript" / "transcript.txt", Path(item["transcript_path"]))
+        self.assertEqual(item_path / "transcript" / "transcript.json", Path(item["json_path"]))
+        self.assertEqual(item_path / "frames", Path(item["frames_path"]))
+        self.assertEqual(item_path / "ocr" / "frames_ocr.jsonl", Path(item["ocr_result"]["jsonl_path"]))
+        self.assertEqual(item_path / "ocr" / "frames_ocr.txt", Path(item["ocr_result"]["txt_path"]))
+        self.assertTrue(Path(item["outputs"]["queue_manifest_path"]).exists())
+        manifest = json.loads(Path(item["queue_manifest_path"]).read_text(encoding="utf-8"))
+        self.assertEqual("LocalMediaTranscriber", manifest["project"])
+        self.assertEqual(item["item_folder"], manifest["items"][0]["item_folder"])
+        self.assertEqual(item["transcript_path"], manifest["items"][0]["outputs"]["transcript_path"])
+
     def test_mixed_queue_downloads_url_and_reuses_snapshot(self) -> None:
         downloaded = self.make_file("downloaded.m4a")
         calls: list[tuple[str, str, str]] = []
@@ -281,7 +393,10 @@ class QueueManagerTests(unittest.TestCase):
         status = manager.status()
         self.assertEqual([("local_file", "small", "auto"), ("url", "small", "auto")], calls)
         self.assertEqual("youtube", status["items"][1]["source_platform"])
-        self.assertEqual(str(downloaded.source_path), status["items"][1]["downloaded_audio_path"])
+        downloaded_path = Path(status["items"][1]["downloaded_audio_path"])
+        self.assertEqual(Path(status["items"][1]["queue_output"]["downloads_dir"]), downloaded_path.parent)
+        self.assertTrue(downloaded_path.exists())
+        self.assertTrue(downloaded.source_path.exists())
 
     def test_url_item_defaults_to_media_processing_options(self) -> None:
         manager = self.make_manager(processor=lambda _item, _model, _device: {})
@@ -979,8 +1094,9 @@ class QueueManagerTests(unittest.TestCase):
         self.assertEqual(["https://example.test/video"], video_downloads)
         self.assertEqual("prefer_webm", download_settings_seen[0]["format_profile"])
         self.assertEqual("720", download_settings_seen[0]["max_video_height"])
-        self.assertEqual([str(video.source_path)], frame_sources)
-        self.assertEqual(str(video.source_path), item["downloaded_media_path"])
+        self.assertEqual([item["downloaded_media_path"]], frame_sources)
+        self.assertEqual(Path(item["queue_output"]["downloads_dir"]), Path(item["downloaded_media_path"]).parent)
+        self.assertTrue(Path(item["downloaded_media_path"]).exists())
         self.assertTrue(item["frames_index_path"].endswith("frames_index.json"))
         self.assertEqual("prefer_webm", item["processing_plan"]["url_download"]["format_profile"])
         self.assertEqual("720", item["processing_plan"]["url_download"]["max_video_height"])
@@ -1076,7 +1192,7 @@ class QueueManagerTests(unittest.TestCase):
         self.assertEqual("completed", item["status"])
         self.assertTrue(item["transcript_path"].endswith(".txt"))
         self.assertTrue(item["frames_index_path"].endswith("frames_index.json"))
-        self.assertEqual(str(video.source_path), item["downloaded_media_path"])
+        self.assertEqual(Path(item["queue_output"]["downloads_dir"]), Path(item["downloaded_media_path"]).parent)
 
     def test_url_transcription_failure_still_runs_selected_frame_extraction(self) -> None:
         video = self.make_file("frames_after_transcript_error.mkv")
@@ -1120,7 +1236,7 @@ class QueueManagerTests(unittest.TestCase):
 
         item = manager.status()["items"][0]
         self.assertEqual("error", item["status"])
-        self.assertEqual([str(video.source_path)], frame_calls)
+        self.assertEqual([item["downloaded_media_path"]], frame_calls)
         self.assertTrue(item["frames_index_path"].endswith("frames_index.json"))
         self.assertIn("transcript failed", item["error_message"])
 
@@ -1236,7 +1352,7 @@ class QueueManagerTests(unittest.TestCase):
         self.assertTrue(outputs["frames_dir_exists"])
         self.assertEqual(str(frames_index.resolve()), outputs["frames_index_path"])
         self.assertTrue(outputs["frames_index_exists"])
-        self.assertEqual(str(video.source_path), outputs["downloaded_media_path"])
+        self.assertEqual(Path(manager.status()["items"][0]["queue_output"]["downloads_dir"]), Path(outputs["downloaded_media_path"]).parent)
         self.assertTrue(outputs["downloaded_media_exists"])
         self.assertFalse(outputs["downloaded_media_deleted"])
 
@@ -1271,7 +1387,7 @@ class QueueManagerTests(unittest.TestCase):
 
         outputs = manager.status()["items"][0]["outputs"]
         self.assertEqual("completed", manager.status()["items"][0]["status"])
-        self.assertFalse(video.source_path.exists())
+        self.assertTrue(video.source_path.exists())
         self.assertTrue(outputs["downloaded_media_deleted"])
         self.assertFalse(outputs["downloaded_media_exists"])
 
@@ -1282,8 +1398,10 @@ class QueueManagerTests(unittest.TestCase):
         downloaded.parent.mkdir(parents=True)
         downloaded.write_bytes(b"video")
 
-        def frame_processor(_item: dict, _cancel_event: threading.Event, _progress) -> dict:
-            self.assertTrue(downloaded.exists())
+        def frame_processor(item: dict, _cancel_event: threading.Event, _progress) -> dict:
+            self.assertFalse(downloaded.exists())
+            self.assertTrue(Path(item["downloaded_media_path"]).exists())
+            self.assertEqual(Path(item["queue_output"]["downloads_dir"]), Path(item["downloaded_media_path"]).parent)
             return {"status": "cancelled", "cancelled": True, "extracted_frame_count": 1}
 
         manager = self.make_manager(
@@ -1321,11 +1439,12 @@ class QueueManagerTests(unittest.TestCase):
         downloaded.write_bytes(b"audio")
         started = threading.Event()
 
-        def processor(_item: dict, _model: str, _device: str, cancel_event: threading.Event) -> dict:
-            self.assertTrue(downloaded.exists())
+        def processor(item: dict, _model: str, _device: str, cancel_event: threading.Event) -> dict:
+            self.assertFalse(downloaded.exists())
+            self.assertTrue(Path(item["downloaded_media_path"]).exists())
             started.set()
             cancel_event.wait(timeout=3)
-            self.assertTrue(downloaded.exists())
+            self.assertTrue(Path(item["downloaded_media_path"]).exists())
             return {"status": "cancelled", "cancellation_reason": "cancelled"}
 
         manager = self.make_manager(
@@ -1373,8 +1492,10 @@ class QueueManagerTests(unittest.TestCase):
         manager.start("small", "cpu")
         manager.wait(timeout=3)
 
-        self.assertEqual("cancelled", manager.status()["items"][0]["status"])
-        self.assertTrue(downloaded.exists())
+        item = manager.status()["items"][0]
+        self.assertEqual("cancelled", item["status"])
+        self.assertFalse(downloaded.exists())
+        self.assertTrue(Path(item["downloaded_media_path"]).exists())
 
     def test_url_download_is_deleted_after_controlled_failure(self) -> None:
         storage = StorageManager(data_dir=self.root / "data")
