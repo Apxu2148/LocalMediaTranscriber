@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import importlib
 import json
 import logging
+import statistics
 import threading
 import time
 from datetime import datetime
@@ -16,16 +18,20 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_EASYOCR_LANGUAGES = ["ru", "en"]
 
-try:
-    import easyocr
-    EASYOCR_IMPORT_ERROR: Exception | None = None
-except Exception as exc:
-    easyocr = None
-    EASYOCR_IMPORT_ERROR = exc
-
 
 class OcrProcessorError(RuntimeError):
     pass
+
+
+def _load_easyocr_module():
+    try:
+        return importlib.import_module("easyocr")
+    except Exception as exc:
+        message = (
+            "EasyOCR is not installed. Install optional OCR dependencies with "
+            "requirements-ocr-easyocr.txt."
+        )
+        raise OcrProcessorError(f"{message} Import error: {exc}") from exc
 
 
 def normalize_easyocr_languages(value: object) -> list[str]:
@@ -158,6 +164,47 @@ class EasyOcrFrameProcessor:
         )
         return result
 
+    def estimate_frame_runtime(
+        self,
+        *,
+        frame_paths: list[str | Path],
+        languages: list[str] | None = None,
+    ) -> dict:
+        selected_languages = normalize_easyocr_languages(languages)
+        paths = [Path(path) for path in frame_paths[:3]]
+        if not paths:
+            return {
+                "status": "complete",
+                "backend": "easyocr",
+                "languages": selected_languages,
+                "sample_frames": 0,
+                "sample_runtime_sec": 0.0,
+                "average_sec_per_frame": None,
+                "median_sec_per_frame": None,
+            }
+
+        reader = None
+        durations: list[float] = []
+        for frame_path in paths:
+            if not frame_path.is_file():
+                raise OcrProcessorError(f"OCR estimate frame was not found: {frame_path}")
+            started = self.clock()
+            if reader is None:
+                reader = self._create_reader(selected_languages)
+            reader.readtext(str(frame_path), detail=1)
+            durations.append(max(0.0, self.clock() - started))
+
+        sample_runtime = sum(durations)
+        return {
+            "status": "complete",
+            "backend": "easyocr",
+            "languages": selected_languages,
+            "sample_frames": len(durations),
+            "sample_runtime_sec": round(sample_runtime, 3),
+            "average_sec_per_frame": round(sample_runtime / len(durations), 4) if durations else None,
+            "median_sec_per_frame": round(float(statistics.median(durations)), 4) if durations else None,
+        }
+
     def _load_frame_index(
         self,
         frames_index_path: str | Path | None,
@@ -184,12 +231,7 @@ class EasyOcrFrameProcessor:
     def _create_reader(self, languages: list[str]):
         if self.reader_factory is not None:
             return self.reader_factory(languages)
-        if easyocr is None:
-            message = "EasyOCR is not installed. Install optional OCR dependencies with requirements-ocr-easyocr.txt."
-            if EASYOCR_IMPORT_ERROR is not None:
-                message = f"{message} Import error: {EASYOCR_IMPORT_ERROR}"
-            raise OcrProcessorError(message)
-        return easyocr.Reader(languages)
+        return _load_easyocr_module().Reader(languages)
 
     def _process_frame(
         self,
@@ -315,4 +357,15 @@ def process_easyocr_frames(
         languages=languages,
         cancel_event=cancel_event,
         progress_callback=progress_callback,
+    )
+
+
+def process_easyocr_frame_estimate(
+    *,
+    frame_paths: list[str | Path],
+    languages: list[str] | None = None,
+) -> dict:
+    return EasyOcrFrameProcessor().estimate_frame_runtime(
+        frame_paths=frame_paths,
+        languages=languages,
     )

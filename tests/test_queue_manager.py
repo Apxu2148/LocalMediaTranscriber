@@ -366,6 +366,80 @@ class QueueManagerTests(unittest.TestCase):
         self.assertEqual("prefer_webm", updated["processing_plan"]["url_download"]["format_profile"])
         self.assertEqual("1440", updated["processing_plan"]["url_download"]["max_video_height"])
 
+    def test_per_item_ocr_backend_update_can_enable_easyocr(self) -> None:
+        manager = self.make_manager(
+            processor=lambda _item, _model, _device: {},
+            video_metadata_reader=lambda _path: {"duration_sec": 20, "fps": 30, "width": 100, "height": 50},
+        )
+        status = self.track_job(manager.add_files([QueueFile(
+            source_path=self.make_file("planned-ocr.mp4").source_path,
+            source_filename="planned-ocr.mp4",
+            processing_plan={
+                "audio": {"enabled": False},
+                "frames": {"enabled": False},
+                "ocr": {"enabled": False, "backend": "tesseract", "engine_available": False},
+            },
+        )]))
+        item = status["items"][0]
+
+        updated = manager.update_item(
+            item["index"],
+            processing_plan={
+                **item["processing_plan"],
+                "frames": {**item["processing_plan"]["frames"], "enabled": False},
+                "ocr": {
+                    "enabled": True,
+                    "backend": "easyocr",
+                    "resolved_backend": "easyocr",
+                    "engine_available": True,
+                    "languages": ["ru", "en"],
+                },
+            },
+        )["items"][0]
+
+        self.assertTrue(updated["processing_plan"]["ocr"]["enabled"])
+        self.assertEqual("easyocr", updated["processing_plan"]["ocr"]["backend"])
+        self.assertEqual("easyocr", updated["processing_plan"]["ocr"]["resolved_backend"])
+        self.assertEqual("pending", updated["processing_plan"]["ocr"]["status"])
+        self.assertTrue(updated["processing_plan"]["frames"]["enabled"])
+        self.assertTrue(updated["operations"]["ocr"])
+        self.assertTrue(updated["operations"]["extract_frames"])
+
+    def test_unavailable_item_ocr_backend_cannot_enable_ocr(self) -> None:
+        manager = self.make_manager(
+            processor=lambda _item, _model, _device: {},
+            video_metadata_reader=lambda _path: {"duration_sec": 20, "fps": 30, "width": 100, "height": 50},
+        )
+        status = self.track_job(manager.add_files([QueueFile(
+            source_path=self.make_file("unavailable-ocr.mp4").source_path,
+            source_filename="unavailable-ocr.mp4",
+            processing_plan={
+                "audio": {"enabled": False},
+                "frames": {"enabled": False},
+                "ocr": {"enabled": False, "backend": "tesseract", "engine_available": False},
+            },
+        )]))
+        item = status["items"][0]
+
+        updated = manager.update_item(
+            item["index"],
+            processing_plan={
+                **item["processing_plan"],
+                "ocr": {
+                    "enabled": True,
+                    "backend": "paddleocr",
+                    "resolved_backend": "paddleocr",
+                    "engine_available": False,
+                },
+            },
+        )["items"][0]
+
+        self.assertFalse(updated["processing_plan"]["ocr"]["enabled"])
+        self.assertEqual("paddleocr", updated["processing_plan"]["ocr"]["backend"])
+        self.assertEqual("paddleocr", updated["processing_plan"]["ocr"]["resolved_backend"])
+        self.assertEqual("unavailable", updated["processing_plan"]["ocr"]["status"])
+        self.assertFalse(updated["operations"]["ocr"])
+
     def test_per_item_audio_model_and_device_are_used_for_transcription(self) -> None:
         calls: list[tuple[str, str]] = []
 

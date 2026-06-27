@@ -22,7 +22,7 @@ from .frame_extractor import VideoFrameExtractor
 from .frame_settings_manager import FrameSettingsManager
 from .model_manager import WhisperModelManager
 from .ocr_manager import OcrManager
-from .ocr_processor import process_easyocr_frames
+from .ocr_processor import process_easyocr_frame_estimate, process_easyocr_frames
 from .queue_manager import QueueFile, QueueManager, QueueUrl
 from .runtime_estimate import RuntimeEstimator
 from .screen_recorder import (
@@ -275,8 +275,12 @@ def process_queue_frame_extraction(item: dict, cancel_event: threading.Event, pr
 def process_queue_ocr(item: dict, cancel_event: threading.Event, progress_callback) -> dict:
     ocr_plan = (item.get("processing_plan") or {}).get("ocr") or {}
     backend = str(ocr_plan.get("backend") or ocr_plan.get("engine") or "").strip().lower()
+    if backend == "auto":
+        backend = str(ocr_plan.get("resolved_backend") or "").strip().lower()
     if backend != "easyocr":
         raise RuntimeError(f"OCR backend is not implemented for processing in this stage: {backend or 'unknown'}")
+    if not ocr_plan.get("engine_available"):
+        raise RuntimeError("EasyOCR is not available for this queue item.")
     frame_result = item.get("frame_extraction_result") or (item.get("frame_extraction") or {}).get("result") or {}
     frames_index_path = frame_result.get("frames_index_path") or item.get("frames_index_path")
     frames_path = frame_result.get("frames_path") or item.get("frames_path")
@@ -316,6 +320,26 @@ def process_runtime_estimate_frames(
     )
 
 
+def process_runtime_estimate_ocr_frames(
+    source_path: Path,
+    output_dir: Path,
+    timestamps_sec: list[float],
+    jpeg_quality: int,
+    max_frame_size: str,
+) -> dict:
+    return frame_extractor.extract_sample_frames_at_timestamps(
+        source_path=source_path,
+        output_dir=output_dir,
+        timestamps_sec=timestamps_sec,
+        jpeg_quality=jpeg_quality,
+        max_frame_size=max_frame_size,
+    )
+
+
+def process_runtime_estimate_ocr(frame_paths: list[Path], languages: list[str]) -> dict:
+    return process_easyocr_frame_estimate(frame_paths=frame_paths, languages=languages)
+
+
 def save_queue_item_error(item: dict, model_name: str, _device_preference: str, exc: Exception) -> dict:
     source_path = Path(item.get("source_path") or config.DOWNLOADS_DIR / item["source_filename"])
     return transcript_store.save_error(
@@ -333,6 +357,9 @@ url_downloader = UrlDownloader()
 runtime_estimator = RuntimeEstimator(
     audio_processor=process_runtime_estimate_audio,
     frame_processor=process_runtime_estimate_frames,
+    ocr_processor=process_runtime_estimate_ocr,
+    ocr_frame_processor=process_runtime_estimate_ocr_frames,
+    ocr_status_reader=ocr_manager.easyocr_status,
 )
 queue_manager = QueueManager(
     jobs_dir=config.JOBS_DIR,

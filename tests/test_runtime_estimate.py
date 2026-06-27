@@ -5,7 +5,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.queue_manager import QueueFile, QueueManager
-from app.runtime_estimate import RuntimeEstimateError, RuntimeEstimator
+from app.runtime_estimate import RuntimeEstimateError, RuntimeEstimator, sample_ocr_frame_indices
 
 
 PROJECT_TMP = Path(__file__).resolve().parents[1] / "tmp"
@@ -81,6 +81,7 @@ class RuntimeEstimatorTests(unittest.TestCase):
         self.assertEqual(7.5, result["audio"]["speed_factor"])
         self.assertEqual(7, result["frames"]["estimated_total_frames"])
         self.assertEqual(2.8, result["frames"]["estimated_full_runtime_sec"])
+        self.assertFalse(result["ocr"]["enabled"])
         self.assertEqual(26.8, result["total_estimated_full_runtime_sec"])
         self.assertEqual([], list(self.temp_root.iterdir()))
 
@@ -123,12 +124,13 @@ class RuntimeEstimatorTests(unittest.TestCase):
             "processing_plan": {
                 "audio": {"enabled": False},
                 "frames": {"enabled": False},
-                "ocr": {"enabled": True, "engine_available": True, "status": "coming_soon"},
+                "ocr": {"enabled": False, "engine_available": True, "status": "disabled"},
             },
         })
 
         self.assertEqual("complete", result["status"])
         self.assertTrue(result["no_enabled_operations"])
+        self.assertFalse(result["ocr"]["enabled"])
         self.assertIsNone(result["total_estimated_full_runtime_sec"])
 
     def test_frame_only_estimate_skips_audio(self) -> None:
@@ -163,6 +165,94 @@ class RuntimeEstimatorTests(unittest.TestCase):
         self.assertEqual([(60.0, {"mode": "interval", "seconds": 30}, 80, "original")], frame_calls)
         self.assertTrue(result["frames"]["enabled"])
         self.assertEqual("original", result["frames"]["max_frame_size"])
+
+    def test_no_audio_stream_estimate_keeps_frames_and_ocr(self) -> None:
+        def process_frames(_source: Path, _output: Path, _duration: float, _rate: dict, _quality: int, _max_size: str) -> dict:
+            return {"sample_frames": 2}
+
+        def extract_ocr_frames(
+            _source: Path,
+            output: Path,
+            timestamps: list[float],
+            _quality: int,
+            _max_size: str,
+        ) -> dict:
+            output.mkdir(parents=True, exist_ok=True)
+            paths = []
+            for position, _timestamp in enumerate(timestamps, start=1):
+                path = output / f"ocr_{position}.jpg"
+                path.write_bytes(b"jpeg")
+                paths.append(path)
+            return {"sample_frames": len(paths), "frame_paths": [str(path) for path in paths]}
+
+        estimator = RuntimeEstimator(
+            audio_processor=lambda *_args: self.fail("audio must be skipped when no stream exists"),
+            frame_processor=process_frames,
+            ocr_frame_processor=extract_ocr_frames,
+            ocr_processor=lambda frame_paths, _languages: {
+                "sample_frames": len(frame_paths),
+                "sample_runtime_sec": 1.5,
+                "average_sec_per_frame": 0.5,
+            },
+            ocr_status_reader=lambda: {"available": True, "status": "available"},
+            duration_reader=lambda _path: 90.0,
+            audio_stream_reader=lambda _path: False,
+            temp_root=self.temp_root,
+            clock=SequenceClock(0.0, 1.0),
+        )
+        result = estimator.estimate({
+            "source_path": str(self.source),
+            "source_filename": self.source.name,
+            "processing_plan": {
+                "audio": {"enabled": True, "model": "small", "device": "auto"},
+                "frames": {
+                    "enabled": True,
+                    "rate": {"mode": "interval", "seconds": 30},
+                    "jpeg_quality": 80,
+                    "max_frame_size": "width_640",
+                },
+                "ocr": {"enabled": True, "backend": "easyocr", "engine_available": True},
+            },
+        })
+
+        self.assertEqual("complete", result["status"])
+        self.assertEqual("unavailable", result["audio"]["status"])
+        self.assertEqual("no_audio_stream", result["audio"]["reason"])
+        self.assertFalse(result["audio"]["included_in_total"])
+        self.assertTrue(result["total_excludes_audio"])
+        self.assertTrue(result["frames"]["enabled"])
+        self.assertEqual(2.0, result["frames"]["estimated_full_runtime_sec"])
+        self.assertTrue(result["ocr"]["included_in_total"])
+        self.assertEqual(2.0, result["ocr"]["estimated_full_runtime_sec"])
+        self.assertEqual(4.0, result["total_estimated_full_runtime_sec"])
+
+    def test_no_audio_sample_failure_is_converted_to_unavailable_audio(self) -> None:
+        def prepare_sample(_source: Path, _sample_duration: float, _source_duration: float, _workspace: Path) -> Path:
+            raise RuntimeEstimateError("sample_preparation_failed", "Output file #0 does not contain any stream")
+
+        estimator = RuntimeEstimator(
+            audio_processor=lambda *_args: self.fail("audio must be skipped after no-audio sample failure"),
+            frame_processor=lambda *_args: {"sample_frames": 1},
+            duration_reader=lambda _path: 90.0,
+            audio_stream_reader=lambda _path: None,
+            sample_preparer=prepare_sample,
+            temp_root=self.temp_root,
+            clock=SequenceClock(0.0, 1.0),
+        )
+        result = estimator.estimate({
+            "source_path": str(self.source),
+            "processing_plan": {
+                "audio": {"enabled": True, "model": "small", "device": "cpu"},
+                "frames": {"enabled": True, "rate": {"mode": "interval", "seconds": 30}},
+            },
+        })
+
+        self.assertEqual("complete", result["status"])
+        self.assertEqual("unavailable", result["audio"]["status"])
+        self.assertEqual("no_audio_stream", result["audio"]["reason"])
+        self.assertTrue(result["frames"]["enabled"])
+        self.assertTrue(result["total_excludes_audio"])
+        self.assertEqual(result["frames"]["estimated_full_runtime_sec"], result["total_estimated_full_runtime_sec"])
 
     def test_missing_duration_returns_stable_error_code(self) -> None:
         estimator = RuntimeEstimator(
@@ -219,6 +309,108 @@ class RuntimeEstimatorTests(unittest.TestCase):
                 },
             })
         self.assertEqual("url_download_required", context.exception.code)
+
+    def test_easyocr_estimate_scales_sampled_frames_and_is_included_in_total(self) -> None:
+        ocr_calls: dict[str, object] = {}
+
+        def process_frames(_source: Path, output: Path, _duration: float, _rate: dict, _quality: int, _max_size: str) -> dict:
+            (output / "sample.jpg").write_bytes(b"jpeg")
+            return {"sample_frames": 2}
+
+        def extract_ocr_frames(
+            _source: Path,
+            output: Path,
+            timestamps: list[float],
+            _quality: int,
+            _max_size: str,
+        ) -> dict:
+            ocr_calls["timestamps"] = list(timestamps)
+            output.mkdir(parents=True, exist_ok=True)
+            paths = []
+            for position, _timestamp in enumerate(timestamps, start=1):
+                path = output / f"ocr_{position}.jpg"
+                path.write_bytes(b"jpeg")
+                paths.append(path)
+            return {"sample_frames": len(paths), "frame_paths": [str(path) for path in paths]}
+
+        def estimate_ocr(frame_paths: list[Path], languages: list[str]) -> dict:
+            ocr_calls["frame_paths"] = [path.name for path in frame_paths]
+            ocr_calls["languages"] = languages
+            return {
+                "sample_frames": len(frame_paths),
+                "sample_runtime_sec": 6.0,
+                "average_sec_per_frame": 2.0,
+                "median_sec_per_frame": 2.0,
+            }
+
+        estimator = RuntimeEstimator(
+            audio_processor=lambda *_args: self.fail("audio must be skipped"),
+            frame_processor=process_frames,
+            ocr_frame_processor=extract_ocr_frames,
+            ocr_processor=estimate_ocr,
+            ocr_status_reader=lambda: {"available": True, "status": "available"},
+            duration_reader=lambda _path: 90.0,
+            temp_root=self.temp_root,
+            clock=SequenceClock(0.0, 1.0),
+        )
+        result = estimator.estimate({
+            "index": 7,
+            "source_path": str(self.source),
+            "source_filename": self.source.name,
+            "processing_plan": {
+                "audio": {"enabled": False},
+                "frames": {
+                    "enabled": True,
+                    "rate": {"mode": "interval", "seconds": 30},
+                    "jpeg_quality": 80,
+                    "max_frame_size": "width_640",
+                },
+                "ocr": {"enabled": True, "backend": "easyocr", "engine_available": True, "languages": ["ru", "en"]},
+            },
+        })
+
+        self.assertEqual(["ru", "en"], ocr_calls["languages"])
+        self.assertLessEqual(len(ocr_calls["timestamps"]), 3)
+        self.assertLessEqual(len(ocr_calls["frame_paths"]), 3)
+        self.assertEqual(4, result["ocr"]["expected_total_frames"])
+        self.assertEqual(8.0, result["ocr"]["estimated_full_runtime_sec"])
+        self.assertTrue(result["ocr"]["included_in_total"])
+        self.assertEqual(2.0, result["frames"]["estimated_full_runtime_sec"])
+        self.assertEqual(10.0, result["total_estimated_full_runtime_sec"])
+        self.assertEqual([], list(self.temp_root.iterdir()))
+
+    def test_easyocr_unavailable_marks_ocr_excluded_without_sampling(self) -> None:
+        estimator = RuntimeEstimator(
+            audio_processor=lambda *_args: self.fail("audio must be skipped"),
+            frame_processor=lambda *_args: self.fail("frames must be skipped"),
+            ocr_frame_processor=lambda *_args: self.fail("ocr frames must be skipped"),
+            ocr_processor=lambda *_args: self.fail("ocr must be skipped"),
+            ocr_status_reader=lambda: {"available": False, "status": "not_installed"},
+            duration_reader=lambda _path: 60.0,
+            temp_root=self.temp_root,
+        )
+        result = estimator.estimate({
+            "source_path": str(self.source),
+            "processing_plan": {
+                "audio": {"enabled": False},
+                "frames": {"enabled": False, "rate": {"mode": "interval", "seconds": 30}},
+                "ocr": {"enabled": True, "backend": "easyocr", "engine_available": False},
+            },
+        })
+
+        self.assertEqual("unavailable", result["ocr"]["status"])
+        self.assertEqual("easyocr_unavailable", result["ocr"]["reason"])
+        self.assertTrue(result["total_excludes_ocr"])
+        self.assertIsNone(result["ocr"]["estimated_full_runtime_sec"])
+        self.assertIsNone(result["total_estimated_full_runtime_sec"])
+
+    def test_ocr_sampling_is_deterministic_capped_and_uses_all_small_counts(self) -> None:
+        first = sample_ocr_frame_indices(52, "same-source-settings")
+        second = sample_ocr_frame_indices(52, "same-source-settings")
+
+        self.assertEqual(first, second)
+        self.assertLessEqual(len(first), 3)
+        self.assertEqual([0, 1, 2], sample_ocr_frame_indices(3, "small"))
 
 
 class QueueRuntimeEstimateTests(unittest.TestCase):

@@ -221,6 +221,7 @@ const pendingAddKeys = new Set();
 const pendingQueueCancellationIds = new Set();
 const pendingRuntimeEstimateIds = new Set();
 const collapsedQueueSettingsItemIds = new Set();
+const openRuntimeEstimateDetailsKeys = new Set();
 const audioRuntimeStages = new Set(["transcribing_audio", "cancelling_transcription"]);
 
 function t(key, variables = {}) {
@@ -2908,13 +2909,20 @@ function processingPlanFromValues({
   urlDownload,
   ocrEnabled,
   ocrBackend,
+  ocrResolvedBackend,
   ocrLanguages,
   ocrEngineAvailable,
 }) {
-  const backend = ocrBackend || latestOcrStatus?.selected_backend || "tesseract";
+  const selectedBackend = ocrBackend || latestOcrStatus?.selected_backend || "tesseract";
+  const backend = selectedBackend === "auto"
+    ? (ocrResolvedBackend || latestOcrStatus?.selected_backend || "tesseract")
+    : selectedBackend;
   const backendStatus = latestOcrStatus?.backends?.[backend];
   const downloadSettings = urlDownload || latestUrlDownloadSettings;
-  const easyOcrReady = backend === "easyocr" && Boolean(ocrEngineAvailable ?? backendStatus?.available);
+  const backendAvailable = backendStatus
+    ? Boolean(backendStatus.available)
+    : Boolean(ocrEngineAvailable);
+  const easyOcrReady = backend === "easyocr" && backendAvailable;
   const normalizedOcrEnabled = Boolean(ocrEnabled) && easyOcrReady;
   const normalizedFramesEnabled = Boolean(framesEnabled) || normalizedOcrEnabled;
   return {
@@ -2940,11 +2948,13 @@ function processingPlanFromValues({
     },
     ocr: {
       enabled: normalizedOcrEnabled,
-      backend,
+      requested_enabled: Boolean(ocrEnabled),
+      backend: selectedBackend,
+      resolved_backend: backend,
       engine: backend,
       languages: ocrLanguages || (backend === "tesseract" ? ["rus", "eng"] : ["ru", "en"]),
       status: normalizedOcrEnabled ? "pending" : easyOcrReady ? "available" : "unavailable",
-      engine_available: Boolean(ocrEngineAvailable ?? backendStatus?.available),
+      engine_available: backendAvailable,
     },
     cv: {
       enabled: false,
@@ -2986,6 +2996,7 @@ function processingPlanForQueueItem(queueItem) {
     urlDownload: plan.url_download,
     ocrEnabled: plan.ocr?.enabled ?? operations.ocr ?? false,
     ocrBackend: plan.ocr?.backend || plan.ocr?.engine,
+    ocrResolvedBackend: plan.ocr?.resolved_backend || plan.ocr?.engine,
     ocrLanguages: plan.ocr?.languages,
     ocrEngineAvailable: plan.ocr?.engine_available,
   });
@@ -3022,6 +3033,9 @@ function urlDownloadProfileLabel(profile) {
 }
 
 function ocrBackendLabel(backend) {
+  if (backend === "auto") {
+    return t("auto");
+  }
   const key = {
     tesseract: "ocrEngineTesseract",
     easyocr: "ocrEngineEasyOcr",
@@ -3029,6 +3043,20 @@ function ocrBackendLabel(backend) {
     windows_ocr: "ocrEngineWindowsOcr",
   }[backend] || "ocrEngineLabel";
   return t(key);
+}
+
+function ocrBackendOptions() {
+  return ["auto", "easyocr", "tesseract", "paddleocr", "windows_ocr"];
+}
+
+function resolvedOcrBackend(selectedBackend, fallbackBackend) {
+  return selectedBackend === "auto"
+    ? (fallbackBackend || latestOcrStatus?.selected_backend || "tesseract")
+    : selectedBackend || "tesseract";
+}
+
+function ocrBackendIsAvailable(backend) {
+  return Boolean(latestOcrStatus?.backends?.[backend]?.available);
 }
 
 function createPlanSelect(values, selectedValue, datasetName, labeler = (value) => value) {
@@ -3105,6 +3133,10 @@ function createComingSoonOption(key) {
 
 function createProcessingPlanSummary(queueItem) {
   const plan = processingPlanForQueueItem(queueItem);
+  const ocrBackend = plan.ocr.resolved_backend || plan.ocr.engine || plan.ocr.backend;
+  const ocrBackendSummary = plan.ocr.backend === "auto"
+    ? `${ocrBackendLabel("auto")} / ${ocrBackendLabel(ocrBackend)}`
+    : ocrBackendLabel(ocrBackend);
   const wrapper = document.createElement("div");
   wrapper.className = "queue-processing-plan-summary";
   const heading = document.createElement("h4");
@@ -3121,10 +3153,8 @@ function createProcessingPlanSummary(queueItem) {
     })),
     textLine(t("processingPlanOcr", {
       value: plan.ocr.enabled
-        ? `${ocrBackendLabel(plan.ocr.backend)} / ${(plan.ocr.languages || []).join(", ")}`
-        : plan.ocr.backend === "easyocr" && plan.ocr.engine_available
-          ? t("disabled")
-          : `${t("disabled")} / ${t("comingSoon")}`,
+        ? `${ocrBackendSummary} / ${(plan.ocr.languages || []).join(", ")}`
+        : `${ocrBackendSummary} / ${plan.ocr.status === "unavailable" ? t("ocrValueUnavailable") : t("disabled")}`,
     })),
     textLine(t("processingPlanCv", { value: `${t("disabled")} / ${t("comingSoon")}` })),
   );
@@ -3140,6 +3170,10 @@ function runtimeEstimateActive(status = latestQueueStatus) {
   return pendingRuntimeEstimateIds.size > 0
     || Number(status?.estimating_items || 0) > 0
     || Boolean(status?.items?.some((item) => item.estimate?.status === "estimating"));
+}
+
+function runtimeEstimateDetailsKey(queueItem, status = latestQueueStatus) {
+  return `${status?.job_id || "queue"}:${queueItem.index}:runtime-estimate-details`;
 }
 
 function formatReadableEstimateDuration(seconds) {
@@ -3178,6 +3212,28 @@ function runtimeEstimateErrorMessage(estimate) {
     source_unavailable: "estimateSourceUnavailable",
   }[estimate?.error_code];
   return t(key || "estimateFailed");
+}
+
+function audioEstimateUnavailableMessage(audio) {
+  const key = {
+    no_audio_stream: "estimateAudioNoStream",
+  }[audio?.reason] || "estimateAudioUnavailable";
+  return t(key);
+}
+
+function ocrEstimateUnavailableMessage(ocr) {
+  const key = {
+    easyocr_unavailable: "estimateOcrUnavailableEasyOcr",
+    ocr_backend_unsupported: "estimateOcrUnsupportedBackend",
+    ocr_estimator_unconfigured: "estimateOcrUnavailableEstimator",
+    ocr_sample_frames_unavailable: "estimateOcrUnavailableFrames",
+    ocr_estimate_failed: "estimateOcrUnavailableFailed",
+  }[ocr?.reason] || "estimateOcrUnavailable";
+  return t(key);
+}
+
+function estimateBreakdownDuration(enabled, seconds) {
+  return enabled ? approximateEstimateDuration(seconds) : t("disabled");
 }
 
 function createRuntimeEstimate(queueItem, status) {
@@ -3230,36 +3286,81 @@ function createRuntimeEstimate(queueItem, status) {
 
   const audio = estimate.audio || {};
   const frames = estimate.frames || {};
+  const ocr = estimate.ocr || {};
   if (audio.enabled) {
-    wrapper.append(textLine(t("estimateAudioSummary", {
-      duration: approximateEstimateDuration(audio.estimated_full_runtime_sec),
-    })));
+    wrapper.append(textLine(audio.included_in_total === false
+      ? t("estimateAudioUnavailableSummary")
+      : t("estimateAudioSummary", {
+        duration: approximateEstimateDuration(audio.estimated_full_runtime_sec),
+      })));
   }
   if (frames.enabled) {
     wrapper.append(textLine(t("estimateFramesSummary", {
       duration: approximateEstimateDuration(frames.estimated_full_runtime_sec),
     })));
   }
+  if (ocr.enabled) {
+    wrapper.append(textLine(t(ocr.included_in_total ? "estimateOcrSummary" : "estimateOcrUnavailableSummary", {
+      duration: approximateEstimateDuration(ocr.estimated_full_runtime_sec),
+    })));
+  }
   wrapper.append(textLine(t("totalEstimate", {
     duration: approximateEstimateDuration(estimate.total_estimated_full_runtime_sec),
   })));
+  if (estimate.total_excludes_audio) {
+    const warning = textLine(t("estimateAudioTotalExcluded"));
+    warning.dataset.type = "warning";
+    wrapper.append(warning);
+  }
+  if (estimate.total_excludes_ocr) {
+    const warning = textLine(t("estimateOcrTotalExcluded"));
+    warning.dataset.type = "warning";
+    wrapper.append(warning);
+  }
 
   const details = document.createElement("details");
+  const detailsKey = runtimeEstimateDetailsKey(queueItem, status);
+  details.dataset.runtimeEstimateDetailsKey = detailsKey;
+  details.open = openRuntimeEstimateDetailsKeys.has(detailsKey);
   const summary = document.createElement("summary");
   summary.textContent = t("estimateDetails");
-  details.append(summary, textLine(t("sampleSegment", {
-    duration: formatReadableEstimateDuration(estimate.sample_duration_sec),
-  })));
-  if (audio.enabled) {
-    details.append(
-      textLine(t("estimateAudioConfig", {
-        model: audio.model,
-        device: deviceLabel(audio.effective_device || audio.device),
+  details.append(
+    summary,
+    textLine(t("estimateBreakdownHeading")),
+    textLine(audio.enabled && audio.included_in_total === false
+      ? t("estimateAudioUnavailableBreakdown")
+      : t("estimateTranscriptionBreakdown", {
+        duration: estimateBreakdownDuration(audio.enabled, audio.estimated_full_runtime_sec),
       })),
-      textLine(t("sampleRuntime", { duration: formatReadableEstimateDuration(audio.sample_runtime_sec) })),
-      textLine(t("estimatedFullTime", { duration: approximateEstimateDuration(audio.estimated_full_runtime_sec) })),
-      textLine(t("estimateSpeed", { value: Number(audio.speed_factor || 0).toFixed(1) })),
-    );
+    textLine(t("estimateFrameExtractionBreakdown", {
+      duration: estimateBreakdownDuration(frames.enabled, frames.estimated_full_runtime_sec),
+    })),
+    textLine(t(ocr.enabled && !ocr.included_in_total ? "estimateOcrUnavailableBreakdown" : "estimateOcrBreakdown", {
+      duration: estimateBreakdownDuration(ocr.enabled, ocr.estimated_full_runtime_sec),
+    })),
+    textLine(t("estimateTotalBreakdown", {
+      duration: approximateEstimateDuration(estimate.total_estimated_full_runtime_sec),
+    })),
+    textLine(t("sampleSegment", {
+    duration: formatReadableEstimateDuration(estimate.sample_duration_sec),
+    })),
+  );
+  if (audio.enabled) {
+    if (audio.included_in_total === false) {
+      const unavailable = textLine(audioEstimateUnavailableMessage(audio));
+      unavailable.dataset.type = "warning";
+      details.append(unavailable, textLine(t("estimateAudioTotalExcluded")));
+    } else {
+      details.append(
+        textLine(t("estimateAudioConfig", {
+          model: audio.model,
+          device: deviceLabel(audio.effective_device || audio.device),
+        })),
+        textLine(t("sampleRuntime", { duration: formatReadableEstimateDuration(audio.sample_runtime_sec) })),
+        textLine(t("estimatedFullTime", { duration: approximateEstimateDuration(audio.estimated_full_runtime_sec) })),
+        textLine(t("estimateSpeed", { value: Number(audio.speed_factor || 0).toFixed(1) })),
+      );
+    }
   }
   if (frames.enabled) {
     details.append(
@@ -3273,6 +3374,27 @@ function createRuntimeEstimate(queueItem, status) {
       textLine(t("sampleRuntime", { duration: formatReadableEstimateDuration(frames.sample_runtime_sec) })),
       textLine(t("estimatedFullTime", { duration: approximateEstimateDuration(frames.estimated_full_runtime_sec) })),
     );
+  }
+  if (ocr.enabled) {
+    details.append(textLine(t("ocr")));
+    if (ocr.included_in_total) {
+      details.append(
+        textLine(t("estimateOcrExpectedFrames", { count: ocr.expected_total_frames ?? t("notAvailable") })),
+        textLine(t("estimateOcrSampledFrames", { count: ocr.sample_frames ?? 0 })),
+        textLine(t("estimateOcrAveragePerFrame", {
+          duration: approximateEstimateDuration(ocr.average_sec_per_frame),
+        })),
+        textLine(t("estimateOcrEngine", { engine: ocr.engine || "EasyOCR" })),
+        textLine(t("estimateOcrFirstRunNote")),
+      );
+    } else {
+      const unavailable = textLine(ocrEstimateUnavailableMessage(ocr));
+      unavailable.dataset.type = "warning";
+      details.append(
+        unavailable,
+        textLine(t("estimateOcrTotalExcluded")),
+      );
+    }
   }
   details.append(textLine(t("approximateEstimate")));
   wrapper.append(details);
@@ -3314,7 +3436,23 @@ function createOcrPlanSettings(queueItem, disabled) {
   const plan = processingPlanForQueueItem(queueItem);
   const wrapper = document.createElement("div");
   wrapper.className = "queue-ocr-settings";
-  const actionable = queueItemIsVideo(queueItem) && plan.ocr.backend === "easyocr" && Boolean(plan.ocr.engine_available);
+  const selectedBackend = plan.ocr.backend || "auto";
+  const resolvedBackend = resolvedOcrBackend(selectedBackend, plan.ocr.resolved_backend || plan.ocr.engine);
+  const currentBackendStatus = latestOcrStatus?.backends?.[resolvedBackend];
+  const backendAvailable = currentBackendStatus
+    ? Boolean(currentBackendStatus.available)
+    : Boolean(plan.ocr.engine_available);
+  const actionable = queueItemIsVideo(queueItem) && resolvedBackend === "easyocr" && backendAvailable;
+  const backendLabel = document.createElement("label");
+  backendLabel.className = "queue-setting-field";
+  const backendText = document.createElement("span");
+  backendText.textContent = t("ocrBackendLabel");
+  const backendSelect = createPlanSelect(ocrBackendOptions(), selectedBackend, "queueOcrBackend", ocrBackendLabel);
+  backendSelect.disabled = disabled;
+  if (![...backendSelect.options].some((option) => option.selected)) {
+    backendSelect.value = "auto";
+  }
+  backendLabel.append(backendText, backendSelect);
   const ocrToggle = createQueueCheckbox("ocr", plan.ocr.enabled, disabled || !actionable, "ocr");
   if (!actionable) {
     ocrToggle.classList.add("queue-option-disabled");
@@ -3323,8 +3461,8 @@ function createOcrPlanSettings(queueItem, disabled) {
   note.className = "section-note";
   note.textContent = actionable
     ? t("ocrRunsOnExtractedFrames")
-    : t(plan.ocr.backend === "easyocr" ? "ocrEasyOcrMissing" : "ocrProcessingEasyOcrOnly");
-  wrapper.append(ocrToggle, note);
+    : t(resolvedBackend === "easyocr" ? "ocrEasyOcrMissing" : "ocrProcessingEasyOcrOnly");
+  wrapper.append(backendLabel, ocrToggle, note);
   return wrapper;
 }
 
@@ -3555,6 +3693,7 @@ function createQueueItemElement(queueItem, status) {
   item.dataset.mediaKind = queueItem.media_kind || (queueItemIsVideo(queueItem) ? "video" : "audio");
   item.dataset.queueStage = queueItem.stage || queueStageFromStatus(queueItem.status);
   item.dataset.ocrBackend = itemOcrPlan.backend;
+  item.dataset.ocrResolvedBackend = itemOcrPlan.resolved_backend || itemOcrPlan.engine || itemOcrPlan.backend;
   item.dataset.ocrLanguages = JSON.stringify(itemOcrPlan.languages);
   item.dataset.ocrEngineAvailable = String(itemOcrPlan.engine_available);
   item.dataset.urlDownload = JSON.stringify(itemPlan.url_download);
@@ -3739,6 +3878,12 @@ function renderQueue(status, options = {}) {
       collapsedQueueSettingsItemIds.delete(index);
     }
   }
+  const visibleEstimateDetailsKeys = new Set((status.items || []).map((item) => runtimeEstimateDetailsKey(item, status)));
+  for (const key of openRuntimeEstimateDetailsKeys) {
+    if (!visibleEstimateDetailsKeys.has(key)) {
+      openRuntimeEstimateDetailsKeys.delete(key);
+    }
+  }
   const total = Number(status.total_items || 0);
   const completed = Number(status.completed_items || 0);
   const failed = Number(status.failed_items || 0);
@@ -3887,6 +4032,7 @@ function collectQueueItemPayload(card) {
   const qualitySelect = card.querySelector("[data-queue-jpeg-quality]");
   const maxSizeSelect = card.querySelector("[data-queue-frame-size]");
   const urlMaxHeightSelect = card.querySelector("[data-queue-url-max-height]");
+  const ocrBackendSelect = card.querySelector("[data-queue-ocr-backend]");
   const frameRate = frameRateFromValue(rateSelect?.value);
   const jpegQuality = Number(qualitySelect?.value || 90);
   const maxFrameSize = maxSizeSelect?.value || "original";
@@ -3894,6 +4040,12 @@ function collectQueueItemPayload(card) {
   if (urlDownloadPlan && urlMaxHeightSelect) {
     urlDownloadPlan.max_video_height = urlMaxHeightSelect.value || "auto";
   }
+  const selectedOcrBackend = ocrBackendSelect?.value || card.dataset.ocrBackend;
+  const resolvedOcrBackendForPayload = resolvedOcrBackend(selectedOcrBackend, card.dataset.ocrResolvedBackend);
+  const resolvedOcrStatus = latestOcrStatus?.backends?.[resolvedOcrBackendForPayload];
+  const ocrEngineAvailable = resolvedOcrStatus
+    ? Boolean(resolvedOcrStatus.available)
+    : card.dataset.ocrEngineAvailable === "true";
   const processingPlan = processingPlanFromValues({
     audioEnabled: operations.transcribe_audio,
     model: modelSelect?.value || selectedModel(),
@@ -3904,9 +4056,10 @@ function collectQueueItemPayload(card) {
     maxFrameSize,
     urlDownload: urlDownloadPlan,
     ocrEnabled: operations.ocr,
-    ocrBackend: card.dataset.ocrBackend,
+    ocrBackend: selectedOcrBackend,
+    ocrResolvedBackend: resolvedOcrBackendForPayload,
     ocrLanguages: JSON.parse(card.dataset.ocrLanguages || "null") || undefined,
-    ocrEngineAvailable: card.dataset.ocrEngineAvailable === "true",
+    ocrEngineAvailable,
   });
   return {
     index: Number(card.dataset.queueIndex),
@@ -4322,6 +4475,15 @@ queueList.addEventListener("focusout", () => {
 });
 queueList.addEventListener("toggle", (event) => {
   const panel = event.target;
+  if (panel.matches?.("[data-runtime-estimate-details-key]")) {
+    const key = panel.dataset.runtimeEstimateDetailsKey;
+    if (panel.open) {
+      openRuntimeEstimateDetailsKeys.add(key);
+    } else {
+      openRuntimeEstimateDetailsKeys.delete(key);
+    }
+    return;
+  }
   if (!panel.matches?.("[data-queue-settings-panel]")) {
     return;
   }
@@ -4338,7 +4500,7 @@ queueList.addEventListener("toggle", (event) => {
 }, true);
 queueList.addEventListener("change", async (event) => {
   const target = event.target;
-  if (!target.matches("[data-queue-operation], [data-queue-audio-model], [data-queue-audio-device], [data-queue-frame-rate], [data-queue-jpeg-quality], [data-queue-frame-size], [data-queue-url-max-height]")) {
+  if (!target.matches("[data-queue-operation], [data-queue-audio-model], [data-queue-audio-device], [data-queue-frame-rate], [data-queue-jpeg-quality], [data-queue-frame-size], [data-queue-url-max-height], [data-queue-ocr-backend]")) {
     return;
   }
   await updateQueueItemFromCard(queueCardFromTarget(target));

@@ -182,6 +182,24 @@ class FrameExtractorTests(unittest.TestCase):
         self.assertFalse((output_dir / "frames_index.json").exists())
         self.assertEqual([], list(self.recordings_dir.iterdir()))
 
+    def test_extract_sample_frames_at_timestamps_is_temp_only_and_capped(self) -> None:
+        path = self.make_video("ocr_sample.avi", fps=5, frames=30)
+        output_dir = self.root / "ocr_estimate_sample"
+
+        result = self.extractor.extract_sample_frames_at_timestamps(
+            source_path=path,
+            output_dir=output_dir,
+            timestamps_sec=[0.4, 1.2, 2.0, 2.8],
+            jpeg_quality=75,
+            max_frame_size="width_640",
+        )
+
+        self.assertEqual(3, result["sample_frames"])
+        self.assertEqual(3, len(result["frame_paths"]))
+        self.assertEqual(3, len(list(output_dir.glob("*.jpg"))))
+        self.assertFalse((output_dir / "frames_index.json").exists())
+        self.assertEqual([], list(self.recordings_dir.iterdir()))
+
     def test_unicode_output_base_writes_jpegs_and_index(self) -> None:
         path = self.make_video("unicode.avi", fps=5, frames=8)
         result = self.extractor.extract_frames(

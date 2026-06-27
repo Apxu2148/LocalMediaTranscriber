@@ -1306,6 +1306,19 @@ summary:focus-visible {
   align-items: end;
 }
 
+.queue-ocr-settings {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(120px, auto);
+  gap: 8px 12px;
+  align-items: end;
+  padding: 4px 0 2px 23px;
+}
+
+.queue-ocr-settings .section-note {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
 .queue-processing-plan-summary {
   display: grid;
   gap: 3px;

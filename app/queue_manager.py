@@ -663,17 +663,26 @@ class QueueManager:
             else frames_plan.get("enabled", operation_defaults.get("extract_frames", False))
         )
         ocr_backend = str(ocr_plan.get("backend") or ocr_plan.get("engine") or "tesseract")
-        if ocr_backend not in {"tesseract", "easyocr", "paddleocr", "windows_ocr"}:
+        if ocr_backend not in {"auto", "tesseract", "easyocr", "paddleocr", "windows_ocr"}:
             ocr_backend = "tesseract"
-        default_ocr_languages = ["rus", "eng"] if ocr_backend == "tesseract" else ["ru", "en"]
-        ocr_enabled = (
+        resolved_ocr_backend = str(ocr_plan.get("resolved_backend") or ocr_plan.get("engine") or "")
+        if ocr_backend != "auto":
+            resolved_ocr_backend = ocr_backend
+        if resolved_ocr_backend not in {"tesseract", "easyocr", "paddleocr", "windows_ocr"}:
+            resolved_ocr_backend = "tesseract"
+        default_ocr_languages = ["rus", "eng"] if resolved_ocr_backend == "tesseract" else ["ru", "en"]
+        ocr_requested = (
             operation_defaults.get("ocr", False)
             if operations is not None
-            else ocr_plan.get("enabled", operation_defaults.get("ocr", False))
+            else ocr_plan.get("requested_enabled", ocr_plan.get("enabled", operation_defaults.get("ocr", False)))
         )
-        ocr_enabled = bool(ocr_enabled) and supports_frames and ocr_backend == "easyocr"
+        ocr_engine_available = bool(ocr_plan.get("engine_available", False))
+        ocr_enabled = bool(ocr_requested) and supports_frames and resolved_ocr_backend == "easyocr" and ocr_engine_available
         if ocr_enabled:
             frames_enabled = True
+        ocr_status = "pending" if ocr_enabled else "disabled"
+        if bool(ocr_requested) and supports_frames and not ocr_enabled:
+            ocr_status = "unavailable"
 
         return {
             "audio": {
@@ -691,11 +700,13 @@ class QueueManager:
             "url_download": url_download_plan,
             "ocr": {
                 "enabled": ocr_enabled,
+                "requested_enabled": bool(ocr_requested),
                 "backend": ocr_backend,
-                "engine": ocr_backend,
+                "resolved_backend": resolved_ocr_backend,
+                "engine": resolved_ocr_backend,
                 "languages": list(ocr_plan.get("languages") or default_ocr_languages),
-                "status": "pending" if ocr_enabled else "disabled",
-                "engine_available": bool(ocr_plan.get("engine_available", False)),
+                "status": ocr_status,
+                "engine_available": ocr_engine_available,
             },
             "cv": {
                 "enabled": False,

@@ -3,6 +3,7 @@ import shutil
 import threading
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from uuid import uuid4
 
 from app import config
@@ -54,13 +55,14 @@ class EasyOcrFrameProcessorTests(unittest.TestCase):
         shutil.rmtree(self.root, ignore_errors=True)
 
     def test_missing_easyocr_import_fails_without_crashing_startup(self) -> None:
-        original = ocr_module.easyocr
-        ocr_module.easyocr = None
-        try:
+        with patch.object(ocr_module.importlib, "import_module", side_effect=ModuleNotFoundError("easyocr")):
             with self.assertRaisesRegex(OcrProcessorError, "EasyOCR is not installed"):
                 process_easyocr_frames(frames_index_path=self.index_path)
-        finally:
-            ocr_module.easyocr = original
+
+    def test_ocr_processor_does_not_import_easyocr_at_module_import_time(self) -> None:
+        source = (PROJECT_ROOT / "app" / "ocr_processor.py").read_text(encoding="utf-8")
+
+        self.assertNotIn("import easyocr", source)
 
     def test_converts_easyocr_results_to_jsonl_and_txt(self) -> None:
         reader = FakeReader({
@@ -148,6 +150,22 @@ class EasyOcrFrameProcessorTests(unittest.TestCase):
         self.assertIn("sec_per_frame", result)
         self.assertEqual("easyocr", result["backend"])
         self.assertEqual(["ru", "en"], result["languages"])
+
+    def test_estimate_frame_runtime_uses_fake_reader_without_writing_artifacts(self) -> None:
+        reader = FakeReader({"frame_000001.jpg": [], "frame_000002.jpg": []})
+        processor = EasyOcrFrameProcessor(reader_factory=lambda _langs: reader, clock=SequenceClock())
+
+        result = processor.estimate_frame_runtime(
+            frame_paths=[self.frames_dir / "frame_000001.jpg", self.frames_dir / "frame_000002.jpg"],
+            languages=["ru", "en"],
+        )
+
+        self.assertEqual("complete", result["status"])
+        self.assertEqual(2, result["sample_frames"])
+        self.assertEqual(0.1, result["average_sec_per_frame"])
+        self.assertEqual(["frame_000001.jpg", "frame_000002.jpg"], reader.calls)
+        self.assertFalse((self.frames_dir / "frames_ocr.jsonl").exists())
+        self.assertFalse((self.frames_dir / "frames_ocr.txt").exists())
 
     def test_easyocr_dependency_is_isolated_to_optional_requirements(self) -> None:
         self.assertEqual("easyocr", (PROJECT_ROOT / "requirements-ocr-easyocr.txt").read_text(encoding="utf-8").strip())

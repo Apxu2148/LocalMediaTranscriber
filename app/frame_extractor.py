@@ -286,6 +286,50 @@ class VideoFrameExtractor:
             "sample_duration_sec": round(bounded_duration, 3),
         }
 
+    def extract_sample_frames_at_timestamps(
+        self,
+        *,
+        source_path: Path,
+        output_dir: Path,
+        timestamps_sec: list[float],
+        jpeg_quality: int | str | None = None,
+        max_frame_size: str | None = None,
+    ) -> dict:
+        jpeg_quality = normalize_jpeg_quality(jpeg_quality)
+        max_frame_size = normalize_max_frame_size(max_frame_size)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        import cv2
+
+        capture = cv2.VideoCapture(str(source_path))
+        if not capture.isOpened():
+            raise FrameExtractionError("Could not open the video file for OCR estimate.")
+
+        frame_paths: list[str] = []
+        extracted_timestamps: list[float] = []
+        try:
+            encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality]
+            for position, timestamp_sec in enumerate(timestamps_sec[:3], start=1):
+                frame = self._read_frame_at(capture, cv2, float(timestamp_sec), position)
+                if frame is None:
+                    if position == 1:
+                        raise FrameExtractionError("Could not decode the first OCR estimate frame.")
+                    break
+                frame_name = f"ocr_sample_{position:06d}.jpg"
+                frame = self._resize_frame_for_output(cv2, frame, max_frame_size)
+                frame_path = output_dir / frame_name
+                self._write_jpeg_frame(cv2, frame_path, frame, encode_params, frame_name)
+                frame_paths.append(str(frame_path))
+                extracted_timestamps.append(round(float(timestamp_sec), 3))
+        finally:
+            capture.release()
+
+        return {
+            "sample_frames": len(frame_paths),
+            "frame_paths": frame_paths,
+            "sample_timestamps_sec": extracted_timestamps,
+        }
+
     def extract_frames(
         self,
         *,
@@ -480,7 +524,7 @@ class VideoFrameExtractor:
 
     @staticmethod
     def _read_frame_at(capture, cv2, timestamp_sec: float, frame_index: int):
-        if frame_index == 1:
+        if frame_index == 1 and timestamp_sec <= 1e-9:
             capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
         else:
             capture.set(cv2.CAP_PROP_POS_MSEC, max(0.0, timestamp_sec) * 1000.0)
