@@ -1152,7 +1152,7 @@ def queue_start(payload: QueueStartRequest | None = Body(default=None)) -> dict:
     selected_model = validate_whisper_model(request.model)
     selected_device = validate_device_preference(request.device)
     try:
-        return queue_manager.start(selected_model, selected_device)
+        return queue_manager.start(selected_model, selected_device, queue_folder_name=request.queue_folder_name)
     except RuntimeError as exc:
         raise_api_error(str(exc))
 

@@ -252,12 +252,23 @@ class QueueManagerTests(unittest.TestCase):
         self.assertEqual("empty", manager.status()["status"])
         self.assertEqual([], manager.status()["items"])
 
-    def test_empty_queue_folder_name_generates_timestamp_default_and_numbered_items(self) -> None:
-        manager = self.make_manager(processor=lambda _item, _model, _device: {})
-        status = manager.add_files([self.make_file("one.wav"), self.make_file("two.wav")], queue_folder_name="")
+    def test_queue_folder_is_reserved_on_start_with_final_name(self) -> None:
+        manager = self.make_manager(processor=lambda _item, _model, _device: {}, duration_reader=lambda _path: 1)
+        first = manager.add_files([self.make_file("one.wav")], queue_folder_name="first_name")
+        second = manager.add_files([self.make_file("two.wav")], queue_folder_name="second_name")
+
+        self.assertIsNone(first["queue_folder_name"])
+        self.assertIsNone(first["queue_path"])
+        self.assertNotIn("item_folder", first["items"][0])
+        self.assertIsNone(second["queue_folder_name"])
+        self.assertIsNone(second["queue_path"])
+
+        manager.start("small", "cpu", queue_folder_name="final_name")
+        manager.wait(timeout=3)
+        status = manager.status()
         queue_path = Path(status["queue_path"])
 
-        self.assertEqual("2026-06-27_181500_queue", status["queue_folder_name"])
+        self.assertEqual("2026-06-27_181500_final_name", status["queue_folder_name"])
         self.assertTrue(queue_path.is_relative_to((self.root / "data" / "queues").resolve()))
         self.assertTrue((queue_path / "queue_manifest.json").exists())
         self.assertTrue(status["items"][0]["item_folder"].startswith("item_001_one"))
@@ -265,12 +276,34 @@ class QueueManagerTests(unittest.TestCase):
         self.assertEqual(status["queue_path"], status["items"][0]["queue_path"])
         self.assertEqual(status["queue_path"], status["items"][1]["queue_path"])
 
-    def test_user_queue_folder_name_is_sanitized_and_cannot_escape_queues_dir(self) -> None:
+    def test_start_without_folder_name_uses_timestamp_default_and_numbered_items(self) -> None:
+        manager = self.make_manager(processor=lambda _item, _model, _device: {}, duration_reader=lambda _path: 1)
+        status = manager.add_files([self.make_file("one.wav"), self.make_file("two.wav")], queue_folder_name="")
+
+        self.assertIsNone(status["queue_folder_name"])
+        self.assertIsNone(status["queue_path"])
+
+        manager.start("small", "cpu")
+        manager.wait(timeout=3)
+        status = manager.status()
+        queue_path = Path(status["queue_path"])
+
+        self.assertEqual("2026-06-27_181500_queue", status["queue_folder_name"])
+        self.assertTrue(queue_path.is_relative_to((self.root / "data" / "queues").resolve()))
+        self.assertTrue((queue_path / "queue_manifest.json").exists())
+        self.assertTrue(status["items"][0]["item_folder"].startswith("item_001_one"))
+        self.assertTrue(status["items"][1]["item_folder"].startswith("item_002_two"))
+
+    def test_user_queue_folder_name_is_sanitized_at_start_and_cannot_escape_queues_dir(self) -> None:
         manager = self.make_manager(processor=lambda _item, _model, _device: {})
-        status = manager.add_urls(
-            [QueueUrl("https://example.test/watch/video.mp4")],
-            queue_folder_name=r"  My OCR test / MOEX: Brent? ..\bad  ",
-        )
+        status = manager.add_urls([QueueUrl("https://example.test/watch/video.mp4")])
+
+        self.assertIsNone(status["queue_folder_name"])
+        self.assertIsNone(status["queue_path"])
+
+        manager.start("small", "cpu", queue_folder_name=r"  My OCR test / MOEX: Brent? ..\bad  ")
+        manager.wait(timeout=3)
+        status = manager.status()
         queue_path = Path(status["queue_path"])
 
         self.assertEqual("2026-06-27_181500_My_OCR_test_MOEX_Brent_bad", status["queue_folder_name"])

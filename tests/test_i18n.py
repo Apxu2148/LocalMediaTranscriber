@@ -542,6 +542,22 @@ class I18nTests(unittest.TestCase):
         self.assertNotIn('Start transcription"', i18n)
         self.assertNotIn('Запустить транскрибацию"', i18n)
 
+    def test_redundant_queue_settings_summary_is_removed(self) -> None:
+        i18n = (STATIC_DIR / "i18n.js").read_text(encoding="utf-8")
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        ru_keys = dictionary_keys(i18n, "ru")
+        en_keys = dictionary_keys(i18n, "en")
+
+        self.assertNotIn("queueSnapshot", ru_keys)
+        self.assertNotIn("queueSnapshot", en_keys)
+        self.assertNotIn("Очередь будет обработана", i18n)
+        self.assertNotIn("The queue will use", i18n)
+        self.assertNotIn("queueSettingsSummary", html)
+        self.assertEqual(
+            "Queue folder will be created when processing starts.",
+            dictionary_value(i18n, "en", "queueFolderPathPending"),
+        )
+
     def test_user_facing_static_markup_and_app_logic_do_not_embed_russian(self) -> None:
         for filename in ("index.html", "app.js", "tour.js"):
             content = (STATIC_DIR / filename).read_text(encoding="utf-8")

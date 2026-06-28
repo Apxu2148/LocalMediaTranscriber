@@ -103,6 +103,7 @@ class UiContractTests(unittest.TestCase):
 
     def test_ui_uses_queue_endpoints_instead_of_direct_transcription(self) -> None:
         app_js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
         self.assertIn('"/api/queue/add-recordings"', app_js)
         self.assertIn('"/api/queue/add-files"', app_js)
         self.assertIn('"/api/queue/add-urls"', app_js)
@@ -164,6 +165,14 @@ class UiContractTests(unittest.TestCase):
         self.assertIn("queueItemArtifactLines", app_js)
         self.assertIn("queueFolderNameValue", app_js)
         self.assertIn("queue_folder_name", app_js)
+        self.assertIn("queueFolderNameInput.disabled = queueActive || hasAddingInProgress() || Boolean(status?.queue_path);", app_js)
+        self.assertIn("const queueFolderLocked = Boolean(latestQueueStatus?.queue_path);", app_js)
+        self.assertNotIn(
+            "Number(latestQueueStatus?.total_items || 0) > 0 || Boolean(latestQueueStatus?.queue_path)",
+            app_js,
+        )
+        self.assertNotIn("queueSettingsSummary", html)
+        self.assertNotIn("queueSnapshot", app_js)
         self.assertIn("queueFolderArtifactPath", app_js)
         self.assertIn("queueManifestArtifactPath", app_js)
         self.assertIn("queueItemFolderArtifactPath", app_js)

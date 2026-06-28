@@ -163,6 +163,7 @@ class QueueManager:
         self._job_id: str | None = None
         self._job_path: Path | None = None
         self._queue_folder_name: str | None = None
+        self._pending_queue_folder_name: str | None = None
         self._queue_path: Path | None = None
         self._queue_manifest_path: Path | None = None
         self._created_at: str | None = None
@@ -249,7 +250,8 @@ class QueueManager:
         with self._lock:
             self._ensure_inactive_locked("Нельзя добавлять файлы во время обработки очереди.")
             if self._job_id is None:
-                self._create_job_locked(queue_folder_name)
+                self._create_job_locked()
+            self._remember_queue_folder_request_locked(queue_folder_name)
 
             start_index = len(self._items) + 1
             active_keys = self._active_file_duplicate_keys_locked()
@@ -286,7 +288,8 @@ class QueueManager:
         with self._lock:
             self._ensure_inactive_locked("Нельзя добавлять ссылки во время обработки очереди.")
             if self._job_id is None:
-                self._create_job_locked(queue_folder_name)
+                self._create_job_locked()
+            self._remember_queue_folder_request_locked(queue_folder_name)
 
             start_index = len(self._items) + 1
             active_keys = self._active_url_duplicate_keys_locked()
@@ -365,7 +368,7 @@ class QueueManager:
             logger.info("Queue URLs added: job_id=%s added=%s total=%s", self._job_id, len(urls_to_add), len(self._items))
             return self._status_snapshot_locked()
 
-    def start(self, model: str, device_preference: str = "auto") -> dict:
+    def start(self, model: str, device_preference: str = "auto", queue_folder_name: str | None = None) -> dict:
         with self._lock:
             self._ensure_inactive_locked("Очередь уже выполняется.")
             self._ensure_no_estimate_locked()
@@ -373,6 +376,7 @@ class QueueManager:
                 raise RuntimeError("В очереди нет ожидающих задач.")
 
             self._validate_pending_operations_locked()
+            self._ensure_queue_outputs_locked(queue_folder_name)
             self._model = model
             self._device_preference = device_preference
             self._started_at = self._started_at or self._now()
@@ -413,6 +417,7 @@ class QueueManager:
             self._job_id = None
             self._job_path = None
             self._queue_folder_name = None
+            self._pending_queue_folder_name = None
             self._queue_path = None
             self._queue_manifest_path = None
             self._created_at = None
@@ -516,6 +521,7 @@ class QueueManager:
                 self._job_id = None
                 self._job_path = None
                 self._queue_folder_name = None
+                self._pending_queue_folder_name = None
                 self._queue_path = None
                 self._queue_manifest_path = None
                 self._created_at = None
@@ -1761,7 +1767,7 @@ class QueueManager:
             self._count_locked("cancelled"),
         )
 
-    def _create_job_locked(self, queue_folder_name: str | None = None) -> None:
+    def _create_job_locked(self) -> None:
         self.jobs_dir.mkdir(parents=True, exist_ok=True)
         base_id = timestamp_for_filename()
         job_id = base_id
@@ -1772,15 +1778,49 @@ class QueueManager:
 
         self._job_id = job_id
         self._job_path = self.jobs_dir / f"job_{job_id}.json"
-        self._queue_folder_name, self._queue_path = self._reserve_queue_path_locked(queue_folder_name)
-        self._queue_manifest_path = self._queue_path / "queue_manifest.json"
+        self._queue_folder_name = None
+        self._pending_queue_folder_name = None
+        self._queue_path = None
+        self._queue_manifest_path = None
         self._created_at = self._now()
         self._status = "pending"
         logger.info(
-            "Queue created: job_id=%s job_json=%s queue_path=%s",
+            "Queue created: job_id=%s job_json=%s",
             self._job_id,
             self._job_path,
-            self._queue_path,
+        )
+
+    def _remember_queue_folder_request_locked(self, queue_folder_name: str | None) -> None:
+        if queue_folder_name is not None and self._queue_path is None:
+            self._pending_queue_folder_name = queue_folder_name
+
+    def _ensure_queue_outputs_locked(self, queue_folder_name: str | None = None) -> None:
+        if self._queue_path is None:
+            requested_name = queue_folder_name if queue_folder_name is not None else self._pending_queue_folder_name
+            self._queue_folder_name, self._queue_path = self._reserve_queue_path_locked(requested_name)
+            self._queue_manifest_path = self._queue_path / "queue_manifest.json"
+            self._pending_queue_folder_name = None
+
+        for item in self._items:
+            if not item.get("item_path") or not item.get("queue_output"):
+                item.update(self._queue_item_output_fields_for_item_locked(item))
+
+    def _queue_item_output_fields_for_item_locked(self, item: dict) -> dict:
+        source_type = item.get("source_type") or "local_file"
+        if source_type == "url":
+            source_url = item.get("source_url")
+            source_label = self._url_source_label(source_url or "", int(item["index"]))
+            original_path = None
+        else:
+            source_url = None
+            source_label = item.get("source_filename") or item.get("source_path") or f"item_{int(item['index']):03d}"
+            original_path = item.get("original_source_path") or item.get("source_path")
+        return self._queue_item_output_fields_locked(
+            index=int(item["index"]),
+            source_label=source_label,
+            source_type=source_type,
+            original_path=original_path,
+            source_url=source_url,
         )
 
     def _reserve_queue_path_locked(self, requested_name: str | None) -> tuple[str, Path]:

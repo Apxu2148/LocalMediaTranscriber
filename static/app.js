@@ -113,7 +113,6 @@ const queueList = document.querySelector("#queueList");
 const queueUrlForm = document.querySelector("#queueUrlForm");
 const queueUrlInput = document.querySelector("#queueUrlInput");
 const queueUrlAddButton = document.querySelector("#queueUrlAddButton");
-const queueSettingsSummary = document.querySelector("#queueSettingsSummary");
 const queueFolderNameInput = document.querySelector("#queueFolderNameInput");
 const queueFolderPathOutput = document.querySelector("#queueFolderPathOutput");
 const defaultAudioEnabled = document.querySelector("#defaultAudioEnabled");
@@ -1657,7 +1656,6 @@ async function saveStorageSettings() {
 function renderFrameSettings(settings) {
   latestFrameSettings = { ...latestFrameSettings, ...settings };
   defaultFrameMaxSizeSelect.value = latestFrameSettings.max_frame_size || "original";
-  updateQueueSettingsSummary();
 }
 
 async function refreshFrameSettings() {
@@ -2832,13 +2830,6 @@ function addingFileLabelKey(files) {
   return "queueStageAddingFile";
 }
 
-function updateQueueSettingsSummary(status = null) {
-  queueSettingsSummary.textContent = t("queueSnapshot", {
-    model: status?.model || selectedModel(),
-    device: status?.device_preference || selectedDevice(),
-  });
-}
-
 function queueFolderNameValue() {
   return queueFolderNameInput?.value.trim() || "";
 }
@@ -2847,8 +2838,7 @@ function updateQueueFolderUi(status = null) {
   if (!queueFolderNameInput || !queueFolderPathOutput) {
     return;
   }
-  const hasQueue = Number(status?.total_items || 0) > 0 || Boolean(status?.queue_path);
-  queueFolderNameInput.disabled = queueActive || hasAddingInProgress() || hasQueue;
+  queueFolderNameInput.disabled = queueActive || hasAddingInProgress() || Boolean(status?.queue_path);
   queueFolderPathOutput.textContent = status?.queue_path
     ? t("queueFolderPath", { path: displayOutputPath(status.queue_path) })
     : t("queueFolderPathPending");
@@ -4010,7 +4000,6 @@ function renderQueue(status, options = {}) {
   transcribeButton.disabled = queueActive || isTranscribing || hasAddingInProgress();
   setRecordingUi(isRecording);
   updateRecordingTranscribeActions(lastRecordings);
-  updateQueueSettingsSummary(queueActive ? status : null);
 
   if (queueActive) {
     const current = status.current_item || {};
@@ -4276,7 +4265,7 @@ function updateLongOperationControls() {
     || hasAddingInProgress();
   const fileAddBlocked = active || isAddingFile;
   const urlAddBlocked = active || isAddingUrl;
-  const queueFolderLocked = Number(latestQueueStatus?.total_items || 0) > 0 || Boolean(latestQueueStatus?.queue_path);
+  const queueFolderLocked = Boolean(latestQueueStatus?.queue_path);
   whisperModelSelect.disabled = active || !defaultAudioEnabled.checked;
   whisperDeviceSelect.disabled = active || !defaultAudioEnabled.checked;
   transcribeButton.disabled = fileAddBlocked;
@@ -4467,17 +4456,14 @@ micDeviceSelect.addEventListener("change", handleMicDeviceChange);
 outputDeviceSelect.addEventListener("change", handleOutputDeviceChange);
 whisperModelSelect.addEventListener("change", () => {
   updateModelAvailabilityUi();
-  updateQueueSettingsSummary();
   renderRuntimeDetails();
 });
-whisperDeviceSelect.addEventListener("change", updateQueueSettingsSummary);
 for (const control of [defaultAudioEnabled, defaultFramesEnabled, defaultFrameRateSelect, defaultJpegQualitySelect, defaultFrameMaxSizeSelect, defaultOcrEnabled]) {
   control.addEventListener("change", () => {
     if (defaultOcrEnabled.checked) {
       defaultFramesEnabled.checked = true;
     }
     updateLongOperationControls();
-    updateQueueSettingsSummary();
     if (control === defaultFrameMaxSizeSelect) {
       void saveFrameSettings();
     }
@@ -4757,7 +4743,6 @@ document.addEventListener("lat-language-change", () => {
     fillDisplays(latestDisplays, selectedDisplayIndices());
   }
   setRecordingUi(isRecording);
-  updateQueueSettingsSummary(queueActive ? latestQueueStatus : null);
   renderModelManager();
   if (modelDownloadStatus) {
     renderModelDownloadStatus(modelDownloadStatus);

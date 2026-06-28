@@ -102,9 +102,12 @@ class HttpSmokeTests(unittest.TestCase):
             self.assertEqual("https://example.test/video", add_urls.call_args.args[0][0].source_url)
             self.assertEqual("smoke_queue", add_urls.call_args.kwargs["queue_folder_name"])
 
-            queue_response = client.post("/api/queue/start", json={"model": "small", "device": "cpu"})
+            queue_response = client.post(
+                "/api/queue/start",
+                json={"model": "small", "device": "cpu", "queue_folder_name": "final_queue"},
+            )
             self.assertEqual(200, queue_response.status_code)
-            start_queue.assert_called_once_with("small", "cpu")
+            start_queue.assert_called_once_with("small", "cpu", queue_folder_name="final_queue")
 
             benchmark_response = client.post(
                 "/api/benchmark/run",
