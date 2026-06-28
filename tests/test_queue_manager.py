@@ -9,9 +9,15 @@ from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
 
+from app.cv_processor import analyze_frames as analyze_cv_frames
 from app.queue_manager import QueueFile, QueueManager, QueueUrl
 from app.storage_manager import StorageManager
 from app.url_downloader import UrlDownloadCancelled, UrlDownloader
+
+try:
+    from PIL import Image
+except ImportError:  # pragma: no cover
+    Image = None
 
 
 PROJECT_TMP = Path(__file__).resolve().parents[1] / "tmp"
@@ -66,6 +72,21 @@ class QueueManagerTests(unittest.TestCase):
         manager = QueueManager(jobs_dir=self.root, **kwargs)
         self.managers.append(manager)
         return manager
+
+    def make_frame_image(self, path: Path, color: tuple[int, int, int]) -> None:
+        if Image is None:
+            self.skipTest("Pillow is required for CV metadata integration tests")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (8, 8), color).save(path, format="JPEG")
+
+    def process_cv_for_test(self, item: dict, cancel_event: threading.Event, progress_callback) -> dict:
+        frame_result = item.get("frame_extraction_result") or (item.get("frame_extraction") or {}).get("result") or {}
+        return analyze_cv_frames(
+            frames_dir=frame_result.get("frames_path") or item.get("frames_path"),
+            output_dir=(item.get("queue_output") or {})["cv_dir"],
+            cancel_event=cancel_event,
+            progress_callback=progress_callback,
+        )
 
     def track_job(self, status: dict) -> dict:
         return status
@@ -392,6 +413,134 @@ class QueueManagerTests(unittest.TestCase):
         self.assertEqual("LocalMediaTranscriber", manifest["project"])
         self.assertEqual(item["item_folder"], manifest["items"][0]["item_folder"])
         self.assertEqual(item["transcript_path"], manifest["items"][0]["outputs"]["transcript_path"])
+
+    def test_cv_metadata_runs_over_queue_frames_and_manifest_tracks_outputs(self) -> None:
+        cv_frame_dirs: list[Path] = []
+
+        def frame_processor(item: dict, _cancel_event: threading.Event, _progress) -> dict:
+            frames_dir = Path(item["queue_output"]["frames_dir"])
+            self.make_frame_image(frames_dir / "frame_000001__t000000.000.jpg", (20, 20, 20))
+            self.make_frame_image(frames_dir / "frame_000002__t000001.000.jpg", (220, 220, 220))
+            return {
+                "status": "completed",
+                "completed": True,
+                "frames_path": str(frames_dir),
+                "frames_index_path": str(frames_dir / "frames_index.json"),
+                "extracted_frame_count": 2,
+            }
+
+        def cv_processor(item: dict, cancel_event: threading.Event, progress_callback) -> dict:
+            frame_result = item.get("frame_extraction_result") or {}
+            cv_frame_dirs.append(Path(frame_result["frames_path"]))
+            return self.process_cv_for_test(item, cancel_event, progress_callback)
+
+        manager = self.make_manager(
+            processor=lambda _item, _model, _device: {},
+            frame_processor=frame_processor,
+            cv_processor=cv_processor,
+            duration_reader=lambda _path: 2,
+            video_metadata_reader=lambda _path: {"duration_sec": 2, "fps": 30, "width": 100, "height": 50},
+        )
+        manager.add_files([QueueFile(
+            source_path=self.make_file("cv_demo.mp4").source_path,
+            source_filename="cv_demo.mp4",
+            processing_plan={
+                "audio": {"enabled": False},
+                "frames": {"enabled": True},
+                "cv": {"metadata_enabled": True},
+            },
+        )])
+
+        manager.start("small", "cpu")
+        manager.wait(timeout=3)
+
+        item = manager.status()["items"][0]
+        item_path = Path(item["item_path"])
+        self.assertEqual("completed", item["status"])
+        self.assertEqual([item_path / "frames"], cv_frame_dirs)
+        self.assertEqual("completed", item["cv_result"]["status"])
+        self.assertEqual(item_path / "cv" / "frames_cv.jsonl", Path(item["cv_result"]["jsonl_path"]))
+        self.assertEqual(item_path / "cv" / "frames_cv.txt", Path(item["cv_result"]["txt_path"]))
+        self.assertTrue(Path(item["outputs"]["cv_jsonl_path"]).exists())
+        self.assertTrue(Path(item["outputs"]["cv_txt_path"]).exists())
+        manifest = json.loads(Path(item["queue_manifest_path"]).read_text(encoding="utf-8"))
+        self.assertEqual(item["outputs"]["cv_jsonl_path"], manifest["items"][0]["outputs"]["cv_jsonl_path"])
+        self.assertEqual(item["outputs"]["cv_txt_path"], manifest["items"][0]["outputs"]["cv_txt_path"])
+
+    def test_cv_metadata_enabled_without_frames_is_skipped_without_failing_item(self) -> None:
+        manager = self.make_manager(
+            processor=lambda _item, _model, _device: {},
+            cv_processor=self.process_cv_for_test,
+            duration_reader=lambda _path: 2,
+            video_metadata_reader=lambda _path: {"duration_sec": 2, "fps": 30, "width": 100, "height": 50},
+        )
+        manager.add_files([QueueFile(
+            source_path=self.make_file("cv_no_frames.mp4").source_path,
+            source_filename="cv_no_frames.mp4",
+            processing_plan={
+                "audio": {"enabled": False},
+                "frames": {"enabled": False},
+                "cv": {"metadata_enabled": True},
+            },
+        )])
+
+        manager.start("small", "cpu")
+        manager.wait(timeout=3)
+
+        item = manager.status()["items"][0]
+        self.assertEqual("completed", item["status"])
+        self.assertEqual("skipped", item["cv_result"]["status"])
+        self.assertEqual("CV metadata requires extracted frames.", item["cv_result"]["error_message"])
+        self.assertTrue(Path(item["outputs"]["cv_txt_path"]).exists())
+
+    def test_url_item_cv_metadata_writes_under_url_item_folder(self) -> None:
+        downloaded = self.make_file("downloaded_cv.mp4")
+
+        def frame_processor(item: dict, _cancel_event: threading.Event, _progress) -> dict:
+            frames_dir = Path(item["queue_output"]["frames_dir"])
+            self.make_frame_image(frames_dir / "frame_000001__t000000.000.jpg", (15, 15, 15))
+            self.make_frame_image(frames_dir / "frame_000002__t000001.000.jpg", (16, 16, 16))
+            return {
+                "status": "completed",
+                "completed": True,
+                "frames_path": str(frames_dir),
+                "frames_index_path": str(frames_dir / "frames_index.json"),
+                "extracted_frame_count": 2,
+            }
+
+        manager = self.make_manager(
+            processor=lambda _item, _model, _device: {},
+            video_downloader=lambda _url: {
+                "source_path": str(downloaded.source_path),
+                "downloaded_media_path": str(downloaded.source_path),
+                "downloaded_video_path": str(downloaded.source_path),
+                "source_title": "URL CV",
+                "source_platform": "direct",
+            },
+            frame_processor=frame_processor,
+            cv_processor=self.process_cv_for_test,
+            duration_reader=lambda _path: 2,
+            video_metadata_reader=lambda _path: {"duration_sec": 2, "fps": 30, "width": 100, "height": 50},
+        )
+        status = manager.add_urls([QueueUrl(
+            "https://example.test/video/cv.mp4",
+            processing_plan={
+                "audio": {"enabled": False},
+                "frames": {"enabled": True},
+                "cv": {"metadata_enabled": True},
+            },
+        )])
+
+        manager.start("small", "cpu")
+        manager.wait(timeout=3)
+
+        item = manager.status()["items"][0]
+        item_path = Path(item["item_path"])
+        self.assertEqual("url", status["items"][0]["source_type"])
+        self.assertEqual("completed", item["status"])
+        self.assertEqual(item_path / "cv", Path(item["queue_output"]["cv_dir"]))
+        self.assertEqual(item_path / "cv" / "frames_cv.jsonl", Path(item["outputs"]["cv_jsonl_path"]))
+        self.assertTrue(Path(item["outputs"]["cv_jsonl_path"]).exists())
 
     def test_mixed_queue_downloads_url_and_reuses_snapshot(self) -> None:
         downloaded = self.make_file("downloaded.m4a")

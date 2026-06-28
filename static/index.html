@@ -296,150 +296,183 @@
                   </div>
                   <small data-i18n="itemSettingsOverrideDefaults"></small>
                 </summary>
-                <div class="default-processing-grid">
-                  <fieldset>
-                    <legend>
-                      <label class="queue-option" for="defaultAudioEnabled">
-                        <input id="defaultAudioEnabled" type="checkbox" checked />
-                        <span data-i18n="audio"></span>
+                <details id="defaultAudioFramesSettings" class="default-settings-subsection settings-collapsible" open>
+                  <summary class="settings-collapsible-summary default-subsection-summary">
+                    <h4 data-i18n="audioFramesSettingsTitle"></h4>
+                  </summary>
+                  <div class="default-processing-grid">
+                    <fieldset>
+                      <legend>
+                        <label class="queue-option" for="defaultAudioEnabled">
+                          <input id="defaultAudioEnabled" type="checkbox" checked />
+                          <span data-i18n="audio"></span>
+                        </label>
+                      </legend>
+                      <label class="queue-setting-field" for="whisperModelSelect">
+                        <span data-i18n="model"></span>
+                        <select id="whisperModelSelect" data-i18n-title="modelSelectTitle"></select>
+                        <span id="modelAvailabilityOutput" class="hint" data-i18n="modelChecking"></span>
                       </label>
-                    </legend>
-                    <label class="queue-setting-field" for="whisperModelSelect">
-                      <span data-i18n="model"></span>
-                      <select id="whisperModelSelect" data-i18n-title="modelSelectTitle"></select>
-                      <span id="modelAvailabilityOutput" class="hint" data-i18n="modelChecking"></span>
-                    </label>
-                    <label class="queue-setting-field" for="whisperDeviceSelect">
-                      <span data-i18n="device"></span>
-                      <select id="whisperDeviceSelect">
-                        <option value="auto" data-i18n="auto"></option>
-                        <option value="cpu">CPU</option>
-                        <option value="cuda">GPU / CUDA</option>
-                      </select>
-                      <span id="deviceAvailabilityOutput" class="hint" data-i18n="checkingGpu"></span>
-                    </label>
-                    <output id="modelDownloadWarning" class="model-warning"></output>
-                  </fieldset>
-                  <fieldset>
-                    <legend>
-                      <label class="queue-option" for="defaultFramesEnabled">
-                        <input id="defaultFramesEnabled" type="checkbox" checked />
-                        <span data-i18n="frames"></span>
+                      <label class="queue-setting-field" for="whisperDeviceSelect">
+                        <span data-i18n="device"></span>
+                        <select id="whisperDeviceSelect">
+                          <option value="auto" data-i18n="auto"></option>
+                          <option value="cpu">CPU</option>
+                          <option value="cuda">GPU / CUDA</option>
+                        </select>
+                        <span id="deviceAvailabilityOutput" class="hint" data-i18n="checkingGpu"></span>
                       </label>
-                    </legend>
-                    <label class="queue-setting-field" for="defaultFrameRateSelect">
-                      <span data-i18n="frameInterval"></span>
-                      <select id="defaultFrameRateSelect"></select>
-                    </label>
-                    <label class="queue-setting-field" for="defaultJpegQualitySelect">
-                      <span data-i18n="jpegQuality"></span>
-                      <select id="defaultJpegQualitySelect"></select>
-                    </label>
-                    <label class="queue-setting-field" for="defaultFrameMaxSizeSelect">
-                      <span data-i18n="maxFrameSize"></span>
-                      <select id="defaultFrameMaxSizeSelect"></select>
-                    </label>
-                    <label class="queue-option" for="defaultOcrEnabled">
-                      <input id="defaultOcrEnabled" type="checkbox" disabled />
-                      <span data-i18n="ocr"></span>
-                    </label>
-                    <p class="section-note" data-i18n="maxFrameSizeHelp"></p>
-                  </fieldset>
-                </div>
-                <section id="urlDownloadSettingsPanel" class="url-download-settings-panel" aria-labelledby="urlDownloadSettingsTitle">
-                  <div class="url-download-settings-heading">
+                      <output id="modelDownloadWarning" class="model-warning"></output>
+                    </fieldset>
+                    <fieldset>
+                      <legend>
+                        <label class="queue-option" for="defaultFramesEnabled">
+                          <input id="defaultFramesEnabled" type="checkbox" checked />
+                          <span data-i18n="frames"></span>
+                        </label>
+                      </legend>
+                      <label class="queue-setting-field" for="defaultFrameRateSelect">
+                        <span data-i18n="frameInterval"></span>
+                        <select id="defaultFrameRateSelect"></select>
+                      </label>
+                      <label class="queue-setting-field" for="defaultJpegQualitySelect">
+                        <span data-i18n="jpegQuality"></span>
+                        <select id="defaultJpegQualitySelect"></select>
+                      </label>
+                      <label class="queue-setting-field" for="defaultFrameMaxSizeSelect">
+                        <span data-i18n="maxFrameSize"></span>
+                        <select id="defaultFrameMaxSizeSelect"></select>
+                      </label>
+                      <label class="queue-option" for="defaultOcrEnabled">
+                        <input id="defaultOcrEnabled" type="checkbox" disabled />
+                        <span data-i18n="ocr"></span>
+                      </label>
+                      <p class="section-note" data-i18n="maxFrameSizeHelp"></p>
+                    </fieldset>
+                  </div>
+                </details>
+                <details id="defaultUrlDownloadSettings" class="default-settings-subsection settings-collapsible">
+                  <summary class="settings-collapsible-summary default-subsection-summary">
                     <div>
                       <h4 id="urlDownloadSettingsTitle" data-i18n="urlDownloadSettingsTitle"></h4>
                       <p class="section-note" data-i18n="urlDownloadSettingsHelp"></p>
                     </div>
-                  </div>
-                  <label class="queue-setting-field" for="urlDownloadProfileSelect">
-                    <span data-i18n="urlDownloadProfileLabel"></span>
-                    <select id="urlDownloadProfileSelect">
-                      <option value="auto" data-i18n="urlDownloadProfileAuto"></option>
-                      <option value="best_for_extraction" data-i18n="urlDownloadProfileBestForExtraction"></option>
-                      <option value="best_quality" data-i18n="urlDownloadProfileBestQuality"></option>
-                      <option value="smallest_file" data-i18n="urlDownloadProfileSmallestFile"></option>
-                      <option value="prefer_webm" data-i18n="urlDownloadProfilePreferWebm"></option>
-                      <option value="prefer_mp4" data-i18n="urlDownloadProfilePreferMp4"></option>
-                      <option value="prefer_mkv" data-i18n="urlDownloadProfilePreferMkv"></option>
-                      <option value="prefer_mov" data-i18n="urlDownloadProfilePreferMov"></option>
-                      <option value="prefer_avi" data-i18n="urlDownloadProfilePreferAvi"></option>
-                      <option value="audio_friendly" data-i18n="urlDownloadProfileAudioFriendly"></option>
-                      <option value="custom" data-i18n="urlDownloadProfileCustom"></option>
-                    </select>
-                  </label>
-                  <label class="queue-setting-field" for="urlDownloadMaxVideoHeightSelect">
-                    <span data-i18n="urlDownloadMaxVideoHeightLabel"></span>
-                    <select id="urlDownloadMaxVideoHeightSelect">
-                      <option value="auto" data-i18n="urlDownloadMaxVideoHeightAuto"></option>
-                      <option value="480" data-i18n="urlDownloadMaxVideoHeight480"></option>
-                      <option value="720" data-i18n="urlDownloadMaxVideoHeight720"></option>
-                      <option value="1080" data-i18n="urlDownloadMaxVideoHeight1080"></option>
-                      <option value="1440" data-i18n="urlDownloadMaxVideoHeight1440"></option>
-                      <option value="2160" data-i18n="urlDownloadMaxVideoHeight2160"></option>
-                    </select>
-                  </label>
-                  <p class="section-note" data-i18n="urlDownloadMaxVideoHeightHelp"></p>
-                  <label id="urlDownloadCustomField" class="queue-setting-field" for="urlDownloadCustomFormatInput" hidden>
-                    <span data-i18n="urlDownloadCustomFormatLabel"></span>
-                    <input id="urlDownloadCustomFormatInput" type="text" data-i18n-placeholder="urlDownloadCustomFormatPlaceholder" spellcheck="false" />
-                  </label>
-                  <div class="url-download-log-options">
-                    <label class="queue-option" for="urlDownloadLogMediaProbe">
-                      <input id="urlDownloadLogMediaProbe" type="checkbox" checked />
-                      <span data-i18n="urlDownloadLogMediaProbe"></span>
+                  </summary>
+                  <section id="urlDownloadSettingsPanel" class="url-download-settings-panel" aria-labelledby="urlDownloadSettingsTitle">
+                    <label class="queue-setting-field" for="urlDownloadProfileSelect">
+                      <span data-i18n="urlDownloadProfileLabel"></span>
+                      <select id="urlDownloadProfileSelect">
+                        <option value="auto" data-i18n="urlDownloadProfileAuto"></option>
+                        <option value="best_for_extraction" data-i18n="urlDownloadProfileBestForExtraction"></option>
+                        <option value="best_quality" data-i18n="urlDownloadProfileBestQuality"></option>
+                        <option value="smallest_file" data-i18n="urlDownloadProfileSmallestFile"></option>
+                        <option value="prefer_webm" data-i18n="urlDownloadProfilePreferWebm"></option>
+                        <option value="prefer_mp4" data-i18n="urlDownloadProfilePreferMp4"></option>
+                        <option value="prefer_mkv" data-i18n="urlDownloadProfilePreferMkv"></option>
+                        <option value="prefer_mov" data-i18n="urlDownloadProfilePreferMov"></option>
+                        <option value="prefer_avi" data-i18n="urlDownloadProfilePreferAvi"></option>
+                        <option value="audio_friendly" data-i18n="urlDownloadProfileAudioFriendly"></option>
+                        <option value="custom" data-i18n="urlDownloadProfileCustom"></option>
+                      </select>
                     </label>
-                    <label class="queue-option" for="urlDownloadLogExtractionBenchmark">
-                      <input id="urlDownloadLogExtractionBenchmark" type="checkbox" checked />
-                      <span data-i18n="urlDownloadLogExtractionBenchmark"></span>
+                    <label class="queue-setting-field" for="urlDownloadMaxVideoHeightSelect">
+                      <span data-i18n="urlDownloadMaxVideoHeightLabel"></span>
+                      <select id="urlDownloadMaxVideoHeightSelect">
+                        <option value="auto" data-i18n="urlDownloadMaxVideoHeightAuto"></option>
+                        <option value="480" data-i18n="urlDownloadMaxVideoHeight480"></option>
+                        <option value="720" data-i18n="urlDownloadMaxVideoHeight720"></option>
+                        <option value="1080" data-i18n="urlDownloadMaxVideoHeight1080"></option>
+                        <option value="1440" data-i18n="urlDownloadMaxVideoHeight1440"></option>
+                        <option value="2160" data-i18n="urlDownloadMaxVideoHeight2160"></option>
+                      </select>
                     </label>
-                  </div>
-                  <div class="actions url-download-settings-actions">
-                    <button id="urlDownloadSaveButton" type="button" data-i18n="urlDownloadSaveButton"></button>
-                  </div>
-                  <output id="urlDownloadSettingsOutput" class="output compact"></output>
-                </section>
-                <section id="ocrSettingsPanel" class="ocr-settings-panel" aria-labelledby="ocrSettingsTitle">
-                  <div class="ocr-settings-heading">
+                    <p class="section-note" data-i18n="urlDownloadMaxVideoHeightHelp"></p>
+                    <label id="urlDownloadCustomField" class="queue-setting-field" for="urlDownloadCustomFormatInput" hidden>
+                      <span data-i18n="urlDownloadCustomFormatLabel"></span>
+                      <input id="urlDownloadCustomFormatInput" type="text" data-i18n-placeholder="urlDownloadCustomFormatPlaceholder" spellcheck="false" />
+                    </label>
+                    <div class="url-download-log-options">
+                      <label class="queue-option" for="urlDownloadLogMediaProbe">
+                        <input id="urlDownloadLogMediaProbe" type="checkbox" checked />
+                        <span data-i18n="urlDownloadLogMediaProbe"></span>
+                      </label>
+                      <label class="queue-option" for="urlDownloadLogExtractionBenchmark">
+                        <input id="urlDownloadLogExtractionBenchmark" type="checkbox" checked />
+                        <span data-i18n="urlDownloadLogExtractionBenchmark"></span>
+                      </label>
+                    </div>
+                    <div class="actions url-download-settings-actions">
+                      <button id="urlDownloadSaveButton" type="button" data-i18n="urlDownloadSaveButton"></button>
+                    </div>
+                    <output id="urlDownloadSettingsOutput" class="output compact"></output>
+                  </section>
+                </details>
+                <details id="defaultOcrSettings" class="default-settings-subsection settings-collapsible">
+                  <summary class="settings-collapsible-summary default-subsection-summary">
                     <div>
                       <h4 id="ocrSettingsTitle" data-i18n="ocrSettingsTitle"></h4>
                       <p class="section-note" data-i18n="ocrNextStage"></p>
                     </div>
                     <strong id="ocrStatusBadge" class="status-pill" data-i18n="ocrChecking"></strong>
-                  </div>
-                  <label class="queue-setting-field" for="ocrBackendSelect">
-                    <span data-i18n="ocrEngineLabel"></span>
-                    <select id="ocrBackendSelect">
-                      <option value="tesseract" data-i18n="ocrEngineTesseract"></option>
-                      <option value="easyocr" data-i18n="ocrEngineEasyOcr"></option>
-                      <option value="paddleocr" data-i18n="ocrEnginePaddleOcr"></option>
-                      <option value="windows_ocr" data-i18n="ocrEngineWindowsOcr"></option>
-                    </select>
-                  </label>
-                  <div class="ocr-status-grid">
-                    <div><span data-i18n="ocrBackendTypeLabel"></span><strong id="ocrBackendType" data-i18n="ocrValueUnavailable"></strong></div>
-                    <div id="ocrPathStatusRow"><span data-i18n="ocrPathLabel"></span><code id="ocrDetectedPath" data-i18n="ocrValueUnavailable"></code></div>
-                    <div><span data-i18n="ocrVersionLabel"></span><strong id="ocrVersion" data-i18n="ocrValueUnavailable"></strong></div>
-                    <div><span data-i18n="ocrLanguagesLabel"></span><strong id="ocrLanguages" data-i18n="ocrLanguagesNone"></strong></div>
-                  </div>
-                  <div id="ocrTesseractFields">
-                    <div class="ocr-language-readiness">
-                      <span id="ocrRusStatus" data-i18n="ocrMissingRus"></span>
-                      <span id="ocrEngStatus" data-i18n="ocrMissingEng"></span>
-                    </div>
-                    <label class="queue-setting-field" for="ocrPathInput">
-                      <span data-i18n="ocrCustomPathLabel"></span>
-                      <input id="ocrPathInput" type="text" data-i18n-placeholder="ocrCustomPathPlaceholder" spellcheck="false" />
+                  </summary>
+                  <section id="ocrSettingsPanel" class="ocr-settings-panel" aria-labelledby="ocrSettingsTitle">
+                    <label class="queue-setting-field" for="ocrBackendSelect">
+                      <span data-i18n="ocrEngineLabel"></span>
+                      <select id="ocrBackendSelect">
+                        <option value="tesseract" data-i18n="ocrEngineTesseract"></option>
+                        <option value="easyocr" data-i18n="ocrEngineEasyOcr"></option>
+                        <option value="paddleocr" data-i18n="ocrEnginePaddleOcr"></option>
+                        <option value="windows_ocr" data-i18n="ocrEngineWindowsOcr"></option>
+                      </select>
                     </label>
-                  </div>
-                  <p id="ocrBackendNotes" class="section-note"></p>
-                  <div class="actions ocr-settings-actions">
-                    <button id="ocrCheckButton" type="button" data-i18n="ocrCheckButton"></button>
-                    <button id="ocrSaveButton" type="button" data-i18n="ocrSaveButton"></button>
-                  </div>
-                  <output id="ocrStatusMessage" class="output compact" data-i18n="ocrChecking"></output>
-                </section>
+                    <div class="ocr-status-grid">
+                      <div><span data-i18n="ocrBackendTypeLabel"></span><strong id="ocrBackendType" data-i18n="ocrValueUnavailable"></strong></div>
+                      <div id="ocrPathStatusRow"><span data-i18n="ocrPathLabel"></span><code id="ocrDetectedPath" data-i18n="ocrValueUnavailable"></code></div>
+                      <div><span data-i18n="ocrVersionLabel"></span><strong id="ocrVersion" data-i18n="ocrValueUnavailable"></strong></div>
+                      <div><span data-i18n="ocrLanguagesLabel"></span><strong id="ocrLanguages" data-i18n="ocrLanguagesNone"></strong></div>
+                    </div>
+                    <div id="ocrTesseractFields">
+                      <div class="ocr-language-readiness">
+                        <span id="ocrRusStatus" data-i18n="ocrMissingRus"></span>
+                        <span id="ocrEngStatus" data-i18n="ocrMissingEng"></span>
+                      </div>
+                      <label class="queue-setting-field" for="ocrPathInput">
+                        <span data-i18n="ocrCustomPathLabel"></span>
+                        <input id="ocrPathInput" type="text" data-i18n-placeholder="ocrCustomPathPlaceholder" spellcheck="false" />
+                      </label>
+                    </div>
+                    <p id="ocrBackendNotes" class="section-note"></p>
+                    <div class="actions ocr-settings-actions">
+                      <button id="ocrCheckButton" type="button" data-i18n="ocrCheckButton"></button>
+                      <button id="ocrSaveButton" type="button" data-i18n="ocrSaveButton"></button>
+                    </div>
+                    <output id="ocrStatusMessage" class="output compact" data-i18n="ocrChecking"></output>
+                  </section>
+                </details>
+                <details id="defaultCvSettings" class="default-settings-subsection settings-collapsible">
+                  <summary class="settings-collapsible-summary default-subsection-summary">
+                    <h4 id="cvSettingsTitle" data-i18n="cvSettingsTitle"></h4>
+                  </summary>
+                  <section id="cvSettingsPanel" class="cv-settings-panel" aria-labelledby="cvSettingsTitle">
+                    <label class="queue-option" for="defaultCvMetadataEnabled">
+                      <input id="defaultCvMetadataEnabled" type="checkbox" />
+                      <span data-i18n="visualMetadata"></span>
+                    </label>
+                    <label class="queue-option queue-option-disabled" for="defaultCvObjectDetection">
+                      <input id="defaultCvObjectDetection" type="checkbox" disabled />
+                      <span data-i18n="cvObjectDetectionSoon"></span>
+                    </label>
+                    <label class="queue-option queue-option-disabled" for="defaultCvVlmAnalysis">
+                      <input id="defaultCvVlmAnalysis" type="checkbox" disabled />
+                      <span data-i18n="cvVlmAnalysisSoon"></span>
+                    </label>
+                    <label class="queue-option queue-option-disabled" for="defaultCvYoloObjectDetection">
+                      <input id="defaultCvYoloObjectDetection" type="checkbox" disabled />
+                      <span data-i18n="cvYoloObjectDetectionSoon"></span>
+                    </label>
+                    <p class="section-note" data-i18n="cvMetadataRequiresFrames"></p>
+                  </section>
+                </details>
               </details>
               <output id="queueOutput" class="output"></output>
               <ul id="queueList" class="queue-list"></ul>

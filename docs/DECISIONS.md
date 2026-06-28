@@ -13,3 +13,7 @@ URL downloads use stable profile IDs plus an optional advanced yt-dlp format str
 ## Queue outputs are queue-owned folders
 
 New queue processing writes artifacts under `data\queues\<queue_folder>\item_xxx_<source>\` instead of scattering new queue transcripts, downloads, frames, and OCR files across `data\transcripts`, `data\downloads`, and `data\recordings`. The queue manager owns folder reservation, item skeletons, source manifests, and `queue_manifest.json`, while processors receive explicit output directories. Legacy item fields such as `transcript_path`, `json_path`, `frames_path`, `frames_index_path`, and downloaded-media paths remain populated, now pointing at queue-owned paths for new queue items.
+
+## Stage 1.2a CV starts deterministic
+
+Stage 1.2a starts with deterministic CV metadata over extracted frames, not neural object detection, YOLO, or VLM. Heavy CV/VLM backends remain future optional modules.

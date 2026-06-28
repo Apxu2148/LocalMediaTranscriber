@@ -4,7 +4,7 @@
 
 LocalMediaTranscriber is a fork of LocalAudioTranscriber.
 
-Implemented through Stage 1.1c:
+Implemented through Stage 1.2a:
 - local audio/video transcription;
 - URL audio/video transcription;
 - local/URL frame extraction;
@@ -16,13 +16,14 @@ Implemented through Stage 1.1c:
 - URL download profiles plus media/extraction benchmark diagnostics;
 - OCR backend selector/readiness catalog for Tesseract, EasyOCR, PaddleOCR, and Windows OCR;
 - EasyOCR over extracted frame folders with `frames_ocr.jsonl` and `frames_ocr.txt` artifacts;
+- deterministic CV metadata over extracted queue frames with `frames_cv.jsonl` and `frames_cv.txt` artifacts;
 - queue-owned output folders under `data\queues\<queue_folder>\item_xxx\`, with manifests and per-item `downloads`, `transcript`, `frames`, `ocr`, `cv`, `events`, and `logs` folders.
 
-PaddleOCR, Windows OCR, Tesseract OCR processing, and CV processing are still disabled / coming soon.
+PaddleOCR, Windows OCR, Tesseract OCR processing, neural object detection, YOLO, and VLM analysis are still disabled / coming soon.
 
 ## Current next task
 
-Future OCR/CV stages: use the reserved per-item `cv\` folder for CV outputs, consider additional OCR backends, and design smarter frame selection/CV/LLM/VLM work separately.
+Future OCR/CV stages: consider additional OCR backends and design smarter frame selection, object detection, YOLO, and LLM/VLM work separately from the deterministic CV metadata path.
 
 ## Constraints
 
@@ -31,5 +32,6 @@ Future OCR/CV stages: use the reserved per-item `cv\` folder for CV outputs, con
 - Do not commit automatically.
 - Do not install dependencies automatically.
 - Do not add heavy dependencies to main requirements.
+- Pillow is optional for CV metadata via `requirements-cv-metadata.txt`; do not install it automatically.
 - Do not add new BAT files.
 - All UI strings through static/i18n.js.

@@ -2,7 +2,7 @@
 
 ## Current milestone
 
-Stage 1.1c is implemented and queue outputs now use a queue-owned folder layout under `data\queues\<queue_folder>\item_xxx\`. EasyOCR can run over extracted frame folders for video and URL queue items when optional OCR dependencies are installed. URL jobs still snapshot a configurable download profile plus optional max video height, and frame extraction can optionally downscale saved JPEGs.
+Stage 1.2a is implemented and queue outputs now use a queue-owned folder layout under `data\queues\<queue_folder>\item_xxx\`. EasyOCR can run over extracted frame folders for video and URL queue items when optional OCR dependencies are installed. Lightweight CV metadata can run over already extracted queue frames and writes deterministic visual metadata under each item `cv` folder. URL jobs still snapshot a configurable download profile plus optional max video height, and frame extraction can optionally downscale saved JPEGs.
 
 ## Queue output layout
 
@@ -12,8 +12,9 @@ Stage 1.1c is implemented and queue outputs now use a queue-owned folder layout 
 - New queue transcript outputs go to `item_xxx\transcript\transcript.txt` and `transcript.json`; top-level compatibility fields (`transcript_path`, `json_path`) now point at those paths.
 - New queue frame outputs go to `item_xxx\frames\frames_index.json` and frame JPEGs. Direct/non-queue frame extraction still uses the older recordings folder behavior.
 - New queue OCR outputs go to `item_xxx\ocr\frames_ocr.jsonl` and `frames_ocr.txt`. OCR over a non-queue frame folder can still write beside the frames when no output directory is provided.
+- New queue CV metadata outputs go to `item_xxx\cv\frames_cv.jsonl` and `frames_cv.txt` when visual metadata is enabled. The processor consumes extracted frame images only and does not read the original media source.
 - URL downloads used by queue items are relocated into `item_xxx\downloads\`; retention cleanup can delete those queue-owned downloads without touching local source files.
-- The Created files UI/API uses `queueItem.outputs` and now lists queue root, queue manifest, item folder, source manifest, transcript, frame, OCR, download, events/logs/CV-reserved paths when present.
+- The Created files UI/API uses `queueItem.outputs` and now lists queue root, queue manifest, item folder, source manifest, transcript, frame, OCR, CV metadata, download, and events/logs paths when present.
 
 ## EasyOCR frame OCR
 
@@ -26,6 +27,16 @@ Stage 1.1c is implemented and queue outputs now use a queue-owned folder layout 
   - `data\queues\<queue_folder>\item_xxx_<source>\ocr\frames_ocr.txt`
 - Queue items store `ocr_result` with backend, languages, processed-frame counts, OCR time, seconds per frame, and artifact paths. `outputs` exposes `ocr_jsonl_path`, `ocr_jsonl_exists`, `ocr_txt_path`, and `ocr_txt_exists`.
 - OCR cancellation is cooperative between frames. Partial OCR artifacts may exist for frames processed before cancellation.
+
+## CV metadata over frames
+
+- `requirements-cv-metadata.txt` contains the optional Pillow dependency. Pillow is not added to the base CPU/GPU requirements files.
+- CV metadata is deterministic image processing over extracted JPEG frames, not object detection, YOLO, VLM analysis, classification, embeddings, or a model-download workflow.
+- Queue CV metadata runs after frame extraction when `processing_plan.cv.metadata_enabled` is true. It is source-type agnostic: local videos, URL media, screen recordings, merged video, and future queue items work the same once they provide `item_xxx\frames\`.
+- For each frame, `frames_cv.jsonl` records stable metrics such as frame index, timestamp, dimensions, brightness, contrast, blur score, visual hash, difference from the previous frame, near-duplicate, and scene-change flags.
+- `frames_cv.txt` contains a compact human-readable summary with frame counts, near-duplicates, scene changes, mean metrics, and top scene changes.
+- If CV metadata is enabled without extracted frames, the queue item is not failed; `cv_result.status` is marked skipped/unavailable with a clear message.
+- The default processing settings UI is now split into compact subsections: Audio / Frames is expanded by default, while URL download, OCR, and CV sections are collapsed by default. Object detection, VLM, and YOLO remain visible disabled placeholders.
 
 ## URL download profiles and diagnostics
 
@@ -55,15 +66,27 @@ Stage 1.1c is implemented and queue outputs now use a queue-owned folder layout 
 
 - `app/ocr_manager.py`: combined backend catalog, optional import checks, Windows platform check, selected-backend persistence, and EasyOCR-only processing availability.
 - `app/ocr_processor.py`: optional EasyOCR frame processor, cancellation/progress hooks, per-frame errors, benchmark fields, and JSONL/TXT artifact writing.
-- `app/main.py`: EasyOCR queue callback wiring, selected backend/check API fields, queue folder name API fields, and queue output directory handoff.
-- `app/queue_manager.py`: EasyOCR plan normalization, `ocr_processing` stage, cancellation, OCR result metadata, queue/item output folder creation, URL download relocation, queue manifests, and output artifacts.
-- `static/index.html`, `static/app.js`, `static/style.css`, `static/i18n.js`: compact selector, conditional Tesseract fields, actionable EasyOCR readiness/default/per-item controls, queue folder naming UI, Created files queue paths, OCR stage/artifact copy, and RU/EN text.
+- `app/cv_processor.py`: deterministic Pillow-backed CV metadata over extracted frames with JSONL/TXT output and graceful unavailable/skipped states.
+- `app/main.py`: EasyOCR/CV queue callback wiring, selected backend/check API fields, queue folder name API fields, and queue output directory handoff.
+- `app/queue_manager.py`: EasyOCR/CV plan normalization, `ocr_processing` and `cv_processing` stages, cancellation, OCR/CV result metadata, queue/item output folder creation, URL download relocation, queue manifests, and output artifacts.
+- `static/index.html`, `static/app.js`, `static/style.css`, `static/i18n.js`: compact selector, collapsible default-processing subsections, conditional Tesseract fields, actionable EasyOCR and CV metadata controls, queue folder naming UI, Created files queue paths, OCR/CV stage/artifact copy, and RU/EN text.
 - Focused OCR processor/manager/API/i18n/UI/queue tests and OCR documentation.
 - `app/queue_manager.py`, `app/storage_manager.py`, focused retention tests, and retention documentation for the URL cleanup bugfix.
 - `app/url_download_manager.py`, `app/url_downloader.py`, queue/main integration, compact localized settings UI, and focused URL profile/diagnostic tests.
 - `app/frame_settings_manager.py`, `app/frame_extractor.py`, `app/runtime_estimate.py`, queue/main integration, compact localized resolution controls, and focused resolution/estimate/UI tests.
 
 ## Validation
+
+Stage 1.2a CV metadata over extracted frames, passed on 2026-06-28:
+
+- `.venv\Scripts\python.exe -m compileall app`
+- `.venv\Scripts\python.exe -m unittest tests.test_cv_processor` (5 tests)
+- `.venv\Scripts\python.exe -m unittest tests.test_queue_manager` (57 tests)
+- `.venv\Scripts\python.exe -m unittest tests.test_runtime_estimate` (14 tests)
+- `.venv\Scripts\python.exe -m unittest tests.test_ocr_processor` (11 tests)
+- `.venv\Scripts\python.exe -m unittest tests.test_frame_extractor` (14 tests)
+- `.venv\Scripts\python.exe -m unittest tests.test_ui_contract tests.test_i18n tests.test_http_smoke` (44 tests)
+- Windows sandbox denied pycache/temp-file writes for some validation commands, so affected commands were rerun with shell approval.
 
 Queue output folder structure:
 

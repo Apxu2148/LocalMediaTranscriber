@@ -41,6 +41,7 @@ ACTIVE_STATUSES = {
     "transcribing",
     "extracting_frames",
     "ocr_processing",
+    "cv_processing",
 }
 STAGE_LABEL_KEYS = {
     "idle": "queueStageIdle",
@@ -56,6 +57,7 @@ STAGE_LABEL_KEYS = {
     "transcribing_audio": "queueStageTranscribingAudio",
     "extracting_frames": "queueStageExtractingFrames",
     "ocr_processing": "queueStageOcrProcessing",
+    "cv_processing": "queueStageCvProcessing",
     "cancelling_transcription": "queueStageCancellingTranscription",
     "cancelling": "queueStageCancelling",
     "completed": "queueStageCompleted",
@@ -138,6 +140,7 @@ class QueueManager:
         video_downloader: Callable[[str], dict] | None = None,
         frame_processor: Callable[[dict, threading.Event, Callable[[dict], None]], dict] | None = None,
         ocr_processor: Callable[[dict, threading.Event, Callable[[dict], None]], dict] | None = None,
+        cv_processor: Callable[[dict, threading.Event, Callable[[dict], None]], dict] | None = None,
         video_metadata_reader: Callable[[Path], dict] | None = read_video_metadata,
         retention_cleaner: Callable[[dict], dict] | None = None,
         estimate_processor: Callable[[dict], dict] | None = None,
@@ -153,6 +156,7 @@ class QueueManager:
         self.video_downloader = video_downloader
         self.frame_processor = frame_processor
         self.ocr_processor = ocr_processor
+        self.cv_processor = cv_processor
         self.video_metadata_reader = video_metadata_reader
         self.retention_cleaner = retention_cleaner
         self.estimate_processor = estimate_processor
@@ -342,6 +346,7 @@ class QueueManager:
                     "extracted_frame_count": None,
                     "frame_extraction_result": None,
                     "ocr_result": None,
+                    "cv_result": None,
                     "output_base": None,
                     "error_message": None,
                     "technical_details": None,
@@ -453,6 +458,7 @@ class QueueManager:
                         "extracted_frame_count": None,
                         "frame_extraction_result": None,
                         "ocr_result": None,
+                        "cv_result": None,
                         "error_message": None,
                         "technical_details": None,
                         "partial_transcript": False,
@@ -597,7 +603,7 @@ class QueueManager:
 
             if item.get("cancel_requested"):
                 return self._status_snapshot_locked()
-            if item["status"] not in {"downloading", "extracting_audio", "transcribing", "extracting_frames", "ocr_processing"}:
+            if item["status"] not in {"downloading", "extracting_audio", "transcribing", "extracting_frames", "ocr_processing", "cv_processing"}:
                 raise RuntimeError("Эту задачу нельзя отменить на текущем этапе.")
 
             cancel_event = self._cancel_events.get(index)
@@ -606,7 +612,7 @@ class QueueManager:
             item["cancel_requested"] = True
             if item["status"] == "downloading":
                 self._set_item_stage_locked(item, "cancelling_download", status="downloading")
-            elif item["status"] in {"extracting_frames", "ocr_processing"}:
+            elif item["status"] in {"extracting_frames", "ocr_processing", "cv_processing"}:
                 self._set_item_stage_locked(item, "cancelling", status=item["status"])
             else:
                 self._set_item_stage_locked(item, "cancelling_transcription", status="transcribing")
@@ -654,6 +660,7 @@ class QueueManager:
             "extracted_frame_count": None,
             "frame_extraction_result": None,
             "ocr_result": None,
+            "cv_result": None,
             "output_base": None,
             "error_message": None,
             "technical_details": None,
@@ -782,7 +789,6 @@ class QueueManager:
             for key in normalized:
                 if key in operations:
                     normalized[key] = bool(operations[key])
-        normalized["cv"] = False
         if media_kind not in {"video", "url"}:
             normalized["extract_frames"] = False
             normalized["ocr"] = False
@@ -850,6 +856,15 @@ class QueueManager:
         ocr_status = "pending" if ocr_enabled else "disabled"
         if bool(ocr_requested) and supports_frames and not ocr_enabled:
             ocr_status = "unavailable"
+        cv_requested = (
+            operation_defaults.get("cv", False)
+            if operations is not None
+            else cv_plan.get("metadata_enabled", cv_plan.get("enabled", operation_defaults.get("cv", False)))
+        )
+        cv_metadata_enabled = bool(cv_requested) and supports_frames
+        cv_status = "pending" if cv_metadata_enabled else "disabled"
+        if bool(cv_requested) and not supports_frames:
+            cv_status = "unavailable"
 
         return {
             "audio": {
@@ -876,9 +891,13 @@ class QueueManager:
                 "engine_available": ocr_engine_available,
             },
             "cv": {
-                "enabled": False,
-                "engine": str(cv_plan.get("engine") or "basic_opencv"),
-                "status": "coming_soon",
+                "enabled": cv_metadata_enabled,
+                "metadata_enabled": cv_metadata_enabled,
+                "object_detection_enabled": False,
+                "vlm_enabled": False,
+                "yolo_enabled": False,
+                "engine": str(cv_plan.get("engine") or "metadata"),
+                "status": cv_status,
             },
         }
 
@@ -897,7 +916,7 @@ class QueueManager:
                 "transcribe_audio": plan["audio"]["enabled"],
                 "extract_frames": plan["frames"]["enabled"],
                 "ocr": plan["ocr"]["enabled"],
-                "cv": False,
+                "cv": plan["cv"]["metadata_enabled"],
             },
             media_kind,
         )
@@ -979,9 +998,10 @@ class QueueManager:
                 continue
             media_kind = item.get("media_kind") or self._media_kind_for(item.get("source_path") or item["source_filename"])
             operations = item.get("operations") or self._default_operations(media_kind)
-            if item.get("source_type") == "url" and not (operations.get("transcribe_audio") or operations.get("extract_frames")):
+            has_enabled_operation = operations.get("transcribe_audio") or operations.get("extract_frames") or operations.get("cv")
+            if item.get("source_type") == "url" and not has_enabled_operation:
                 raise RuntimeError("Выберите хотя бы одну операцию для этой ссылки.")
-            if media_kind == "video" and not (operations.get("transcribe_audio") or operations.get("extract_frames")):
+            if media_kind == "video" and not has_enabled_operation:
                 raise RuntimeError("Выберите хотя бы одну операцию для этого видео.")
 
     @staticmethod
@@ -1037,9 +1057,9 @@ class QueueManager:
             item["stage_progress"] = {"mode": "indeterminate"}
         elif stage in {"preparing_source", "transcribing_audio", "cancelling_transcription", "cancelling"}:
             item["stage_progress"] = {"mode": "indeterminate"}
-        elif stage in {"extracting_frames", "ocr_processing"} and previous_stage != stage:
+        elif stage in {"extracting_frames", "ocr_processing", "cv_processing"} and previous_stage != stage:
             estimated = (item.get("frame_extraction") or {}).get("estimated_frame_count")
-            if stage == "ocr_processing":
+            if stage in {"ocr_processing", "cv_processing"}:
                 estimated = item.get("extracted_frame_count") or estimated
             item["stage_progress"] = {
                 "mode": "determinate" if estimated else "indeterminate",
@@ -1097,6 +1117,9 @@ class QueueManager:
         ocr_result = item.get("ocr_result") or {}
         ocr_jsonl_path = self._absolute_artifact_path(ocr_result.get("jsonl_path"))
         ocr_txt_path = self._absolute_artifact_path(ocr_result.get("txt_path"))
+        cv_result = item.get("cv_result") or {}
+        cv_jsonl_path = self._absolute_artifact_path(cv_result.get("jsonl_path"))
+        cv_txt_path = self._absolute_artifact_path(cv_result.get("txt_path"))
         downloaded_media_path = self._absolute_artifact_path(
             item.get("downloaded_video_path") or item.get("downloaded_media_path") or item.get("downloaded_audio_path")
         )
@@ -1142,6 +1165,10 @@ class QueueManager:
             "ocr_jsonl_exists": self._path_exists(ocr_jsonl_path),
             "ocr_txt_path": ocr_txt_path,
             "ocr_txt_exists": self._path_exists(ocr_txt_path),
+            "cv_jsonl_path": cv_jsonl_path,
+            "cv_jsonl_exists": self._path_exists(cv_jsonl_path),
+            "cv_txt_path": cv_txt_path,
+            "cv_txt_exists": self._path_exists(cv_txt_path),
             "events_dir": events_dir,
             "events_dir_exists": self._path_exists(events_dir),
             "logs_dir": logs_dir,
@@ -1228,6 +1255,31 @@ class QueueManager:
                     "frames_processed": completed,
                     "frames_total": total_units,
                     "frames_with_text": int(progress.get("frames_with_text") or 0),
+                }
+                item["stage_progress"] = {
+                    "mode": "determinate" if total_units else "indeterminate",
+                    "percent": round(percent, 1) if percent is not None else None,
+                    "completed_units": completed,
+                    "total_units": total_units,
+                }
+                self._persist_locked()
+
+        return update
+
+    def _cv_progress_callback(self, index: int) -> Callable[[dict], None]:
+        def update(progress: dict) -> None:
+            with self._lock:
+                item = next((entry for entry in self._items if entry["index"] == index), None)
+                if item is None:
+                    return
+                completed = int(progress.get("frames_analyzed") or 0)
+                total = item.get("extracted_frame_count")
+                total_units = int(total) if total else None
+                percent = min(100.0, completed * 100.0 / total_units) if total_units else None
+                item["cv_result"] = {
+                    **(item.get("cv_result") or {}),
+                    "status": progress.get("status") or "running",
+                    "frames_analyzed": completed,
                 }
                 item["stage_progress"] = {
                     "mode": "determinate" if total_units else "indeterminate",
@@ -1648,6 +1700,74 @@ class QueueManager:
                             self._refresh_outputs_locked(item)
                             self._persist_locked()
                         task_failed = True
+
+                cv_result: dict = {}
+                if operations.get("cv") and not task_cancelled and not task_failed:
+                    with self._lock:
+                        self._set_item_stage_locked(item, "cv_processing", status="cv_processing")
+                        item["cancel_requested"] = False
+                        plan = item.get("processing_plan") or {}
+                        if isinstance(plan.get("cv"), dict):
+                            plan["cv"]["status"] = "running"
+                        self._persist_locked()
+                        item_snapshot = copy.deepcopy(item)
+                        cancel_event = threading.Event()
+                        self._cancel_events[item["index"]] = cancel_event
+                    try:
+                        if self.cv_processor is None:
+                            cv_result = {
+                                "status": "unavailable",
+                                "frames_analyzed": 0,
+                                "jsonl_path": None,
+                                "txt_path": None,
+                                "error_message": "CV metadata processor is not configured.",
+                            }
+                        else:
+                            cv_result = self.cv_processor(
+                                item_snapshot,
+                                cancel_event,
+                                self._cv_progress_callback(item["index"]),
+                            )
+                    except Exception as exc:
+                        cv_result = {
+                            "status": "failed",
+                            "frames_analyzed": 0,
+                            "jsonl_path": None,
+                            "txt_path": None,
+                            "error_message": str(exc),
+                        }
+                        logger.exception("Queue CV metadata failed: job_id=%s index=%s", self._job_id, item["index"])
+                    finally:
+                        with self._lock:
+                            self._cancel_events.pop(item["index"], None)
+
+                    with self._lock:
+                        item["cv_result"] = cv_result
+                        plan = item.get("processing_plan") or {}
+                        if isinstance(plan.get("cv"), dict):
+                            plan["cv"]["status"] = cv_result.get("status") or "completed"
+                        self._refresh_outputs_locked(item)
+                        self._persist_locked()
+
+                    if cv_result.get("status") == "cancelled":
+                        with self._lock:
+                            item.update(
+                                {
+                                    "status": "cancelled",
+                                    "error_message": None,
+                                    "technical_details": None,
+                                }
+                            )
+                            self._set_item_stage_locked(item, "cancelled", status="cancelled")
+                            self._refresh_outputs_locked(item)
+                            self._persist_locked()
+                            logger.info(
+                                "Queue CV metadata cancelled: job_id=%s index=%s frames=%s",
+                                self._job_id,
+                                item["index"],
+                                cv_result.get("frames_analyzed"),
+                            )
+                        task_cancelled = True
 
                 if not task_cancelled and not task_failed:
                     with self._lock:

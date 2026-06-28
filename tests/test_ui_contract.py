@@ -266,13 +266,25 @@ class UiContractTests(unittest.TestCase):
         self.assertIn('<details id="defaultProcessingSettings" class="default-processing-settings settings-collapsible" aria-labelledby="defaultProcessingSettingsTitle" open>', html)
         self.assertIn('<summary class="default-processing-heading settings-collapsible-summary">', html)
         default_settings_html = html[
-            html.index('id="defaultProcessingSettings"'):html.index('id="ocrSettingsPanel"')
+            html.index('id="defaultProcessingSettings"'):html.index('id="queueOutput"')
         ]
+        self.assertIn('<details id="defaultAudioFramesSettings" class="default-settings-subsection settings-collapsible" open>', html)
+        self.assertIn('<details id="defaultUrlDownloadSettings" class="default-settings-subsection settings-collapsible">', html)
+        self.assertIn('<details id="defaultOcrSettings" class="default-settings-subsection settings-collapsible">', html)
+        self.assertIn('<details id="defaultCvSettings" class="default-settings-subsection settings-collapsible">', html)
         for element_id in (
             "defaultProcessingSettings",
+            "defaultAudioFramesSettings",
+            "defaultUrlDownloadSettings",
+            "defaultOcrSettings",
+            "defaultCvSettings",
             "defaultAudioEnabled",
             "defaultFramesEnabled",
             "defaultOcrEnabled",
+            "defaultCvMetadataEnabled",
+            "defaultCvObjectDetection",
+            "defaultCvVlmAnalysis",
+            "defaultCvYoloObjectDetection",
             "defaultFrameRateSelect",
             "defaultJpegQualitySelect",
             "defaultFrameMaxSizeSelect",
@@ -280,6 +292,7 @@ class UiContractTests(unittest.TestCase):
             self.assertIn(f'id="{element_id}"', html)
         for key in (
             "defaultProcessingSettingsTitle",
+            "audioFramesSettingsTitle",
             "appliesToNewQueueItems",
             "itemSettingsOverrideDefaults",
             "itemProcessingSettings",
@@ -288,6 +301,12 @@ class UiContractTests(unittest.TestCase):
             "processingPlanFrames",
             "processingPlanOcr",
             "processingPlanCv",
+            "cvSettingsTitle",
+            "visualMetadata",
+            "cvObjectDetectionSoon",
+            "cvVlmAnalysisSoon",
+            "cvYoloObjectDetectionSoon",
+            "cvMetadataRequiresFrames",
             "disabled",
             "comingSoon",
         ):
@@ -295,7 +314,7 @@ class UiContractTests(unittest.TestCase):
         self.assertNotIn("placeholder-fieldset", default_settings_html)
         self.assertIn('id="defaultOcrEnabled"', default_settings_html)
         self.assertIn('data-i18n="ocr"', default_settings_html)
-        self.assertNotIn('data-i18n="computerVision"', default_settings_html)
+        self.assertIn('data-i18n="cvSettingsTitle"', default_settings_html)
         self.assertIn("defaultProcessingPlanSnapshot", app_js)
         self.assertIn("processingPlanForQueueItem", app_js)
         self.assertIn("processing_plan", app_js)
@@ -306,6 +325,7 @@ class UiContractTests(unittest.TestCase):
         self.assertIn(".settings-collapsible-summary::before", css := (STATIC_DIR / "style.css").read_text(encoding="utf-8"))
         self.assertIn('.queue-options-collapsible[open] > .settings-collapsible-summary::before', css)
         self.assertIn("defaultOcrEnabled.checked && !defaultOcrEnabled.disabled", app_js)
+        self.assertIn("defaultCvMetadataEnabled.checked && !defaultCvMetadataEnabled.disabled", app_js)
         self.assertIn("const normalizedFramesEnabled = Boolean(framesEnabled) || normalizedOcrEnabled;", app_js)
         self.assertIn("input.disabled = true", app_js)
         self.assertNotIn("Tesseract OCR (coming soon)", app_js)
@@ -324,7 +344,8 @@ class UiContractTests(unittest.TestCase):
         self.assertIn('data-i18n="ocrNextStage"', html)
         self.assertIn("function createOcrPlanSettings(queueItem, disabled)", app_js)
         self.assertNotIn('createComingSoonOption("ocr")', app_js)
-        self.assertIn('createComingSoonOption("cv")', app_js)
+        self.assertIn("function createCvPlanSettings(queueItem, disabled)", app_js)
+        self.assertNotIn('createComingSoonOption("cv")', app_js)
         self.assertIn("function ocrBackendOptions()", app_js)
         self.assertIn('return ["auto", "easyocr", "tesseract", "paddleocr", "windows_ocr"]', app_js)
         self.assertIn('backendText.textContent = t("ocrBackendLabel")', app_js)
@@ -339,12 +360,16 @@ class UiContractTests(unittest.TestCase):
         self.assertIn('t("ocrRunsOnExtractedFrames")', app_js)
         self.assertIn("outputs.ocr_jsonl_path", app_js)
         self.assertIn("outputs.ocr_txt_path", app_js)
+        self.assertIn("outputs.cv_jsonl_path", app_js)
+        self.assertIn("outputs.cv_txt_path", app_js)
         self.assertIn("ocrTesseractFields.hidden", app_js)
         self.assertIn("selected_backend: ocrBackendSelect.value", app_js)
         self.assertIn("backend,", app_js)
         self.assertIn('languages: ocrLanguages || (backend === "tesseract" ? ["rus", "eng"] : ["ru", "en"])', app_js)
         self.assertIn("queueStageOcrProcessing", app_js)
         self.assertIn("statusOcrProcessing", app_js)
+        self.assertIn("queueStageCvProcessing", app_js)
+        self.assertIn("statusCvProcessing", app_js)
 
     def test_url_download_profile_ui_and_plan_snapshot_contract(self) -> None:
         app_js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
@@ -414,7 +439,7 @@ class UiContractTests(unittest.TestCase):
         self.assertIn("estimateOcrTotalExcluded", app_js)
         self.assertIn("noEnabledOperationsEstimate", app_js)
         self.assertIn("createOcrPlanSettings(queueItem, controlsDisabled)", app_js)
-        self.assertIn("createComingSoonOption(\"cv\")", app_js)
+        self.assertIn("createCvPlanSettings(queueItem, controlsDisabled)", app_js)
         self.assertIn(".queue-runtime-estimate", css)
         self.assertIn(".queue-estimate-button", css)
 

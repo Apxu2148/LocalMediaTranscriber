@@ -1199,6 +1199,24 @@ summary:focus-visible {
   text-align: right;
 }
 
+.default-settings-subsection {
+  display: grid;
+  gap: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.default-subsection-summary {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.default-subsection-summary h4,
+.default-subsection-summary p {
+  margin: 0;
+}
+
 .default-processing-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1228,11 +1246,10 @@ summary:focus-visible {
 }
 
 .url-download-settings-panel,
-.ocr-settings-panel {
+.ocr-settings-panel,
+.cv-settings-panel {
   display: grid;
   gap: 10px;
-  border-top: 1px solid var(--line);
-  padding-top: 10px;
 }
 
 .url-download-settings-heading,
@@ -1348,6 +1365,19 @@ summary:focus-visible {
 }
 
 .queue-ocr-settings .section-note {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.queue-cv-settings {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+  align-items: start;
+  padding: 4px 0 2px 23px;
+}
+
+.queue-cv-settings .section-note {
   grid-column: 1 / -1;
   margin: 0;
 }

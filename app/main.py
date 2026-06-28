@@ -18,6 +18,7 @@ from starlette.concurrency import run_in_threadpool
 from . import config
 from .audio_recorder import AudioRecorder
 from .benchmark_service import BenchmarkService
+from .cv_processor import analyze_frames as analyze_cv_frames
 from .frame_extractor import VideoFrameExtractor
 from .frame_settings_manager import FrameSettingsManager
 from .model_manager import WhisperModelManager
@@ -306,6 +307,20 @@ def process_queue_ocr(item: dict, cancel_event: threading.Event, progress_callba
     )
 
 
+def process_queue_cv(item: dict, cancel_event: threading.Event, progress_callback) -> dict:
+    frame_result = item.get("frame_extraction_result") or (item.get("frame_extraction") or {}).get("result") or {}
+    frames_path = frame_result.get("frames_path") or item.get("frames_path")
+    cv_output_dir = queue_item_output_dir(item, "cv_dir")
+    if cv_output_dir is None:
+        cv_output_dir = Path(frames_path).parent / "cv" if frames_path else config.QUEUES_DIR / "cv"
+    return analyze_cv_frames(
+        frames_dir=frames_path,
+        output_dir=cv_output_dir,
+        cancel_event=cancel_event,
+        progress_callback=progress_callback,
+    )
+
+
 def process_runtime_estimate_audio(sample_path: Path, model_name: str, device_preference: str) -> dict:
     result = transcriber.transcribe(sample_path, model_name, device_preference)
     return {
@@ -384,6 +399,7 @@ queue_manager = QueueManager(
     video_downloader=url_downloader.download_video,
     frame_processor=process_queue_frame_extraction,
     ocr_processor=process_queue_ocr,
+    cv_processor=process_queue_cv,
     retention_cleaner=storage_manager.apply_retention_cleanup,
     estimate_processor=runtime_estimator.estimate,
     queues_dir=config.QUEUES_DIR,
