@@ -14,10 +14,8 @@
           <div>
             <h1 data-i18n="appTitle"></h1>
             <p id="systemStatus" data-i18n="environmentChecking"></p>
-            <p id="appVersion" class="app-version" data-i18n="versionLoading"></p>
           </div>
           <div class="header-actions">
-            <span id="modelBadge" class="badge" data-i18n="modelBadgeDefault" data-i18n-title="modelBadgeTitle"></span>
             <button id="restartTourButton" type="button" data-i18n="tourButton"></button>
             <label class="language-field" for="uiLanguageSelect">
               <span data-i18n="interface"></span>
@@ -343,11 +341,6 @@
                         <span data-i18n="maxFrameSize"></span>
                         <select id="defaultFrameMaxSizeSelect"></select>
                       </label>
-                      <label class="queue-option" for="defaultOcrEnabled">
-                        <input id="defaultOcrEnabled" type="checkbox" disabled />
-                        <span data-i18n="ocr"></span>
-                      </label>
-                      <p class="section-note" data-i18n="maxFrameSizeHelp"></p>
                     </fieldset>
                   </div>
                 </details>
@@ -416,35 +409,30 @@
                     <strong id="ocrStatusBadge" class="status-pill" data-i18n="ocrChecking"></strong>
                   </summary>
                   <section id="ocrSettingsPanel" class="ocr-settings-panel" aria-labelledby="ocrSettingsTitle">
-                    <label class="queue-setting-field" for="ocrBackendSelect">
-                      <span data-i18n="ocrEngineLabel"></span>
-                      <select id="ocrBackendSelect">
-                        <option value="tesseract" data-i18n="ocrEngineTesseract"></option>
-                        <option value="easyocr" data-i18n="ocrEngineEasyOcr"></option>
-                        <option value="paddleocr" data-i18n="ocrEnginePaddleOcr"></option>
-                        <option value="windows_ocr" data-i18n="ocrEngineWindowsOcr"></option>
-                      </select>
+                    <label class="queue-option" for="defaultOcrEnabled">
+                      <input id="defaultOcrEnabled" type="checkbox" disabled />
+                      <span data-i18n="ocrEasyOcrOption"></span>
+                    </label>
+                    <label class="queue-option queue-option-disabled" for="defaultOcrTesseract">
+                      <input id="defaultOcrTesseract" type="checkbox" disabled />
+                      <span data-i18n="ocrTesseractSoon"></span>
+                    </label>
+                    <label class="queue-option queue-option-disabled" for="defaultOcrPaddle">
+                      <input id="defaultOcrPaddle" type="checkbox" disabled />
+                      <span data-i18n="ocrPaddleSoon"></span>
+                    </label>
+                    <label class="queue-option queue-option-disabled" for="defaultOcrWindows">
+                      <input id="defaultOcrWindows" type="checkbox" disabled />
+                      <span data-i18n="ocrWindowsSoon"></span>
                     </label>
                     <div class="ocr-status-grid">
                       <div><span data-i18n="ocrBackendTypeLabel"></span><strong id="ocrBackendType" data-i18n="ocrValueUnavailable"></strong></div>
-                      <div id="ocrPathStatusRow"><span data-i18n="ocrPathLabel"></span><code id="ocrDetectedPath" data-i18n="ocrValueUnavailable"></code></div>
                       <div><span data-i18n="ocrVersionLabel"></span><strong id="ocrVersion" data-i18n="ocrValueUnavailable"></strong></div>
                       <div><span data-i18n="ocrLanguagesLabel"></span><strong id="ocrLanguages" data-i18n="ocrLanguagesNone"></strong></div>
-                    </div>
-                    <div id="ocrTesseractFields">
-                      <div class="ocr-language-readiness">
-                        <span id="ocrRusStatus" data-i18n="ocrMissingRus"></span>
-                        <span id="ocrEngStatus" data-i18n="ocrMissingEng"></span>
-                      </div>
-                      <label class="queue-setting-field" for="ocrPathInput">
-                        <span data-i18n="ocrCustomPathLabel"></span>
-                        <input id="ocrPathInput" type="text" data-i18n-placeholder="ocrCustomPathPlaceholder" spellcheck="false" />
-                      </label>
                     </div>
                     <p id="ocrBackendNotes" class="section-note"></p>
                     <div class="actions ocr-settings-actions">
                       <button id="ocrCheckButton" type="button" data-i18n="ocrCheckButton"></button>
-                      <button id="ocrSaveButton" type="button" data-i18n="ocrSaveButton"></button>
                     </div>
                     <output id="ocrStatusMessage" class="output compact" data-i18n="ocrChecking"></output>
                   </section>

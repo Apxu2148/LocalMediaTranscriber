@@ -15,3 +15,4 @@
 | UI cleanup | Implemented | [Transcription result preview cleanup](codex_tasks/2026-06-27_transcription_result_preview_cleanup.md) |
 | UI cleanup | Implemented and validated | [Queue name input UX cleanup](codex_tasks/2026-06-28_queue_name_input_ux_cleanup.md) |
 | Stage 1.2a | Implemented and validated | [CV metadata over extracted frames](codex_tasks/2026-06-28_cv_metadata_over_frames.md) |
+| UI cleanup | Implemented and validated | [OCR/CV settings UI cleanup and default propagation](codex_tasks/2026-06-28_ocr_cv_settings_ui_cleanup.md) |

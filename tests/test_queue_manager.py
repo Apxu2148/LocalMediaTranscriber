@@ -88,6 +88,41 @@ class QueueManagerTests(unittest.TestCase):
             progress_callback=progress_callback,
         )
 
+    def default_visual_plan(
+        self,
+        *,
+        easyocr_checked: bool = False,
+        easyocr_available: bool = True,
+        cv_metadata_checked: bool = False,
+        frames_enabled: bool = True,
+    ) -> dict:
+        return {
+            "audio": {"enabled": False, "model": "small", "device": "cpu"},
+            "frames": {
+                "enabled": frames_enabled,
+                "rate": {"mode": "interval", "seconds": 10},
+                "jpeg_quality": 90,
+                "max_frame_size": "original",
+            },
+            "ocr": {
+                "enabled": easyocr_checked,
+                "requested_enabled": easyocr_checked,
+                "backend": "easyocr",
+                "resolved_backend": "easyocr",
+                "engine": "easyocr",
+                "languages": ["ru", "en"],
+                "engine_available": easyocr_available,
+            },
+            "cv": {
+                "enabled": cv_metadata_checked,
+                "metadata_enabled": cv_metadata_checked,
+                "object_detection_enabled": False,
+                "vlm_enabled": False,
+                "yolo_enabled": False,
+                "engine": "metadata",
+            },
+        }
+
     def track_job(self, status: dict) -> dict:
         return status
 
@@ -1816,6 +1851,87 @@ class QueueManagerTests(unittest.TestCase):
         self.assertEqual({"mode": "interval", "seconds": 10}, item["frame_extraction"]["rate"])
         self.assertEqual(90, item["frame_extraction"]["jpeg_quality"])
         self.assertEqual(4, item["frame_extraction"]["estimated_frame_count"])
+
+    def test_new_video_item_inherits_default_easyocr_and_cv_metadata_settings(self) -> None:
+        manager = self.make_manager(
+            processor=lambda _item, _model, _device: {},
+            video_metadata_reader=lambda _path: {"duration_sec": 20, "fps": 30, "width": 100, "height": 50},
+        )
+        queue_file = self.make_file("defaults.mp4")
+        status = self.track_job(manager.add_files([
+            QueueFile(
+                source_path=queue_file.source_path,
+                source_filename=queue_file.source_filename,
+                processing_plan=self.default_visual_plan(easyocr_checked=True, cv_metadata_checked=True),
+            )
+        ]))
+        item = status["items"][0]
+
+        self.assertTrue(item["operations"]["ocr"])
+        self.assertTrue(item["operations"]["cv"])
+        self.assertTrue(item["operations"]["extract_frames"])
+        self.assertTrue(item["processing_plan"]["ocr"]["enabled"])
+        self.assertTrue(item["processing_plan"]["ocr"]["requested_enabled"])
+        self.assertEqual("easyocr", item["processing_plan"]["ocr"]["backend"])
+        self.assertTrue(item["processing_plan"]["cv"]["metadata_enabled"])
+
+    def test_new_url_item_inherits_default_easyocr_and_cv_metadata_settings(self) -> None:
+        manager = self.make_manager(processor=lambda _item, _model, _device: {})
+        status = self.track_job(manager.add_urls([
+            QueueUrl(
+                "https://example.test/defaults.mp4",
+                processing_plan=self.default_visual_plan(easyocr_checked=True, cv_metadata_checked=True),
+            )
+        ]))
+        item = status["items"][0]
+
+        self.assertTrue(item["operations"]["ocr"])
+        self.assertTrue(item["operations"]["cv"])
+        self.assertTrue(item["operations"]["extract_frames"])
+        self.assertTrue(item["processing_plan"]["ocr"]["enabled"])
+        self.assertTrue(item["processing_plan"]["cv"]["metadata_enabled"])
+
+    def test_new_item_does_not_enable_ocr_when_easyocr_is_unavailable(self) -> None:
+        manager = self.make_manager(
+            processor=lambda _item, _model, _device: {},
+            video_metadata_reader=lambda _path: {"duration_sec": 20, "fps": 30, "width": 100, "height": 50},
+        )
+        queue_file = self.make_file("ocr_unavailable.mp4")
+        status = self.track_job(manager.add_files([
+            QueueFile(
+                source_path=queue_file.source_path,
+                source_filename=queue_file.source_filename,
+                processing_plan=self.default_visual_plan(easyocr_checked=True, easyocr_available=False),
+            )
+        ]))
+        item = status["items"][0]
+
+        self.assertFalse(item["operations"]["ocr"])
+        self.assertTrue(item["processing_plan"]["ocr"]["requested_enabled"])
+        self.assertFalse(item["processing_plan"]["ocr"]["enabled"])
+        self.assertEqual("unavailable", item["processing_plan"]["ocr"]["status"])
+
+    def test_new_item_preserves_unchecked_ocr_and_cv_defaults(self) -> None:
+        manager = self.make_manager(
+            processor=lambda _item, _model, _device: {},
+            video_metadata_reader=lambda _path: {"duration_sec": 20, "fps": 30, "width": 100, "height": 50},
+        )
+        queue_file = self.make_file("defaults_off.mp4")
+        status = self.track_job(manager.add_files([
+            QueueFile(
+                source_path=queue_file.source_path,
+                source_filename=queue_file.source_filename,
+                processing_plan=self.default_visual_plan(easyocr_checked=False, cv_metadata_checked=False),
+            )
+        ]))
+        item = status["items"][0]
+
+        self.assertFalse(item["operations"]["ocr"])
+        self.assertFalse(item["operations"]["cv"])
+        self.assertFalse(item["processing_plan"]["ocr"]["requested_enabled"])
+        self.assertFalse(item["processing_plan"]["ocr"]["enabled"])
+        self.assertEqual("disabled", item["processing_plan"]["ocr"]["status"])
+        self.assertFalse(item["processing_plan"]["cv"]["metadata_enabled"])
 
     def test_video_item_accepts_jpeg_quality_100_without_changing_default(self) -> None:
         manager = self.make_manager(

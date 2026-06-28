@@ -180,6 +180,8 @@ Settings schema:
 
 Readiness checks must stay lightweight. They must not construct `easyocr.Reader`, invoke PaddleOCR models, or call Windows OCR APIs beyond import checks.
 
+The processing UI intentionally uses checkbox semantics for OCR/CV instead of single-select semantics. Today the EasyOCR checkbox maps to the existing compatibility fields (`ocr.enabled`, `ocr.requested_enabled`, `ocr.backend=easyocr`, `ocr.engine=easyocr`) and the CV Visual metadata checkbox maps to `cv.metadata_enabled`. Future multi-backend OCR/CV work should extend this model without adding a new global selector and should write backend/module-specific output folders to avoid overwrites.
+
 ### `app/ocr_processor.py`
 
 Executable EasyOCR processor for extracted frame folders.
@@ -443,29 +445,29 @@ Key behavior:
 - Processes items sequentially in one worker thread.
 - Supports stop-after-current, clear, retry failed items, pending-item removal, running transcription/frame-extraction/OCR cancellation, status snapshots, elapsed time, ETA, and persistent job snapshots.
 - Treat the queue as a media processing queue, not only a transcription queue.
-- Current executable operations are `transcribe_audio`, `extract_frames`, and EasyOCR frame OCR when the selected backend is available.
+- Current executable operations are `transcribe_audio`, `extract_frames`, EasyOCR frame OCR when the EasyOCR checkbox is enabled and available, and deterministic CV Visual metadata.
 - URL items are created as media processing items. By default they transcribe audio, keep frame extraction off, and carry default frame extraction settings for later opt-in when no frontend processing plan is supplied.
-- CV remains a visible but disabled future operation. PaddleOCR and Windows OCR are readiness-only and do not run queue OCR.
+- CV Visual metadata is executable when enabled. Object detection, YOLO, VLM analysis, PaddleOCR, Windows OCR, and Tesseract OCR processing remain visible placeholders/readiness-only entries and do not run queue work.
 - Queue item status remains the behavior switch for existing logic. Stage fields are a small UI/status model layered on top: `stage`, `stage_label_key`, and `stage_detail`.
 - Current stage IDs are `idle`, `waiting_download`, `preparing_source`, `downloading_media`, `downloading_video`, `cancelling_download`, `download_cancelled`, `download_failed`, `transcribing_audio`, `cancelling_transcription`, `extracting_frames`, `ocr_processing`, `cancelling`, `completed`, `failed`, and `cancelled`.
 - Active items expose one `stage_progress` object. `mode` is `determinate`, `indeterminate`, or `none`; determinate downloads may include percent/bytes/speed/ETA, and frame extraction/OCR may include completed/total units. Transcription stays indeterminate because the backend has no reliable segment total.
 - Future reserved stage IDs are `ocr_pending_future`, `cv_pending_future`, and `media_index_pending_future`; only `ocr_processing` indicates real OCR work in this stage.
 - Stores each item's actual processing plan in `processing_plan`. The current schema has `audio.enabled/model/device`, `frames.enabled/rate/interval_sec/jpeg_quality/max_frame_size`, `url_download.format_profile/custom_format/max_video_height/log_media_probe/log_extraction_benchmark/status`, `ocr.enabled/backend/engine/languages/status/engine_available`, and `cv.enabled/engine/status`.
-- Default processing settings are frontend state for now. The frontend sends a snapshot with each add-files/add-recordings/add-urls request, so defaults apply only to newly added items.
+- Default processing settings are frontend state for now. The frontend sends a snapshot with each add-files/add-recordings/add-urls request, so defaults apply only to newly added items. OCR/CV defaults use checkboxes to keep future multi-processor support possible.
 - Pending item edits update the item plan. Precedence is per-item `processing_plan` over defaults; legacy `operations` and `frame_extraction` are synchronized compatibility fields.
 - `POST /api/queue/estimate-item` runs one pending-item runtime estimate at a time. Queue start, item edits/removal, retry, and clear are blocked until it finishes.
 - Estimates always use the item's normalized `processing_plan`; defaults are relevant only through the legacy-plan normalization fallback.
 - The runtime Model/Device/Compute type/Speed cards have one frontend renderer. During audio transcription they use the current item's audio plan plus matching resolved transcriber values; during non-audio queue stages they show not applicable, and while idle they show idle.
 - Old queue items without `processing_plan` remain valid. The worker falls back to the queue start model/device and legacy operation/frame fields.
 - Stores per-item operation choices in `operations`: `transcribe_audio`, `extract_frames`, `ocr`, and `cv`.
-- Normalizes OCR to enabled only for video/URL items with `backend=easyocr`; enabling OCR also enables frame extraction in both `processing_plan.frames.enabled` and legacy `operations.extract_frames`.
-- Keeps CV as a no-op placeholder in the backend. Incoming CV enabled flags are normalized back to disabled with `status=coming_soon`.
+- Normalizes OCR to enabled only for video/URL items with `backend=easyocr` and `engine_available=true`; enabling OCR also enables frame extraction in both `processing_plan.frames.enabled` and legacy `operations.extract_frames`.
+- Normalizes CV Visual metadata through `processing_plan.cv.metadata_enabled`; unsupported CV modules remain disabled placeholder fields.
 - Stores per-item frame settings in `frame_extraction`: extraction rate, JPEG quality, max frame size, estimates, warning flag, and latest extraction result. `frame_extraction.max_frame_size` is a compatibility mirror of `processing_plan.frames.max_frame_size`.
 - Stores terminal output metadata in `outputs`: transcript path/existence, diagnostic JSON path/existence, frame folder path/existence, frame index path/existence, OCR JSONL/TXT path/existence, downloaded URL media path/existence/deleted marker, uploaded temp path/existence/deleted marker, and retention cleanup error markers.
 - Calls the optional `retention_cleaner` after active work stops for terminal URL items and fully successful local items. Failed/cancelled URL downloads follow the keep-download setting; failed/cancelled local items retain their inputs.
 - Uses callbacks supplied by `app/main.py` to download URLs, transcribe files, extract frames, estimate runtimes, and record errors.
 
-Future OCR/CV engines, media indexes, and RemoteBackend worker plans should extend `processing_plan` instead of adding another disconnected global selector. They must keep the compatibility fields stable until older job JSON and UI code no longer depend on them.
+Future OCR/CV engines, media indexes, and RemoteBackend worker plans should extend `processing_plan` instead of adding another disconnected global selector. They must keep the compatibility fields stable until older job JSON and UI code no longer depend on them. Multi-backend OCR/CV execution should avoid output overwrites by using backend/module-specific output folders such as `ocr\easyocr`, `ocr\tesseract`, `cv\metadata`, or `cv\yolo`.
 
 The queue intentionally processes one item at a time. This lowers CUDA memory pressure and keeps the UI progress model simple.
 
@@ -868,8 +870,8 @@ Audio files, screen videos, input event JSONL files, merged videos, and new scre
    - selected local files through `/api/queue/add-files`;
    - public URLs through `/api/queue/add-urls`.
 2. `QueueManager` creates or updates a job under `data\jobs`.
-3. Video items receive default operations: `transcribe_audio=true`, `extract_frames=false`, `ocr=false`, and `cv=false`.
-4. New items snapshot current default settings, including URL max video height and frame max size. Existing pending items keep their own plan unless edited.
+3. Video items receive normalized operations from the submitted processing plan; without a frontend snapshot, defaults remain `transcribe_audio=true`, `extract_frames=false`, `ocr=false`, and `cv=false`.
+4. New items snapshot current default settings, including EasyOCR, CV Visual metadata, URL max video height, and frame max size. Existing pending items keep their own plan unless edited.
 5. Before the queue starts, the UI can call `/api/queue/update-item` to change video operations and frame extraction settings.
 6. Before the queue starts, or while another item is running, pending items can be removed through `/api/queue/remove-item`.
 7. While the queue is idle, `/api/queue/estimate-item` can test a pending local item's enabled audio/frame operations in a temporary workspace and attach compact estimate metadata without changing the item result state.

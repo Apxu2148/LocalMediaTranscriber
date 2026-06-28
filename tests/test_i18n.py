@@ -194,12 +194,18 @@ class I18nTests(unittest.TestCase):
             "jpegQuality",
             "maxFrameSize",
             "ocrBackendLabel",
+            "ocrEasyOcrOption",
+            "ocrTesseractSoon",
+            "ocrPaddleSoon",
+            "ocrWindowsSoon",
+            "ocrEasyOcrUnavailable",
+            "ocrEasyOcrUnavailableShort",
             "maxFrameSizeOriginal",
             "maxFrameSizeWidth1920",
             "maxFrameSizeWidth1280",
             "maxFrameSizeWidth960",
             "maxFrameSizeWidth640",
-            "maxFrameSizeHelp",
+            "frameOptimizationLabel",
             "disabled",
             "comingSoon",
             "ocrEngineComingSoon",
@@ -435,6 +441,12 @@ class I18nTests(unittest.TestCase):
             "ocrEngineEasyOcr",
             "ocrEnginePaddleOcr",
             "ocrEngineWindowsOcr",
+            "ocrEasyOcrOption",
+            "ocrTesseractSoon",
+            "ocrPaddleSoon",
+            "ocrWindowsSoon",
+            "ocrEasyOcrUnavailable",
+            "ocrEasyOcrUnavailableShort",
             "ocrSelectedBackend",
             "ocrBackendTypeLabel",
             "ocrTypeExternalExecutable",
@@ -447,7 +459,6 @@ class I18nTests(unittest.TestCase):
             "ocrCustomPathLabel",
             "ocrCustomPathPlaceholder",
             "ocrCheckButton",
-            "ocrSaveButton",
             "ocrChecking",
             "ocrStatusAvailable",
             "ocrStatusNotFound",
@@ -467,7 +478,6 @@ class I18nTests(unittest.TestCase):
             "ocrWindowsOnlyNote",
             "ocrWindowsExperimentalNote",
             "ocrEnginesChecked",
-            "ocrSettingsSaved",
             "ocrNextStage",
             "ocrReadyForProcessing",
             "ocrProcessingEasyOcrOnly",
@@ -479,6 +489,14 @@ class I18nTests(unittest.TestCase):
             self.assertIn(key, ru_keys)
             self.assertIn(key, en_keys)
         self.assertEqual("OCR / text recognition", dictionary_value(i18n, "en", "ocrSettingsTitle"))
+        self.assertEqual("EasyOCR", dictionary_value(i18n, "en", "ocrEasyOcrOption"))
+        self.assertEqual("Tesseract OCR — coming soon", dictionary_value(i18n, "en", "ocrTesseractSoon"))
+        self.assertEqual("PaddleOCR — coming soon", dictionary_value(i18n, "en", "ocrPaddleSoon"))
+        self.assertEqual("Windows OCR — coming soon", dictionary_value(i18n, "en", "ocrWindowsSoon"))
+        self.assertEqual(
+            "EasyOCR is not available. Install optional dependencies to enable it.",
+            dictionary_value(i18n, "en", "ocrEasyOcrUnavailable"),
+        )
         self.assertEqual(
             "EasyOCR can process already extracted video frames when its optional dependencies are installed.",
             dictionary_value(i18n, "en", "ocrNextStage"),
@@ -528,6 +546,24 @@ class I18nTests(unittest.TestCase):
         self.assertEqual("Prefer WebM", dictionary_value(i18n, "en", "urlDownloadProfilePreferWebm"))
         self.assertEqual("Max URL video resolution", dictionary_value(i18n, "en", "urlDownloadMaxVideoHeightLabel"))
         self.assertEqual("Up to 2160p / 4K", dictionary_value(i18n, "en", "urlDownloadMaxVideoHeight2160"))
+
+    def test_ocr_cv_checkbox_copy_is_localized(self) -> None:
+        i18n = (STATIC_DIR / "i18n.js").read_text(encoding="utf-8")
+
+        expected_en = {
+            "ocrEasyOcrOption": "EasyOCR",
+            "ocrTesseractSoon": "Tesseract OCR — coming soon",
+            "ocrPaddleSoon": "PaddleOCR — coming soon",
+            "ocrWindowsSoon": "Windows OCR — coming soon",
+            "ocrEasyOcrUnavailable": "EasyOCR is not available. Install optional dependencies to enable it.",
+            "frameOptimizationLabel": "Optimize frame size for OCR/CV",
+            "visualMetadata": "Visual metadata",
+            "cvObjectDetectionSoon": "Object detection — coming soon",
+            "cvVlmAnalysisSoon": "VLM analysis — coming soon",
+            "cvYoloObjectDetectionSoon": "YOLO object detection — coming soon",
+        }
+        for key, value in expected_en.items():
+            self.assertEqual(value, dictionary_value(i18n, "en", key))
 
     def test_idle_level_messages_are_localized(self) -> None:
         i18n = (STATIC_DIR / "i18n.js").read_text(encoding="utf-8")

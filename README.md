@@ -31,7 +31,7 @@ This project is a separate fork of `LocalAudioTranscriber`. The current version 
 - Choose JPEG quality `75`, `80`, `85`, `90`, `95`, or `100` for frame extraction; `90` is the default.
 - Optionally downscale saved extracted frames to a maximum width of 1920, 1280, 960, or 640 pixels; Original preserves the previous behavior.
 - Run a 60-second runtime estimate for a pending item's enabled transcription and frame extraction operations before full processing.
-- Detect a local Tesseract OCR installation, show its version and languages, and save a custom executable path.
+- Use checkbox-style OCR/CV options in default and per-item settings. EasyOCR and CV Visual metadata are the currently functional options; the other OCR/CV options are disabled placeholders for future modules.
 - Remove pending queue items, or cancel a running frame extraction item and continue with the rest of the queue.
 - Choose Whisper models: `tiny`, `base`, `small`, `medium`, `large-v3`.
 - Manage Whisper models before transcription: check local availability, download, verify, view info, and delete selected local caches.
@@ -87,11 +87,11 @@ pip install -r requirements-gpu.txt
 
 `requirements-gpu.txt` contains the CUDA/NVIDIA packages needed for GPU acceleration plus the screen-recording runtime packages mirrored from the CPU file. Keep both requirements files updated when dependencies change.
 
-## OCR Engine Setup
+## OCR / CV Setup
 
-The OCR panel near the default queue settings shows the selected backend, detected availability, version, installed language packs where applicable, and actionable status for frame OCR.
+The OCR and CV panels near the default queue settings use checkbox-style options so future builds can enable more than one processor per item. In the current build, EasyOCR is the functional OCR option and CV Visual metadata is the functional CV option. Tesseract OCR, PaddleOCR, Windows OCR, object detection, VLM analysis, and YOLO object detection are visible disabled placeholders.
 
-Tesseract is not bundled, downloaded, or installed by this app. Install Tesseract OCR for Windows separately, then either make `tesseract` available in `PATH`, use a standard `C:\Program Files\Tesseract-OCR` installation, or enter the executable path in the UI. The Russian and English language packs (`rus` and `eng`) are recommended.
+Tesseract is not bundled, downloaded, or installed by this app. It is visible only as a disabled future placeholder in the current processing UI.
 
 EasyOCR is optional and is the first executable frame-OCR backend. Install it manually only if you want OCR over extracted frames:
 
@@ -101,7 +101,7 @@ EasyOCR is optional and is the first executable frame-OCR backend. Install it ma
 
 This may also install PyTorch dependencies selected by EasyOCR. The app does not install or download OCR dependencies automatically.
 
-This stage does not run OCR on extracted frames and does not create OCR output files. Actual frame OCR is reserved for Stage 1.1b; the OCR processing option remains disabled and marked as coming soon.
+EasyOCR can process extracted frames when the optional dependencies are installed. The app still does not install or download OCR/CV dependencies automatically.
 
 ## Run
 
@@ -153,7 +153,7 @@ If Git reports `.git/index.lock` before commit, run `cleanup-dev.bat`.
 
 ## Stored Files
 
-The queue is now a media processing queue. Its main action is "Start processing". Video files and supported video URLs can currently be transcribed, split into frames, or both. OCR settings can check and select a backend, but OCR processing and CV/VLM options remain disabled coming-soon operations.
+The queue is now a media processing queue. Its main action is "Start processing". Video files and supported video URLs can currently be transcribed, split into frames, processed with EasyOCR frame OCR when available, and analyzed with deterministic CV Visual metadata.
 
 Queue usability:
 
@@ -168,7 +168,7 @@ Queue usability:
 - Estimate samples use temporary clipped audio and temporary JPEGs. They do not create normal transcripts, frame folders, `frames_index.json`, or output artifacts, and the temporary workspace is removed after success or failure.
 - Pending URL items can be estimated only when a local downloaded media file is already available. Stage 0.96 does not download a URL solely for estimation.
 - After an item completes, fails, or is cancelled, its card shows a "Created files" section with known artifacts: transcript TXT, diagnostic JSON, frame folder, `frames_index.json`, EasyOCR frame OCR JSONL/TXT outputs, downloaded URL media, and uploaded temporary file when available. Cancelled transcription outputs are labelled as partial transcripts. If retention removed a file, the item says so instead of showing it as still present.
-- EasyOCR can run over extracted video/URL frames when the optional OCR requirements are installed and EasyOCR is the selected backend. PaddleOCR, Windows OCR, CV, and media-index entries remain disabled/coming-soon. Runtime estimates do not include a separate OCR estimate yet; actual OCR benchmark metrics are recorded after processing.
+- EasyOCR can run over extracted video/URL frames when the optional OCR requirements are installed and the EasyOCR checkbox is enabled. CV Visual metadata can run over extracted frames. PaddleOCR, Windows OCR, object detection, VLM analysis, YOLO, and media-index entries remain disabled placeholders. Runtime estimates do not include a separate OCR/CV estimate yet; actual OCR benchmark metrics are recorded after processing.
 
 URL download profiles:
 
@@ -198,7 +198,7 @@ OCR backend readiness:
 - **PaddleOCR** is an optional experimental Python backend. This stage only checks whether its module is importable.
 - **Windows OCR** is an experimental Windows-only system backend. The app performs a lightweight WinRT import check on Windows.
 - EasyOCR, PaddleOCR, and WinRT dependencies are not installed automatically and are not part of the main requirements files. EasyOCR's optional requirement is isolated in `requirements-ocr-easyocr.txt`.
-- When EasyOCR is selected and importable, OCR can be enabled for video and URL queue items. Enabling OCR also enables frame extraction because OCR runs over the extracted frame folder.
+- When EasyOCR is checked and importable, OCR can be enabled for video and URL queue items. Enabling OCR also enables frame extraction because OCR runs over the extracted frame folder.
 - EasyOCR outputs are written beside `frames_index.json` as `frames_ocr.jsonl` and `frames_ocr.txt`. The JSONL contains one record per processed frame; the TXT contains recognized text and frame-level OCR errors.
 
 Recordings:
@@ -314,6 +314,6 @@ This is a temporary blue-violet SVG icon. To replace it later, keep the same fil
 
 ## Notes
 
-For `.mp3`, `.m4a`, `.mp4`, `.webm`, `.mkv`, `.avi`, and `.mov`, make sure `ffmpeg` is installed and available in `PATH`. FFmpeg is also required for the "Merge video with audio" workflow. Video queue items can extract audio for transcription and/or save JPEG frames. OCR backend selection is readiness-only; OCR and CV/VLM processing remain disabled coming-soon options.
+For `.mp3`, `.m4a`, `.mp4`, `.webm`, `.mkv`, `.avi`, and `.mov`, make sure `ffmpeg` is installed and available in `PATH`. FFmpeg is also required for the "Merge video with audio" workflow. Video queue items can extract audio for transcription, save JPEG frames, run EasyOCR when available, and run CV Visual metadata. Future OCR/CV processors remain disabled placeholders.
 
 Use the app only with audio, video, and files you are allowed to record, download, process, and transcribe.

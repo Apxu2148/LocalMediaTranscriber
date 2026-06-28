@@ -65,7 +65,6 @@ const transcriptPathInput = document.querySelector("#transcriptPathInput");
 const transcriptPreviewOutput = document.querySelector("#transcriptPreviewOutput");
 const transcriptText = document.querySelector("#transcriptText");
 const systemStatus = document.querySelector("#systemStatus");
-const modelBadge = document.querySelector("#modelBadge");
 const runtimeDetails = document.querySelector("#runtimeDetails");
 const runtimeModel = document.querySelector("#runtimeModel");
 const runtimeDevice = document.querySelector("#runtimeDevice");
@@ -86,7 +85,6 @@ const clearDownloadsButton = document.querySelector("#clearDownloadsButton");
 const clearUploadsButton = document.querySelector("#clearUploadsButton");
 const storageCleanupOutput = document.querySelector("#storageCleanupOutput");
 const toastRegion = document.querySelector("#toastRegion");
-const appVersion = document.querySelector("#appVersion");
 const recordingTimer = document.querySelector("#recordingTimer");
 const queueAddForm = document.querySelector("#queueAddForm");
 const queueFileInput = document.querySelector("#queueFileInput");
@@ -130,19 +128,11 @@ const urlDownloadLogMediaProbe = document.querySelector("#urlDownloadLogMediaPro
 const urlDownloadLogExtractionBenchmark = document.querySelector("#urlDownloadLogExtractionBenchmark");
 const urlDownloadSaveButton = document.querySelector("#urlDownloadSaveButton");
 const urlDownloadSettingsOutput = document.querySelector("#urlDownloadSettingsOutput");
-const ocrBackendSelect = document.querySelector("#ocrBackendSelect");
 const ocrStatusBadge = document.querySelector("#ocrStatusBadge");
 const ocrBackendType = document.querySelector("#ocrBackendType");
-const ocrPathStatusRow = document.querySelector("#ocrPathStatusRow");
-const ocrDetectedPath = document.querySelector("#ocrDetectedPath");
 const ocrVersion = document.querySelector("#ocrVersion");
 const ocrLanguages = document.querySelector("#ocrLanguages");
-const ocrRusStatus = document.querySelector("#ocrRusStatus");
-const ocrEngStatus = document.querySelector("#ocrEngStatus");
-const ocrTesseractFields = document.querySelector("#ocrTesseractFields");
-const ocrPathInput = document.querySelector("#ocrPathInput");
 const ocrCheckButton = document.querySelector("#ocrCheckButton");
-const ocrSaveButton = document.querySelector("#ocrSaveButton");
 const ocrStatusMessage = document.querySelector("#ocrStatusMessage");
 const ocrBackendNotes = document.querySelector("#ocrBackendNotes");
 const diskFree = document.querySelector("#diskFree");
@@ -1004,14 +994,10 @@ async function refreshStatus() {
   try {
     const status = await requestJson("/api/status");
     const transcription = status.transcription || {};
-    const runtime = transcription.runtime_device || transcription.configured_device || "auto";
-    const compute = transcription.runtime_compute_type || transcription.configured_compute_type || "auto";
     const model = transcription.active_model || transcription.loaded_model || selectedModel() || status.whisper_model;
     latestTranscriptionStatus = transcription;
     transcriptionPhase = transcription.phase || null;
     activeRuntimeModel = model;
-
-    modelBadge.textContent = `Whisper ${model} · ${runtime}/${compute}`;
 
     if (!whisperModelSelect.dataset.initialized && status.whisper_models?.includes(status.whisper_model)) {
       whisperModelSelect.value = status.whisper_model;
@@ -1022,7 +1008,6 @@ async function refreshStatus() {
     }
     deviceAvailabilityOutput.textContent = transcription.cuda_available ? t("cpuGpu") : t("cpuOnly");
 
-    appVersion.textContent = `${t("version")}: ${status.app_version || "?"}`;
     syncRecordingTimer(status);
     isTranscribing = localTranscriptionActive || Boolean(transcription.in_progress);
     renderRuntimeDetails();
@@ -1409,6 +1394,7 @@ async function addRecordingsToQueue(recordings) {
     showAddStatus("queueFileAlreadyQueued", "warning");
     return;
   }
+  const processingPlan = defaultProcessingPlanSnapshot();
   isAddingRecording = true;
   rememberPendingAdd(keys);
   showAddStatus("queueStageAddingFile");
@@ -1422,7 +1408,7 @@ async function addRecordingsToQueue(recordings) {
           file_path: item.audio_file,
           source_type: item.source_type,
         })),
-        processing_plan: defaultProcessingPlanSnapshot(),
+        processing_plan: processingPlan,
         queue_folder_name: queueFolderNameValue(),
       }),
     });
@@ -1455,6 +1441,7 @@ async function addLocalFilesToQueue(files, input, pickerText, multiple = false) 
     showAddStatus("queueFileAlreadyQueued", "warning");
     return;
   }
+  const processingPlan = defaultProcessingPlanSnapshot();
   isAddingFile = true;
   rememberPendingAdd(keys);
   showAddStatus(addingFileLabelKey(files));
@@ -1463,7 +1450,7 @@ async function addLocalFilesToQueue(files, input, pickerText, multiple = false) 
   for (const file of files) {
     formData.append("files", file);
   }
-  formData.append("processing_plan", JSON.stringify(defaultProcessingPlanSnapshot()));
+  formData.append("processing_plan", JSON.stringify(processingPlan));
   formData.append("queue_folder_name", queueFolderNameValue());
   try {
     renderQueue(await requestJson("/api/queue/add-files", { method: "POST", body: formData }));
@@ -1734,16 +1721,6 @@ async function saveUrlDownloadSettings() {
   }
 }
 
-function ocrErrorMessageKey(errorCode) {
-  return {
-    invalid_configured_path: "ocrErrorInvalidPath",
-    version_timeout: "ocrErrorVersionTimeout",
-    version_check_failed: "ocrErrorVersionCheck",
-    languages_timeout: "ocrErrorLanguagesTimeout",
-    languages_check_failed: "ocrErrorLanguagesCheck",
-  }[errorCode] || "ocrErrorCheckFailed";
-}
-
 function ocrBackendTypeKey(type) {
   return {
     external_executable: "ocrTypeExternalExecutable",
@@ -1792,58 +1769,37 @@ function ocrBackendNoteKeys(backend) {
   return keys;
 }
 
-function selectedOcrBackendStatus() {
-  const backend = ocrBackendSelect.value || latestOcrStatus?.selected_backend || "tesseract";
-  return latestOcrStatus?.backends?.[backend] || {};
+function easyOcrStatus(status = latestOcrStatus) {
+  return status?.backends?.easyocr || {};
 }
 
-function easyOcrActionable() {
-  const backend = ocrBackendSelect.value || latestOcrStatus?.selected_backend || "tesseract";
-  const backendStatus = latestOcrStatus?.backends?.[backend] || {};
-  return backend === "easyocr" && Boolean(backendStatus.available);
+function easyOcrActionable(status = latestOcrStatus) {
+  return Boolean(easyOcrStatus(status).available);
 }
 
-function renderOcrStatus(status, { syncConfiguredPath = false, syncSelectedBackend = false } = {}) {
+function renderOcrStatus(status) {
   latestOcrStatus = status;
-  if (syncSelectedBackend) {
-    ocrBackendSelect.value = status.selected_backend || "tesseract";
-  }
-  const selectedBackend = ocrBackendSelect.value || status.selected_backend || "tesseract";
-  const backend = status.backends?.[selectedBackend] || status.backends?.tesseract || {};
-  const tesseract = status.backends?.tesseract || {};
-  if (syncConfiguredPath) {
-    ocrPathInput.value = tesseract.configured_path || "";
-  }
+  const backend = easyOcrStatus(status);
   const available = Boolean(backend.available);
   const warningStatuses = new Set(["not_found", "not_installed", "unsupported_platform"]);
   ocrStatusBadge.textContent = t(ocrBackendStatusKey(backend.status));
   ocrStatusBadge.dataset.status = available ? "success" : warningStatuses.has(backend.status) ? "warning" : "error";
   ocrBackendType.textContent = t(ocrBackendTypeKey(backend.type));
-  ocrDetectedPath.textContent = backend.path || t("ocrValueUnavailable");
   ocrVersion.textContent = backend.version || t("ocrValueUnavailable");
   ocrLanguages.textContent = backend.languages?.length ? backend.languages.join(", ") : t("ocrLanguagesNone");
-  ocrRusStatus.textContent = t(backend.has_rus ? "ocrHasRus" : "ocrMissingRus");
-  ocrEngStatus.textContent = t(backend.has_eng ? "ocrHasEng" : "ocrMissingEng");
-  const showTesseractFields = selectedBackend === "tesseract";
-  ocrPathStatusRow.hidden = !showTesseractFields;
-  ocrTesseractFields.hidden = !showTesseractFields;
   ocrBackendNotes.textContent = ocrBackendNoteKeys(backend).map((key) => t(key)).join(" ");
-  if (!easyOcrActionable()) {
+  if (!easyOcrActionable(status)) {
     defaultOcrEnabled.checked = false;
   }
   updateLongOperationControls();
-  if (available && selectedBackend === "easyocr") {
+  if (available) {
     setLocalizedOutput(ocrStatusMessage, "ocrReadyForProcessing", {}, "success");
-  } else if (available) {
-    setLocalizedOutput(ocrStatusMessage, "ocrProcessingEasyOcrOnly", {}, "info");
-  } else if (backend.id === "tesseract" && backend.status === "not_found") {
-    setLocalizedOutput(ocrStatusMessage, "ocrInstallHint", {}, "warning");
   } else if (warningStatuses.has(backend.status)) {
-    setLocalizedOutput(ocrStatusMessage, "ocrBackendNotAvailable", {}, "warning");
+    setLocalizedOutput(ocrStatusMessage, "ocrEasyOcrUnavailable", {}, "warning");
   } else {
     setLocalizedOutput(
       ocrStatusMessage,
-      backend.id === "tesseract" ? ocrErrorMessageKey(backend.error) : "ocrImportCheckFailed",
+      "ocrImportCheckFailed",
       {},
       "error",
     );
@@ -1852,10 +1808,7 @@ function renderOcrStatus(status, { syncConfiguredPath = false, syncSelectedBacke
 
 async function refreshOcrStatus() {
   try {
-    renderOcrStatus(await requestJson("/api/ocr/status"), {
-      syncConfiguredPath: true,
-      syncSelectedBackend: true,
-    });
+    renderOcrStatus(await requestJson("/api/ocr/status"));
   } catch (error) {
     setOutput(ocrStatusMessage, error.message, "error");
   }
@@ -1863,15 +1816,13 @@ async function refreshOcrStatus() {
 
 async function checkOcrStatus() {
   ocrCheckButton.disabled = true;
-  ocrSaveButton.disabled = true;
   setLocalizedOutput(ocrStatusMessage, "ocrChecking");
   try {
     const status = await requestJson("/api/ocr/check", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        backend: ocrBackendSelect.value,
-        tesseract_path: ocrPathInput.value.trim() || null,
+        backend: "easyocr",
       }),
     });
     renderOcrStatus(status);
@@ -1880,30 +1831,6 @@ async function checkOcrStatus() {
     setOutput(ocrStatusMessage, error.message, "error");
   } finally {
     ocrCheckButton.disabled = false;
-    ocrSaveButton.disabled = false;
-  }
-}
-
-async function saveOcrSettings() {
-  ocrCheckButton.disabled = true;
-  ocrSaveButton.disabled = true;
-  try {
-    const result = await requestJson("/api/ocr/settings", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        selected_backend: ocrBackendSelect.value,
-        tesseract_path: ocrPathInput.value.trim() || null,
-        default_languages: ocrBackendSelect.value === "easyocr" ? ["ru", "en"] : ["rus", "eng"],
-      }),
-    });
-    renderOcrStatus(result.status, { syncConfiguredPath: true, syncSelectedBackend: true });
-    showToast(t("ocrSettingsSaved"), "success");
-  } catch (error) {
-    setOutput(ocrStatusMessage, error.message, "error");
-  } finally {
-    ocrCheckButton.disabled = false;
-    ocrSaveButton.disabled = false;
   }
 }
 
@@ -2970,9 +2897,9 @@ function processingPlanFromValues({
   ocrEngineAvailable,
   cvMetadataEnabled,
 }) {
-  const selectedBackend = ocrBackend || latestOcrStatus?.selected_backend || "tesseract";
+  const selectedBackend = ocrBackend || "easyocr";
   const backend = selectedBackend === "auto"
-    ? (ocrResolvedBackend || latestOcrStatus?.selected_backend || "tesseract")
+    ? (ocrResolvedBackend || "easyocr")
     : selectedBackend;
   const backendStatus = latestOcrStatus?.backends?.[backend];
   const downloadSettings = urlDownload || latestUrlDownloadSettings;
@@ -3010,7 +2937,7 @@ function processingPlanFromValues({
       resolved_backend: backend,
       engine: backend,
       languages: ocrLanguages || (backend === "tesseract" ? ["rus", "eng"] : ["ru", "en"]),
-      status: normalizedOcrEnabled ? "pending" : easyOcrReady ? "available" : "unavailable",
+      status: normalizedOcrEnabled ? "pending" : Boolean(ocrEnabled) ? "unavailable" : "disabled",
       engine_available: backendAvailable,
     },
     cv: {
@@ -3036,7 +2963,9 @@ function defaultProcessingPlanSnapshot() {
     maxFrameSize: defaultFrameMaxSizeSelect.value || latestFrameSettings.max_frame_size || "original",
     urlDownload: urlDownloadSettingsFromControls(),
     ocrEnabled: defaultOcrEnabled.checked && !defaultOcrEnabled.disabled,
-    ocrBackend: ocrBackendSelect.value || latestOcrStatus?.selected_backend,
+    ocrBackend: "easyocr",
+    ocrResolvedBackend: "easyocr",
+    ocrEngineAvailable: easyOcrActionable(),
     cvMetadataEnabled: defaultCvMetadataEnabled.checked && !defaultCvMetadataEnabled.disabled,
   });
 }
@@ -3094,33 +3023,6 @@ function urlDownloadProfileLabel(profile) {
     custom: "urlDownloadProfileCustom",
   }[profile] || "urlDownloadProfileAuto";
   return t(key);
-}
-
-function ocrBackendLabel(backend) {
-  if (backend === "auto") {
-    return t("auto");
-  }
-  const key = {
-    tesseract: "ocrEngineTesseract",
-    easyocr: "ocrEngineEasyOcr",
-    paddleocr: "ocrEnginePaddleOcr",
-    windows_ocr: "ocrEngineWindowsOcr",
-  }[backend] || "ocrEngineLabel";
-  return t(key);
-}
-
-function ocrBackendOptions() {
-  return ["auto", "easyocr", "tesseract", "paddleocr", "windows_ocr"];
-}
-
-function resolvedOcrBackend(selectedBackend, fallbackBackend) {
-  return selectedBackend === "auto"
-    ? (fallbackBackend || latestOcrStatus?.selected_backend || "tesseract")
-    : selectedBackend || "tesseract";
-}
-
-function ocrBackendIsAvailable(backend) {
-  return Boolean(latestOcrStatus?.backends?.[backend]?.available);
 }
 
 function createPlanSelect(values, selectedValue, datasetName, labeler = (value) => value) {
@@ -3209,10 +3111,6 @@ function createDisabledQueueOption(key) {
 
 function createProcessingPlanSummary(queueItem) {
   const plan = processingPlanForQueueItem(queueItem);
-  const ocrBackend = plan.ocr.resolved_backend || plan.ocr.engine || plan.ocr.backend;
-  const ocrBackendSummary = plan.ocr.backend === "auto"
-    ? `${ocrBackendLabel("auto")} / ${ocrBackendLabel(ocrBackend)}`
-    : ocrBackendLabel(ocrBackend);
   const wrapper = document.createElement("div");
   wrapper.className = "queue-processing-plan-summary";
   const heading = document.createElement("h4");
@@ -3229,8 +3127,8 @@ function createProcessingPlanSummary(queueItem) {
     })),
     textLine(t("processingPlanOcr", {
       value: plan.ocr.enabled
-        ? `${ocrBackendSummary} / ${(plan.ocr.languages || []).join(", ")}`
-        : `${ocrBackendSummary} / ${plan.ocr.status === "unavailable" ? t("ocrValueUnavailable") : t("disabled")}`,
+        ? `${t("ocrEasyOcrOption")} / ${(plan.ocr.languages || []).join(", ")}`
+        : plan.ocr.status === "unavailable" ? t("ocrEasyOcrUnavailableShort") : t("disabled"),
     })),
     textLine(t("processingPlanCv", { value: plan.cv.metadata_enabled ? t("visualMetadata") : t("disabled") })),
   );
@@ -3512,24 +3410,17 @@ function createOcrPlanSettings(queueItem, disabled) {
   const plan = processingPlanForQueueItem(queueItem);
   const wrapper = document.createElement("div");
   wrapper.className = "queue-ocr-settings";
-  const selectedBackend = plan.ocr.backend || "auto";
-  const resolvedBackend = resolvedOcrBackend(selectedBackend, plan.ocr.resolved_backend || plan.ocr.engine);
-  const currentBackendStatus = latestOcrStatus?.backends?.[resolvedBackend];
+  const currentBackendStatus = latestOcrStatus?.backends?.easyocr;
   const backendAvailable = currentBackendStatus
     ? Boolean(currentBackendStatus.available)
     : Boolean(plan.ocr.engine_available);
-  const actionable = queueItemIsVideo(queueItem) && resolvedBackend === "easyocr" && backendAvailable;
-  const backendLabel = document.createElement("label");
-  backendLabel.className = "queue-setting-field";
-  const backendText = document.createElement("span");
-  backendText.textContent = t("ocrBackendLabel");
-  const backendSelect = createPlanSelect(ocrBackendOptions(), selectedBackend, "queueOcrBackend", ocrBackendLabel);
-  backendSelect.disabled = disabled;
-  if (![...backendSelect.options].some((option) => option.selected)) {
-    backendSelect.value = "auto";
-  }
-  backendLabel.append(backendText, backendSelect);
-  const ocrToggle = createQueueCheckbox("ocr", plan.ocr.enabled, disabled || !actionable, "ocr");
+  const actionable = queueItemIsVideo(queueItem) && backendAvailable;
+  const ocrToggle = createQueueCheckbox(
+    "ocrEasyOcrOption",
+    plan.ocr.enabled,
+    disabled || !actionable,
+    "ocr",
+  );
   if (!actionable) {
     ocrToggle.classList.add("queue-option-disabled");
   }
@@ -3537,8 +3428,14 @@ function createOcrPlanSettings(queueItem, disabled) {
   note.className = "section-note";
   note.textContent = actionable
     ? t("ocrRunsOnExtractedFrames")
-    : t(resolvedBackend === "easyocr" ? "ocrEasyOcrMissing" : "ocrProcessingEasyOcrOnly");
-  wrapper.append(backendLabel, ocrToggle, note);
+    : t("ocrEasyOcrUnavailable");
+  wrapper.append(
+    ocrToggle,
+    createDisabledQueueOption("ocrTesseractSoon"),
+    createDisabledQueueOption("ocrPaddleSoon"),
+    createDisabledQueueOption("ocrWindowsSoon"),
+    note,
+  );
   return wrapper;
 }
 
@@ -3801,8 +3698,6 @@ function createQueueItemElement(queueItem, status) {
   item.dataset.queueIndex = String(queueItem.index);
   item.dataset.mediaKind = queueItem.media_kind || (queueItemIsVideo(queueItem) ? "video" : "audio");
   item.dataset.queueStage = queueItem.stage || queueStageFromStatus(queueItem.status);
-  item.dataset.ocrBackend = itemOcrPlan.backend;
-  item.dataset.ocrResolvedBackend = itemOcrPlan.resolved_backend || itemOcrPlan.engine || itemOcrPlan.backend;
   item.dataset.ocrLanguages = JSON.stringify(itemOcrPlan.languages);
   item.dataset.ocrEngineAvailable = String(itemOcrPlan.engine_available);
   item.dataset.urlDownload = JSON.stringify(itemPlan.url_download);
@@ -4143,7 +4038,6 @@ function collectQueueItemPayload(card) {
   const qualitySelect = card.querySelector("[data-queue-jpeg-quality]");
   const maxSizeSelect = card.querySelector("[data-queue-frame-size]");
   const urlMaxHeightSelect = card.querySelector("[data-queue-url-max-height]");
-  const ocrBackendSelect = card.querySelector("[data-queue-ocr-backend]");
   const frameRate = frameRateFromValue(rateSelect?.value);
   const jpegQuality = Number(qualitySelect?.value || 90);
   const maxFrameSize = maxSizeSelect?.value || "original";
@@ -4151,9 +4045,9 @@ function collectQueueItemPayload(card) {
   if (urlDownloadPlan && urlMaxHeightSelect) {
     urlDownloadPlan.max_video_height = urlMaxHeightSelect.value || "auto";
   }
-  const selectedOcrBackend = ocrBackendSelect?.value || card.dataset.ocrBackend;
-  const resolvedOcrBackendForPayload = resolvedOcrBackend(selectedOcrBackend, card.dataset.ocrResolvedBackend);
-  const resolvedOcrStatus = latestOcrStatus?.backends?.[resolvedOcrBackendForPayload];
+  const selectedOcrBackend = "easyocr";
+  const resolvedOcrBackendForPayload = "easyocr";
+  const resolvedOcrStatus = latestOcrStatus?.backends?.easyocr;
   const ocrEngineAvailable = resolvedOcrStatus
     ? Boolean(resolvedOcrStatus.available)
     : card.dataset.ocrEngineAvailable === "true";
@@ -4297,7 +4191,8 @@ function validateQueueStartOptions() {
       && (queueItemIsVideo(item) || item.media_kind === "audio")
       && !operations.transcribe_audio
       && !operations.extract_frames
-      && !operations.ocr;
+      && !operations.ocr
+      && !operations.cv;
   });
   if (!invalid) {
     return true;
@@ -4555,13 +4450,7 @@ clearDownloadsButton.addEventListener("click", () => cleanupStorageFolder("downl
 clearUploadsButton.addEventListener("click", () => cleanupStorageFolder("uploads"));
 urlDownloadProfileSelect.addEventListener("change", syncUrlDownloadCustomField);
 urlDownloadSaveButton.addEventListener("click", saveUrlDownloadSettings);
-ocrBackendSelect.addEventListener("change", () => {
-  if (latestOcrStatus) {
-    renderOcrStatus(latestOcrStatus);
-  }
-});
 ocrCheckButton.addEventListener("click", checkOcrStatus);
-ocrSaveButton.addEventListener("click", saveOcrSettings);
 videoMuxForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   await mergeVideoWithAudio();
@@ -4618,7 +4507,7 @@ queueList.addEventListener("toggle", (event) => {
 }, true);
 queueList.addEventListener("change", async (event) => {
   const target = event.target;
-  if (!target.matches("[data-queue-operation], [data-queue-audio-model], [data-queue-audio-device], [data-queue-frame-rate], [data-queue-jpeg-quality], [data-queue-frame-size], [data-queue-url-max-height], [data-queue-ocr-backend]")) {
+  if (!target.matches("[data-queue-operation], [data-queue-audio-model], [data-queue-audio-device], [data-queue-frame-rate], [data-queue-jpeg-quality], [data-queue-frame-size], [data-queue-url-max-height]")) {
     return;
   }
   await updateQueueItemFromCard(queueCardFromTarget(target));
@@ -4662,6 +4551,7 @@ queueUrlForm.addEventListener("submit", async (event) => {
     showAddStatus("queueUrlAlreadyQueued", "warning");
     return;
   }
+  const processingPlan = defaultProcessingPlanSnapshot();
   isAddingUrl = true;
   rememberPendingAdd(keys);
   showAddStatus("queueStageAddingUrl");
@@ -4670,7 +4560,7 @@ queueUrlForm.addEventListener("submit", async (event) => {
     renderQueue(await requestJson("/api/queue/add-urls", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ urls, processing_plan: defaultProcessingPlanSnapshot(), queue_folder_name: queueFolderNameValue() }),
+      body: JSON.stringify({ urls, processing_plan: processingPlan, queue_folder_name: queueFolderNameValue() }),
     }));
     queueUrlInput.value = "";
     const message = t("urlAdded", { count: urls.length });

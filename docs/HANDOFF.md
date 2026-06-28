@@ -4,7 +4,7 @@
 
 LocalMediaTranscriber is a fork of LocalAudioTranscriber.
 
-Implemented through Stage 1.2a:
+Implemented through the OCR/CV settings UI cleanup after Stage 1.2a:
 - local audio/video transcription;
 - URL audio/video transcription;
 - local/URL frame extraction;
@@ -14,7 +14,8 @@ Implemented through Stage 1.2a:
 - URL download progress and cancellation;
 - cancellation for transcription and frame extraction;
 - URL download profiles plus media/extraction benchmark diagnostics;
-- OCR backend selector/readiness catalog for Tesseract, EasyOCR, PaddleOCR, and Windows OCR;
+- OCR readiness catalog for Tesseract, EasyOCR, PaddleOCR, and Windows OCR;
+- checkbox-style OCR/CV default and per-item settings, with new queue items inheriting current EasyOCR and CV Visual metadata defaults;
 - EasyOCR over extracted frame folders with `frames_ocr.jsonl` and `frames_ocr.txt` artifacts;
 - deterministic CV metadata over extracted queue frames with `frames_cv.jsonl` and `frames_cv.txt` artifacts;
 - queue-owned output folders under `data\queues\<queue_folder>\item_xxx\`, with manifests and per-item `downloads`, `transcript`, `frames`, `ocr`, `cv`, `events`, and `logs` folders.

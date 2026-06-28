@@ -17,3 +17,7 @@ New queue processing writes artifacts under `data\queues\<queue_folder>\item_xxx
 ## Stage 1.2a CV starts deterministic
 
 Stage 1.2a starts with deterministic CV metadata over extracted frames, not neural object detection, YOLO, or VLM. Heavy CV/VLM backends remain future optional modules.
+
+## OCR/CV settings use checkbox semantics
+
+OCR and CV default/per-item settings use checkbox semantics instead of selector or radio semantics to preserve future multi-processor support. In the current version only EasyOCR and CV Visual metadata are functional; other OCR/CV options remain disabled placeholders and must not activate processing settings.

@@ -2,7 +2,7 @@
 
 ## Current milestone
 
-Stage 1.2a is implemented and queue outputs now use a queue-owned folder layout under `data\queues\<queue_folder>\item_xxx\`. EasyOCR can run over extracted frame folders for video and URL queue items when optional OCR dependencies are installed. Lightweight CV metadata can run over already extracted queue frames and writes deterministic visual metadata under each item `cv` folder. URL jobs still snapshot a configurable download profile plus optional max video height, and frame extraction can optionally downscale saved JPEGs.
+Stage 1.2a is implemented and queue outputs now use a queue-owned folder layout under `data\queues\<queue_folder>\item_xxx\`. EasyOCR can run over extracted frame folders for video and URL queue items when optional OCR dependencies are installed. Lightweight CV metadata can run over already extracted queue frames and writes deterministic visual metadata under each item `cv` folder. OCR/CV default and per-item settings now use checkbox-style options, with EasyOCR and CV Visual metadata as the only functional choices. URL jobs still snapshot a configurable download profile plus optional max video height, and frame extraction can optionally downscale saved JPEGs.
 
 ## Queue output layout
 
@@ -38,6 +38,14 @@ Stage 1.2a is implemented and queue outputs now use a queue-owned folder layout 
 - If CV metadata is enabled without extracted frames, the queue item is not failed; `cv_result.status` is marked skipped/unavailable with a clear message.
 - The default processing settings UI is now split into compact subsections: Audio / Frames is expanded by default, while URL download, OCR, and CV sections are collapsed by default. Object detection, VLM, and YOLO remain visible disabled placeholders.
 
+## OCR/CV settings UI
+
+- The app header no longer shows the runtime/settings badge or local-dev version line; the useful device/FFmpeg environment status remains.
+- Default and per-item OCR/CV controls use checkbox semantics rather than selector/radio semantics. This is intentional so future builds can support multiple OCR/CV processors on the same item.
+- EasyOCR is the only functional OCR checkbox. Tesseract OCR, PaddleOCR, and Windows OCR are disabled placeholders and do not affect processing plans.
+- CV Visual metadata is the only functional CV checkbox. Object detection, VLM analysis, and YOLO object detection are disabled placeholders and do not affect processing plans.
+- New queue items snapshot the current default EasyOCR and CV Visual metadata checkbox state. Existing pending items keep their own plan unless edited.
+
 ## URL download profiles and diagnostics
 
 - Persisted profiles cover Auto, extraction-friendly, quality/size, WebM/MP4/MKV/MOV/AVI preferences, audio-friendly, and an advanced custom yt-dlp format string.
@@ -69,13 +77,24 @@ Stage 1.2a is implemented and queue outputs now use a queue-owned folder layout 
 - `app/cv_processor.py`: deterministic Pillow-backed CV metadata over extracted frames with JSONL/TXT output and graceful unavailable/skipped states.
 - `app/main.py`: EasyOCR/CV queue callback wiring, selected backend/check API fields, queue folder name API fields, and queue output directory handoff.
 - `app/queue_manager.py`: EasyOCR/CV plan normalization, `ocr_processing` and `cv_processing` stages, cancellation, OCR/CV result metadata, queue/item output folder creation, URL download relocation, queue manifests, and output artifacts.
-- `static/index.html`, `static/app.js`, `static/style.css`, `static/i18n.js`: compact selector, collapsible default-processing subsections, conditional Tesseract fields, actionable EasyOCR and CV metadata controls, queue folder naming UI, Created files queue paths, OCR/CV stage/artifact copy, and RU/EN text.
+- `static/index.html`, `static/app.js`, `static/style.css`, `static/i18n.js`: compact collapsible default-processing subsections, checkbox-style OCR/CV controls, actionable EasyOCR and CV metadata options, disabled future OCR/CV placeholders, queue folder naming UI, Created files queue paths, OCR/CV stage/artifact copy, and RU/EN text.
 - Focused OCR processor/manager/API/i18n/UI/queue tests and OCR documentation.
 - `app/queue_manager.py`, `app/storage_manager.py`, focused retention tests, and retention documentation for the URL cleanup bugfix.
 - `app/url_download_manager.py`, `app/url_downloader.py`, queue/main integration, compact localized settings UI, and focused URL profile/diagnostic tests.
 - `app/frame_settings_manager.py`, `app/frame_extractor.py`, `app/runtime_estimate.py`, queue/main integration, compact localized resolution controls, and focused resolution/estimate/UI tests.
 
 ## Validation
+
+OCR/CV settings UI cleanup and default propagation, passed on 2026-06-28:
+
+- `.venv\Scripts\python.exe -m compileall app`
+- `.venv\Scripts\python.exe -m unittest tests.test_cv_processor` (5 tests)
+- `.venv\Scripts\python.exe -m unittest tests.test_queue_manager` (61 tests)
+- `.venv\Scripts\python.exe -m unittest tests.test_runtime_estimate` (14 tests)
+- `.venv\Scripts\python.exe -m unittest tests.test_ocr_processor` (11 tests)
+- `.venv\Scripts\python.exe -m unittest tests.test_frame_extractor` (14 tests)
+- `.venv\Scripts\python.exe -m unittest tests.test_ui_contract tests.test_i18n tests.test_http_smoke` (46 tests)
+- The sandbox denied pycache/temp-file replace or cleanup for compileall, queue manager, runtime estimate, and frame extractor runs; the affected commands passed when rerun with normal filesystem permissions.
 
 Stage 1.2a CV metadata over extracted frames, passed on 2026-06-28:
 
@@ -148,9 +167,9 @@ Stage 1.1c EasyOCR over extracted frames:
 
 ## Manual checks still required
 
-- Start with `run.bat` and exercise all four selector options.
-- Confirm Tesseract path visibility and readiness on the local machine.
-- Confirm selection persists after refresh.
+- Start with `run.bat` and confirm OCR/CV use checkbox controls, not selectors.
+- Confirm EasyOCR is disabled with a clear unavailable message when optional dependencies are absent.
+- Confirm default EasyOCR and CV Visual metadata choices propagate to newly added video/URL items.
 - Smoke-test transcription, frame extraction, estimates, and URL cancellation.
 - With URL media retention disabled, cancel during frame extraction and confirm the owned download is removed; repeat with retention enabled and confirm it remains.
 - Save Prefer WebM, refresh, and confirm persistence; compare Auto, WebM, MP4, and extraction-friendly profiles on the same short URL using job/log diagnostic fields.
@@ -161,7 +180,7 @@ Stage 1.1c EasyOCR over extracted frames:
 
 ## Known limitations
 
-- EasyOCR is the only executable OCR backend. PaddleOCR, Windows OCR, Tesseract processing, CV, smart frames, live screen OCR, LLM/VLM analysis, and broad language management remain out of scope.
+- EasyOCR is the only executable OCR backend. CV Visual metadata is the only executable CV option. PaddleOCR, Windows OCR, Tesseract processing, object detection, YOLO, smart frames, live screen OCR, LLM/VLM analysis, and broad language management remain out of scope.
 - Optional dependencies are never installed automatically; readiness checks do not initialize OCR models/readers.
 - PaddleOCR and Windows OCR are readiness-only experimental entries.
 - Profiles are best-effort because sites expose different formats. Direct media URLs keep their source format, MOV/AVI preferences do not force remuxing, and no per-URL format listing is implemented.

@@ -62,21 +62,17 @@ class UiContractTests(unittest.TestCase):
             "urlDownloadSaveButton",
             "urlDownloadSettingsOutput",
             "ocrSettingsPanel",
-            "ocrBackendSelect",
             "ocrStatusBadge",
             "ocrBackendType",
-            "ocrPathStatusRow",
-            "ocrDetectedPath",
             "ocrVersion",
             "ocrLanguages",
-            "ocrRusStatus",
-            "ocrEngStatus",
-            "ocrTesseractFields",
-            "ocrPathInput",
             "ocrCheckButton",
-            "ocrSaveButton",
             "ocrStatusMessage",
             "ocrBackendNotes",
+            "defaultOcrEnabled",
+            "defaultOcrTesseract",
+            "defaultOcrPaddle",
+            "defaultOcrWindows",
             "queueStageStatus",
             "queueMetrics",
             "queueProgress",
@@ -118,7 +114,6 @@ class UiContractTests(unittest.TestCase):
         self.assertIn('"/api/url-download/settings"', app_js)
         self.assertIn('"/api/frames/settings"', app_js)
         self.assertIn('"/api/ocr/status"', app_js)
-        self.assertIn('"/api/ocr/settings"', app_js)
         self.assertIn('"/api/ocr/check"', app_js)
         self.assertIn('"/api/video-mux/merge"', app_js)
         self.assertIn('"/api/displays"', app_js)
@@ -281,6 +276,9 @@ class UiContractTests(unittest.TestCase):
             "defaultAudioEnabled",
             "defaultFramesEnabled",
             "defaultOcrEnabled",
+            "defaultOcrTesseract",
+            "defaultOcrPaddle",
+            "defaultOcrWindows",
             "defaultCvMetadataEnabled",
             "defaultCvObjectDetection",
             "defaultCvVlmAnalysis",
@@ -302,6 +300,11 @@ class UiContractTests(unittest.TestCase):
             "processingPlanOcr",
             "processingPlanCv",
             "cvSettingsTitle",
+            "ocrEasyOcrOption",
+            "ocrTesseractSoon",
+            "ocrPaddleSoon",
+            "ocrWindowsSoon",
+            "ocrEasyOcrUnavailable",
             "visualMetadata",
             "cvObjectDetectionSoon",
             "cvVlmAnalysisSoon",
@@ -313,8 +316,13 @@ class UiContractTests(unittest.TestCase):
             self.assertIn(key, html + app_js)
         self.assertNotIn("placeholder-fieldset", default_settings_html)
         self.assertIn('id="defaultOcrEnabled"', default_settings_html)
-        self.assertIn('data-i18n="ocr"', default_settings_html)
+        self.assertIn('data-i18n="ocrEasyOcrOption"', default_settings_html)
         self.assertIn('data-i18n="cvSettingsTitle"', default_settings_html)
+        audio_frames_html = html[
+            html.index('id="defaultAudioFramesSettings"'):html.index('id="defaultUrlDownloadSettings"')
+        ]
+        self.assertNotIn('id="defaultOcrEnabled"', audio_frames_html)
+        self.assertNotIn('data-i18n="ocr"', audio_frames_html)
         self.assertIn("defaultProcessingPlanSnapshot", app_js)
         self.assertIn("processingPlanForQueueItem", app_js)
         self.assertIn("processing_plan", app_js)
@@ -325,46 +333,76 @@ class UiContractTests(unittest.TestCase):
         self.assertIn(".settings-collapsible-summary::before", css := (STATIC_DIR / "style.css").read_text(encoding="utf-8"))
         self.assertIn('.queue-options-collapsible[open] > .settings-collapsible-summary::before', css)
         self.assertIn("defaultOcrEnabled.checked && !defaultOcrEnabled.disabled", app_js)
+        self.assertIn('ocrBackend: "easyocr"', app_js)
+        self.assertIn("ocrEngineAvailable: easyOcrActionable()", app_js)
         self.assertIn("defaultCvMetadataEnabled.checked && !defaultCvMetadataEnabled.disabled", app_js)
         self.assertIn("const normalizedFramesEnabled = Boolean(framesEnabled) || normalizedOcrEnabled;", app_js)
         self.assertIn("input.disabled = true", app_js)
         self.assertNotIn("Tesseract OCR (coming soon)", app_js)
         self.assertNotIn("Basic OpenCV (coming soon)", app_js)
 
+    def test_header_and_ocr_cv_checkbox_contract(self) -> None:
+        app_js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+
+        self.assertNotIn('id="modelBadge"', html)
+        self.assertNotIn('id="appVersion"', html)
+        self.assertNotIn("modelBadge", app_js)
+        self.assertNotIn("appVersion", app_js)
+        self.assertNotIn("Version: local-dev", html + app_js)
+        self.assertNotIn("Whisper tiny", html + app_js)
+
+        ocr_section = html[html.index('id="defaultOcrSettings"'):html.index('id="defaultCvSettings"')]
+        cv_section = html[html.index('id="defaultCvSettings"'):html.index('</details>', html.index('id="defaultCvSettings"'))]
+        audio_frames_section = html[html.index('id="defaultAudioFramesSettings"'):html.index('id="defaultUrlDownloadSettings"')]
+        self.assertNotIn("<select", ocr_section)
+        self.assertNotIn('type="radio"', ocr_section + cv_section)
+        self.assertIn('id="defaultOcrEnabled" type="checkbox"', ocr_section)
+        self.assertIn('id="defaultCvMetadataEnabled" type="checkbox"', cv_section)
+        for element_id in ("defaultOcrTesseract", "defaultOcrPaddle", "defaultOcrWindows"):
+            self.assertIn(f'id="{element_id}" type="checkbox" disabled', ocr_section)
+        for element_id in ("defaultCvObjectDetection", "defaultCvVlmAnalysis", "defaultCvYoloObjectDetection"):
+            self.assertIn(f'id="{element_id}" type="checkbox" disabled', cv_section)
+        self.assertNotIn('id="defaultOcrEnabled"', audio_frames_section)
+        self.assertNotIn('data-i18n="ocr"', audio_frames_section)
+        self.assertNotIn('name="ocr', ocr_section)
+        self.assertNotIn('name="cv', cv_section)
+
     def test_ocr_ui_reports_easyocr_readiness_and_frame_artifacts(self) -> None:
         app_js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
         html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
 
         self.assertIn('id="ocrSettingsPanel"', html)
-        self.assertIn('id="ocrBackendSelect"', html)
         self.assertIn('id="defaultOcrEnabled"', html)
-        for backend in ("tesseract", "easyocr", "paddleocr", "windows_ocr"):
-            self.assertIn(f'value="{backend}"', html)
-        self.assertIn('id="ocrPathInput"', html)
+        self.assertIn('type="checkbox" disabled', html[html.index('id="defaultOcrEnabled"') - 80:html.index('id="defaultOcrEnabled"') + 120])
+        for element_id, key in (
+            ("defaultOcrTesseract", "ocrTesseractSoon"),
+            ("defaultOcrPaddle", "ocrPaddleSoon"),
+            ("defaultOcrWindows", "ocrWindowsSoon"),
+        ):
+            self.assertIn(f'id="{element_id}" type="checkbox" disabled', html)
+            self.assertIn(f'data-i18n="{key}"', html)
         self.assertIn('data-i18n="ocrNextStage"', html)
         self.assertIn("function createOcrPlanSettings(queueItem, disabled)", app_js)
         self.assertNotIn('createComingSoonOption("ocr")', app_js)
         self.assertIn("function createCvPlanSettings(queueItem, disabled)", app_js)
         self.assertNotIn('createComingSoonOption("cv")', app_js)
-        self.assertIn("function ocrBackendOptions()", app_js)
-        self.assertIn('return ["auto", "easyocr", "tesseract", "paddleocr", "windows_ocr"]', app_js)
-        self.assertIn('backendText.textContent = t("ocrBackendLabel")', app_js)
-        self.assertIn('"queueOcrBackend"', app_js)
-        self.assertIn("[data-queue-ocr-backend]", app_js)
+        self.assertNotIn('"queueOcrBackend"', app_js)
+        self.assertNotIn("[data-queue-ocr-backend]", app_js)
         self.assertIn("resolved_backend", app_js)
         self.assertIn("engine_available: backendAvailable", app_js)
-        self.assertIn("status.backends?.[selectedBackend]", app_js)
+        self.assertIn("status?.backends?.easyocr", app_js)
         self.assertIn("easyOcrActionable()", app_js)
         self.assertIn('setLocalizedOutput(ocrStatusMessage, "ocrReadyForProcessing"', app_js)
-        self.assertIn('setLocalizedOutput(ocrStatusMessage, "ocrProcessingEasyOcrOnly"', app_js)
+        self.assertIn('setLocalizedOutput(ocrStatusMessage, "ocrEasyOcrUnavailable"', app_js)
         self.assertIn('t("ocrRunsOnExtractedFrames")', app_js)
         self.assertIn("outputs.ocr_jsonl_path", app_js)
         self.assertIn("outputs.ocr_txt_path", app_js)
         self.assertIn("outputs.cv_jsonl_path", app_js)
         self.assertIn("outputs.cv_txt_path", app_js)
-        self.assertIn("ocrTesseractFields.hidden", app_js)
-        self.assertIn("selected_backend: ocrBackendSelect.value", app_js)
-        self.assertIn("backend,", app_js)
+        self.assertNotIn("ocrTesseractFields.hidden", app_js)
+        self.assertNotIn("selected_backend: ocrBackendSelect.value", app_js)
+        self.assertIn('const selectedOcrBackend = "easyocr"', app_js)
         self.assertIn('languages: ocrLanguages || (backend === "tesseract" ? ["rus", "eng"] : ["ru", "en"])', app_js)
         self.assertIn("queueStageOcrProcessing", app_js)
         self.assertIn("statusOcrProcessing", app_js)
@@ -466,11 +504,22 @@ class UiContractTests(unittest.TestCase):
     def test_processing_plan_polish_contract(self) -> None:
         app_js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
         html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        i18n = (STATIC_DIR / "i18n.js").read_text(encoding="utf-8")
 
         self.assertNotIn('id="transcriptionSettings"', html)
         self.assertNotIn('data-i18n="settingsTitle"', html)
         self.assertNotIn('data-i18n="settingsNote"', html)
         self.assertNotIn("Настройки транскрибации", html)
+        self.assertNotIn('data-i18n="maxFrameSizeHelp"', html)
+        self.assertNotIn("maxFrameSizeHelp", i18n)
+        self.assertNotIn(
+            "Уменьшает сохраняемые кадры без изменения пропорций. Полезно для ускорения OCR/CV и уменьшения размера файлов.",
+            i18n,
+        )
+        self.assertNotIn(
+            "Downscales saved frames without changing aspect ratio. Useful for faster OCR/CV and smaller files.",
+            i18n,
+        )
         self.assertIn("function modelOptionLabel(model)", app_js)
         self.assertIn("function populateModelSelect(select, selectedValue)", app_js)
         self.assertIn("populateModelSelect(whisperModelSelect, selectedModel())", app_js)
@@ -487,6 +536,27 @@ class UiContractTests(unittest.TestCase):
         self.assertIn('"cancellingDownload"', app_js)
         self.assertIn(': "cancelling",', app_js)
         self.assertIn('t("cancelRequestSent")', app_js)
+
+    def test_queue_adds_snapshot_default_processing_plan_before_disabling_controls(self) -> None:
+        app_js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+
+        recordings_start = app_js.index("async function addRecordingsToQueue")
+        recordings_snapshot = app_js.index("const processingPlan = defaultProcessingPlanSnapshot();", recordings_start)
+        recordings_disabled = app_js.index("isAddingRecording = true;", recordings_start)
+        self.assertLess(recordings_snapshot, recordings_disabled)
+        self.assertIn("processing_plan: processingPlan,", app_js[recordings_start:])
+
+        files_start = app_js.index("async function addLocalFilesToQueue")
+        files_snapshot = app_js.index("const processingPlan = defaultProcessingPlanSnapshot();", files_start)
+        files_disabled = app_js.index("isAddingFile = true;", files_start)
+        self.assertLess(files_snapshot, files_disabled)
+        self.assertIn('formData.append("processing_plan", JSON.stringify(processingPlan));', app_js[files_start:])
+
+        urls_start = app_js.index('queueUrlForm.addEventListener("submit"')
+        urls_snapshot = app_js.index("const processingPlan = defaultProcessingPlanSnapshot();", urls_start)
+        urls_disabled = app_js.index("isAddingUrl = true;", urls_start)
+        self.assertLess(urls_snapshot, urls_disabled)
+        self.assertIn("processing_plan: processingPlan", app_js[urls_start:])
 
     def test_queue_start_button_uses_processing_copy(self) -> None:
         html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
